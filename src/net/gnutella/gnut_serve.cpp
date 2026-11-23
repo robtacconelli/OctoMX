@@ -120,7 +120,7 @@ void GnutellaPlugin::onSniffReadyRead(QTcpSocket *s)
     auto it = m_sniff.find(s);
     if (it == m_sniff.end()) return;
     const QByteArray in = s->read(8192 - it->size());
-    if (m_ctx.limiter) m_ctx.limiter->accountTraffic(mx::RateLimiter::Down, mx::Net::Gnutella, in.size(), 0);   // [glue-3]
+    if (m_ctx.limiter) m_ctx.limiter->accountExempt(mx::RateLimiter::Down, mx::Net::Gnutella, in.size(), 0);   // [glue-3] [bw-2] first bytes of a connection (handshake or request): not charged
     // [enc-1] TLS on the same port: a ClientHello as the very first bytes
     const bool overTls = qobject_cast<TlsSocket *>(s) != nullptr;
     if (it->isEmpty() && !overTls && looksLikeTlsClientHello(in)) {

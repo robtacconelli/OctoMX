@@ -397,7 +397,7 @@ void UploadSession::pump()
     while (m_remaining > 0 && m_sock->bytesToWrite() < kWriteHigh) {
         qint64 want = qMin<qint64>(kChunk, m_remaining);
         const bool exempt = m_host->limiter() && m_host->limiter()->exempt(m_sock->peerAddress());   // [bw-1] LAN peer
-        qint64 allowed = m_host->limiter() && !exempt ? m_host->limiter()->acquire(mx::RateLimiter::Up, want) : want;
+        qint64 allowed = m_host->limiter() && !exempt ? m_host->limiter()->acquireFor(mx::RateLimiter::Up, mx::Net::Gnutella, want) : want;
         if (allowed <= 0) { m_pumpTimer.start(50); return; }
         const QByteArray data = m_host->library()->read(m_file.hashes, m_offset, allowed);
         if (data.isEmpty()) {

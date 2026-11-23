@@ -110,7 +110,8 @@ void Ed2kConnection::meterOut(qint64 payloadBytes)
     const qint64 wire = m_bytesOut - m_bytesOutMetered;
     m_bytesOutMetered = m_bytesOut;
     if (!m || (wire <= 0 && payloadBytes <= 0)) return;
-    if (exemptPeer()) m->accountExempt(mx::RateLimiter::Up, mx::Net::ED2K, wire, payloadBytes);   // [bw-1] LAN peer
+    // [bw-1] LAN peer; [bw-2] the server connection (no limiter, only a meter): search, not a transfer
+    if (exemptPeer() || !m_limiter) m->accountExempt(mx::RateLimiter::Up, mx::Net::ED2K, wire, payloadBytes);
     else m->accountTraffic(mx::RateLimiter::Up, mx::Net::ED2K, wire, payloadBytes);
 }
 
@@ -172,7 +173,7 @@ void Ed2kConnection::pump()
     while (!m_dataQ.isEmpty() && m_sock->bytesToWrite() < kMaxSocketBacklog) {
         const qint64 need = m_dataQ.head().first.size();
         if (m_limiter && m_upCredit < need && !exemptPeer()) {
-            m_upCredit += m_limiter->acquire(mx::RateLimiter::Up, need - m_upCredit);
+            m_upCredit += m_limiter->acquireFor(mx::RateLimiter::Up, mx::Net::ED2K, need - m_upCredit);
             if (m_upCredit < need) {
                 if (!m_pumpRetry.isActive()) m_pumpRetry.start();   // limiter is empty: try again shortly
                 break;
@@ -202,12 +203,12 @@ void Ed2kConnection::onReadyRead()
     qint64 grant = avail;
     const bool exempt = exemptPeer();   // [bw-1]
     if (m_limiter && !exempt) {
-        grant = m_limiter->acquire(mx::RateLimiter::Down, avail);
+        grant = m_limiter->acquireFor(mx::RateLimiter::Down, mx::Net::ED2K, avail);
         if (grant <= 0) { m_readRetry.start(); return; }
     }
     const QByteArray raw = m_sock->read(grant);
     mx::RateLimiter *meter = m_meter ? m_meter : m_limiter;   // [glue-3] wire bytes; payload below
-    if (meter && exempt) meter->accountExempt(mx::RateLimiter::Down, mx::Net::ED2K, raw.size(), 0);
+    if (meter && (exempt || !m_limiter)) meter->accountExempt(mx::RateLimiter::Down, mx::Net::ED2K, raw.size(), 0);   // [bw-2] server: exempt
     else if (meter) meter->accountTraffic(mx::RateLimiter::Down, mx::Net::ED2K, raw.size(), 0);
     m_bytesIn += raw.size();
     m_activity.restart();
@@ -224,7 +225,7 @@ void Ed2kConnection::onReadyRead()
             else if (p.proto == 0xC5 && p.opcode == 0xA2) head = 32;     // OP_SENDINGPART_I64
             else if (p.proto == 0xC5 && p.opcode == 0x40) head = 24;     // OP_COMPRESSEDPART
             else if (p.proto == 0xC5 && p.opcode == 0xA1) head = 28;     // OP_COMPRESSEDPART_I64
-            if (head >= 0 && p.payload.size() > head)
+            if (head >= 0 && p.payload.size() > head && m_limiter)
                 meter->accountTraffic(mx::RateLimiter::Down, mx::Net::ED2K, 0, p.payload.size() - head);
         }
         emit packetReceived(p);

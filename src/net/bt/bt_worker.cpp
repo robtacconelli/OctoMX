@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // OctoMX: libtorrent session worker (runs in its own thread).
 #include "bt_worker.h"
+#include "bt_pacing.h"
 #include "mx/download_order.h"   // [dl-1]
 
 #include <QtCore/QDir>
@@ -199,6 +200,7 @@ void Worker::init(const Config &cfg, const QStringList &userNodes, const QString
     }
     sp.settings = makeSettingsPack(m_cfg, false, m_port, m_userNodes, m_downBps, m_upBps);
     m_ses = std::make_unique<lt::session>(std::move(sp), lt::session::paused);
+    m_ses->add_extension(makePacingPlugin(m_pacing));   // [bw-2] per-peer queue under a limit
     m_ses->set_alert_notify([this] { scheduleAlerts(); });
 
     m_idxDhtNodes = lt::find_metric_idx("dht.dht_nodes");
@@ -210,6 +212,10 @@ void Worker::init(const Config &cfg, const QStringList &userNodes, const QString
     m_idxDhtOut = lt::find_metric_idx("dht.dht_bytes_out");
     m_idxTrackerIn = lt::find_metric_idx("net.recv_tracker_bytes");
     m_idxTrackerOut = lt::find_metric_idx("net.sent_tracker_bytes");
+    m_idxLimDownBytes = lt::find_metric_idx("net.limiter_down_bytes");   // [bw-2]
+    m_idxDownPeers = lt::find_metric_idx("peer.num_peers_down_requests");
+    m_idxUpPeers = lt::find_metric_idx("peer.num_peers_up_requests");
+    m_idxLimUpBytes = lt::find_metric_idx("net.limiter_up_bytes");
     m_idxIncoming = lt::find_metric_idx("net.has_incoming_connections");
     m_idxDhtMsgIn = lt::find_metric_idx("dht.dht_messages_in");   // [diag-1]
 
@@ -217,6 +223,14 @@ void Worker::init(const Config &cfg, const QStringList &userNodes, const QString
     m_tick->setInterval(1000);
     connect(m_tick, &QTimer::timeout, this, &Worker::tick);
     m_tick->start();
+    // [bw-2] libtorrent's traffic reaches the shared budget (and the Bandwidth graph) every 100 ms:
+    // once a second, its bytes came as one batch, so the graph's samples held 0, 1 or 2 seconds of it
+    // and the other networks took the whole limit until the batch was charged, then stopped
+    m_statsTimer = new QTimer(this);
+    m_statsTimer->setInterval(100);
+    m_statsTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_statsTimer, &QTimer::timeout, this, [this] { if (m_ses) m_ses->post_session_stats(); });
+    m_statsTimer->start();
     m_saveTimer = new QTimer(this);
     m_saveTimer->setInterval(30000);
     connect(m_saveTimer, &QTimer::timeout, this, &Worker::periodicSave);
@@ -551,6 +565,7 @@ void Worker::setRateLimits(int downBps, int upBps)
 {
     downBps = qMax(0, downBps);
     upBps = qMax(0, upBps);
+    m_pacing->downBps.store(downBps);   // [bw-2] the pacing plugin applies it with the next block
     if (downBps == m_downBps && upBps == m_upBps)
         return;
     m_downBps = downBps;
@@ -560,8 +575,46 @@ void Worker::setRateLimits(int downBps, int upBps)
     lt::settings_pack p;
     p.set_int(lt::settings_pack::download_rate_limit, downBps);
     p.set_int(lt::settings_pack::upload_rate_limit, upBps);
+    applyRatePacing(p, downBps, upBps, m_upPeers);   // [bw-2]
+    m_appliedSendBuf = p.get_int(lt::settings_pack::send_buffer_watermark);
     m_ses->apply_settings(std::move(p));
 }
+
+// [bw-2] the number of peers we download from / upload to (session counters, every 100 ms): the
+// in-flight amount of the limit is split among them
+void Worker::updatePacingPeers(int downPeers, int upPeers, qint64 recvBytes)
+{
+    m_pacing->downPeers.store(qMax(1, downPeers));
+    m_upPeers = qMax(1, upPeers);
+    // once a second: the in-flight time follows the round trip (bt_pacing.h adaptInflight)
+    const qint64 now = m_clock.elapsed();
+    if (m_pacingSinceMs < 0 || m_downBps <= 0 || downPeers <= 0) {
+        // no limit, or nothing requested from any peer: start again from the default next time
+        if (downPeers <= 0) m_pacing->inflightMs.store(int(kInflightSec * 1000));
+        m_pacingSinceMs = now;
+        m_pacingRecv0 = recvBytes;
+    } else {
+        if (now - m_pacingSinceMs >= 1000) {
+            const double rate = double(qMax<qint64>(0, recvBytes - m_pacingRecv0)) * 1000.0 / double(now - m_pacingSinceMs);
+            const double k = adaptInflight(m_pacing->inflightMs.load() / 1000.0, rate, m_downBps);
+            m_pacing->inflightMs.store(int(k * 1000));
+            m_pacingSinceMs = now;
+            m_pacingRecv0 = recvBytes;
+        }
+    }
+    if (!m_ses || m_upBps <= 0)
+        return;
+    lt::settings_pack p;
+    applyRatePacing(p, m_downBps, m_upBps, m_upPeers);
+    const int sendBuf = p.get_int(lt::settings_pack::send_buffer_watermark);
+    if (sendBuf == m_appliedSendBuf)
+        return;
+    m_appliedSendBuf = sendBuf;
+    lt::settings_pack q;
+    q.set_int(lt::settings_pack::send_buffer_watermark, sendBuf);
+    m_ses->apply_settings(std::move(q));
+}
+
 
 void Worker::setUserNodes(const QStringList &nodes, const QStringList &trackers)
 {
@@ -1498,7 +1551,9 @@ void Worker::handleAlert(lt::alert *a)
         const qint64 sent = m_idxSent >= 0 ? c[m_idxSent] : 0;
         const qint64 recvP = m_idxRecvPayload >= 0 ? c[m_idxRecvPayload] : 0;
         const qint64 sentP = m_idxSentPayload >= 0 ? c[m_idxSentPayload] : 0;
-        if (m_lastRecv >= 0 && now > m_lastStatsMs) {
+        // [bw-2] stats come every 100 ms; the rates of the status line stay one-second figures
+        const bool statusDue = m_lastRecv < 0 || now - m_lastStatsMs >= 900;
+        if (statusDue && m_lastRecv >= 0 && now > m_lastStatsMs) {
             const qint64 dr = qMax<qint64>(0, recv - m_lastRecv), ds = qMax<qint64>(0, sent - m_lastSent);
             const double dt = (now - m_lastStatsMs) / 1000.0;
             m_rateDown = int(dr / dt);
@@ -1507,22 +1562,40 @@ void Worker::handleAlert(lt::alert *a)
         // [glue-3] the Bandwidth graph gets everything libtorrent moved (peers incl. protocol, DHT,
         // trackers) with the payload part, since the last stats alert
         auto metric = [&c](int idx) -> qint64 { return idx >= 0 ? qint64(c[idx]) : 0; };
-        const qint64 wireRecv = recv + metric(m_idxDhtIn) + metric(m_idxTrackerIn);
-        const qint64 wireSent = sent + metric(m_idxDhtOut) + metric(m_idxTrackerOut);
+        const qint64 otherRecv = metric(m_idxDhtIn) + metric(m_idxTrackerIn);
+        const qint64 otherSent = metric(m_idxDhtOut) + metric(m_idxTrackerOut);
+        const qint64 wireRecv = recv + otherRecv;
+        const qint64 wireSent = sent + otherSent;
         if (m_lastWireRecv >= 0) {
             const qint64 wr = qMax<qint64>(0, wireRecv - m_lastWireRecv), ws = qMax<qint64>(0, wireSent - m_lastWireSent);
             const qint64 pr = qMax<qint64>(0, recvP - m_lastRecvPayload), ps = qMax<qint64>(0, sentP - m_lastSentPayload);
+            // [bw-2] DHT and trackers find peers: counted for the graph, never charged to the limits
+            const qint64 xr = qBound<qint64>(0, otherRecv - m_lastOtherRecv, wr), xs = qBound<qint64>(0, otherSent - m_lastOtherSent, ws);
             if (wr || ws)
-                post([sink = m_sink, wr, ws, pr, ps] { sink->wAccount(wr, ws, pr, ps); });
+                post([sink = m_sink, wr, ws, pr, ps, xr, xs] {
+                    sink->wAccount(wr - xr, ws - xs, pr, ps);
+                    sink->wAccountDiscovery(xr, xs);
+                });
+        }
+        m_lastOtherRecv = otherRecv;
+        m_lastOtherSent = otherSent;
+        if (m_idxDownPeers >= 0 && m_idxUpPeers >= 0)   // [bw-2]
+            updatePacingPeers(int(metric(m_idxDownPeers)), int(metric(m_idxUpPeers)), recv);
+        {   // [bw-2] held back by the limit: the shared budget gives libtorrent an equal share
+            const qint64 qd = metric(m_idxLimDownBytes), qu = metric(m_idxLimUpBytes);
+            if (qd > 0 || qu > 0)
+                post([sink = m_sink, qd, qu] { sink->wWaiting(qd, qu); });
         }
         m_lastWireRecv = wireRecv;
         m_lastWireSent = wireSent;
-        m_lastRecv = recv;
-        m_lastSent = sent;
         m_lastRecvPayload = recvP;
         m_lastSentPayload = sentP;
-        m_lastStatsMs = now;
-        updateStatus();
+        if (statusDue) {
+            m_lastRecv = recv;
+            m_lastSent = sent;
+            m_lastStatsMs = now;
+            updateStatus();
+        }
         break;
     }
     default:
@@ -1535,8 +1608,7 @@ void Worker::tick()
 {
     if (!m_ses)
         return;
-    m_ses->post_torrent_updates(kStatusFlags);
-    m_ses->post_session_stats();
+    m_ses->post_torrent_updates(kStatusFlags);   // [bw-2] session stats: m_statsTimer
     const qint64 now = m_clock.elapsed();
     QStringList toRemove;
     for (auto &kv : m_t) {

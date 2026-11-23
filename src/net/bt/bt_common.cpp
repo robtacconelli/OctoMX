@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // OctoMX: BitTorrent plugin internals: settings mapping, small helpers.
 #include "bt_common.h"
+#include "bt_pacing.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -166,6 +167,25 @@ bool parseHostPort(const QString &in, QString *host, int *port, int defaultPort)
     return true;
 }
 
+// [bw-2] libtorrent's settings under a speed limit (see bt_pacing.h for the rule). Without a limit in
+// either direction exactly libtorrent's defaults, as before bw-2.
+// - tick_interval 100 ms (default 500): quota handed out in smaller steps;
+// - download: request_queue_time 1 s of each peer's own rate (default 3), capped per connection by
+//   the pacing plugin at its part of kInflightSec of the budget (max_out_request_queue itself stays
+//   at its default: the peer's reqq would replace it anyway);
+// - upload: send buffer (one lump of writing) kInflightSec of the budget split among the peers we
+//   upload to, at least one block.
+void applyRatePacing(lt::settings_pack &p, int downBps, int upBps, int upPeers)
+{
+    const lt::settings_pack def = lt::default_settings();
+    const bool limited = downBps > 0 || upBps > 0;
+    p.set_int(lt::settings_pack::tick_interval, limited ? 100 : def.get_int(lt::settings_pack::tick_interval));
+    p.set_int(lt::settings_pack::request_queue_time, downBps > 0 ? 1 : def.get_int(lt::settings_pack::request_queue_time));
+    p.set_int(lt::settings_pack::max_out_request_queue, def.get_int(lt::settings_pack::max_out_request_queue));
+    const int sendBuf = pacedSendBuffer(upBps, upPeers, def.get_int(lt::settings_pack::send_buffer_watermark));
+    p.set_int(lt::settings_pack::send_buffer_watermark, sendBuf > 0 ? sendBuf : def.get_int(lt::settings_pack::send_buffer_watermark));
+}
+
 lt::settings_pack makeSettingsPack(const Config &c, bool online, int port, const QStringList &userNodes,
                                    int downBps, int upBps)
 {
@@ -248,6 +268,7 @@ lt::settings_pack makeSettingsPack(const Config &c, bool online, int port, const
     p.set_bool(sp::dont_count_slow_torrents, true);
     p.set_int(sp::download_rate_limit, qMax(0, downBps));
     p.set_int(sp::upload_rate_limit, qMax(0, upBps));
+    applyRatePacing(p, qMax(0, downBps), qMax(0, upBps), 1);   // [bw-2]
     // [eng-1] a limit caps payload and protocol messages, not the estimated TCP/IP overhead:
     // libtorrent's default drains the acknowledgements of a download from the UPLOAD limiter
     // (about 5 KB/s at 400 KB/s down), which ate the whole upload budget at the 10 KB/s minimum,

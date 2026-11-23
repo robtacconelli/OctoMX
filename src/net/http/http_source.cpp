@@ -297,7 +297,15 @@ void HttpRangeSource::startReq(Req *q)
     q->startedMs = q->lastNetMs = now();
     QNetworkReply *r = m_plugin->nam()->get(req);
     ++m_connectionsOpened;
-    r->setReadBufferSize(kReadBuffer);
+    {   // [bw-2] under a download limit the reply reads ahead a fifth of a second of it (at least
+        // 16 KB), not 512 KB: the server then sends as fast as we take the data, instead of a whole
+        // range at line speed that the limit only meters out of the buffer afterwards
+        RateLimiter *lim = m_plugin->limiter();
+        const QString host = q->url.host();
+        const bool exempt = lim && lim->exempt(host == QLatin1String("localhost") ? QHostAddress(QHostAddress::LocalHost) : QHostAddress(host));
+        const qint64 limit = lim && !exempt ? lim->limitBps(RateLimiter::Down) : 0;
+        r->setReadBufferSize(limit > 0 ? qBound<qint64>(16 * 1024, limit / 5, kReadBuffer) : kReadBuffer);
+    }
     prepareReply(r, m_cfg);
     q->reply = r;
     const quint64 id = q->id;
@@ -509,11 +517,12 @@ void HttpRangeSource::pump(quint64 id)
         // [bw-1] a LAN server (address literal or localhost) is exempt unless bandwidth/limitLan
         const QString host = q->url.host();
         const bool exempt = lim && lim->exempt(host == QLatin1String("localhost") ? QHostAddress(QHostAddress::LocalHost) : QHostAddress(host));
-        const qint64 got = lim && !exempt ? lim->acquire(RateLimiter::Down, want) : want;
+        const qint64 got = lim && !exempt ? lim->acquireFor(RateLimiter::Down, Net::Http, want) : want;
         auto waitForTokens = [&] {
             if (!m_pumpTimer.isActive()) {
                 const int rate = lim ? lim->limitBps(RateLimiter::Down) : 0;
-                const int delay = rate > 0 ? int(qBound(qint64(5), 1000 * std::min<qint64>(want, 32768) / rate, qint64(250))) : 20;
+                // [bw-2] back within 40 ms at most: the shared bucket holds only 100 ms of the limit
+                const int delay = rate > 0 ? int(qBound(qint64(5), 1000 * std::min<qint64>(want, 32768) / rate, qint64(40))) : 20;
                 m_pumpTimer.start(delay);
             }
         };

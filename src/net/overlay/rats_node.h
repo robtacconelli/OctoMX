@@ -111,9 +111,17 @@ public:
     bool isWritable(const QString &peerId) const;
     // [glue-3] account every message (JSON, channel bytes, pubsub) for the bandwidth graph as
     // protocol traffic of `net` (librats has no byte counters; DHT/handshakes are not included)
-    void setMeter(mx::RateLimiter *limiter, mx::Net net) { m_meter = limiter; m_meterNet = net; }
-    void meter(bool up, qint64 bytes)
-    { if (m_meter && bytes > 0) m_meter->accountTraffic(up ? mx::RateLimiter::Up : mx::RateLimiter::Down, m_meterNet, bytes, 0); }
+    // [bw-2] only the bytes of `transferChannel` (file data) count against the transfer limits; JSON,
+    // pub-sub and other channels (search, chat, presence, control) are counted, never charged
+    void setMeter(mx::RateLimiter *limiter, mx::Net net, const QString &transferChannel = QString())
+    { m_meter = limiter; m_meterNet = net; m_meterTransfer = transferChannel; }
+    void meter(bool up, qint64 bytes, const QString &channel = QString())
+    {
+        if (!m_meter || bytes <= 0) return;
+        const mx::RateLimiter::Dir d = up ? mx::RateLimiter::Up : mx::RateLimiter::Down;
+        if (!m_meterTransfer.isEmpty() && channel == m_meterTransfer) m_meter->accountTraffic(d, m_meterNet, bytes, 0);
+        else m_meter->accountExempt(d, m_meterNet, bytes, 0);
+    }
 
     // pub-sub (GossipSub). The validator runs on a librats thread (must be thread-safe, fast);
     // rejected messages are neither delivered nor relayed. Our own publications are not delivered.
@@ -141,6 +149,7 @@ private:
     std::weak_ptr<Shared> m_lastStopping;
     mx::RateLimiter *m_meter = nullptr;
     mx::Net m_meterNet = mx::Net::Overlay;
+    QString m_meterTransfer;   // [bw-2]
 };
 
 } // namespace mx::ovl

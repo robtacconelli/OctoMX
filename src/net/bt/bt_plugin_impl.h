@@ -85,6 +85,8 @@ public:
     void wUploads(const QList<TransferInfo> &changed, const QStringList &finished) override;
     void wLog(const QString &text) override;
     void wAccount(qint64 wireDown, qint64 wireUp, qint64 payloadDown, qint64 payloadUp) override;
+    void wWaiting(qint64 down, qint64 up) override;   // [bw-2]
+    void wAccountDiscovery(qint64 down, qint64 up) override;   // [bw-2]
     void wDiag(const QHash<QString, TorrentDiag> &torrents, const PluginDiagnostics &session) override;
 
 private:

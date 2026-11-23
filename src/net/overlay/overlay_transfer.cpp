@@ -124,11 +124,13 @@ bool lanPeer(OverlayPlugin *p, const QString &nodeId)
 
 qint64 OverlaySource::preferredRequestSize() const
 {
-    // [bw-1] with a download limit: requests of about half a second of it, so the paced requests keep
-    // the rate smooth (and the budget's grant covers the whole answer)
+    // [bw-1] with a download limit: requests of a part of it, so the paced requests keep the rate
+    // smooth (and the budget's grant covers the whole answer). [bw-2] an eighth of a second (was half
+    // a second): the grant is collected before the request goes out and the answer comes at once, so
+    // a request is a step of that size in the rate
     const RateLimiter *lim = m_plugin ? m_plugin->ctx().limiter : nullptr;
     const int bps = lim ? lim->limitBps(RateLimiter::Down) : 0;
-    return bps > 0 ? qBound(qint64(16 * 1024), qint64(bps / 2), qint64(1024 * 1024)) : qint64(1024 * 1024);
+    return bps > 0 ? qBound(qint64(16 * 1024), qint64(bps / 8), qint64(1024 * 1024)) : qint64(1024 * 1024);
 }
 
 void OverlaySource::sendPaced()
@@ -145,7 +147,7 @@ void OverlaySource::sendPaced()
         auto it = std::find_if(m_reqs.begin(), m_reqs.end(), [rq](const Req &r) { return r.rq == rq; });
         if (it == m_reqs.end()) { m_unsent.pop_front(); continue; }   // cancelled meanwhile
         if (limited) {
-            if (m_downCredit < it->len) m_downCredit += lim->acquire(RateLimiter::Down, it->len - m_downCredit);
+            if (m_downCredit < it->len) m_downCredit += lim->acquireFor(RateLimiter::Down, Net::Overlay, it->len - m_downCredit);
             if (m_downCredit < it->len) { m_paceTimer.start(); return; }
             m_downCredit -= it->len;
         }
@@ -922,7 +924,7 @@ void OverlayPlugin::pumpUpload(UploadSession *s)
             if (!isWritable(s->nodeId)) return;   // resumed by peerWritable
             int n = qMin(kMaxFramePayload, s->buf.size() - s->bufPos);
             if (m_ctx.limiter && !exempt) {
-                n = static_cast<int>(m_ctx.limiter->acquire(RateLimiter::Up, n));
+                n = static_cast<int>(m_ctx.limiter->acquireFor(RateLimiter::Up, Net::Overlay, n));
                 if (n <= 0) {
                     if (!s->throttled) {
                         s->throttled = true;

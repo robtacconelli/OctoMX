@@ -547,7 +547,7 @@ void GnutSource::deliverBody()
         const bool exempt = m_host->limiter() && m_host->limiter()->exempt(m_sock->peerAddress());   // [bw-1] LAN peer
         if (!m_bodyDiscard && m_host->limiter() && !exempt) {
             const qint64 asked = want;
-            want = m_host->limiter()->acquire(mx::RateLimiter::Down, want);
+            want = m_host->limiter()->acquireFor(mx::RateLimiter::Down, mx::Net::Gnutella, want);
             if (want <= 0) { m_pumpTimer.start(50); return; }
             starved = want < asked;
         }

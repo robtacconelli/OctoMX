@@ -415,7 +415,7 @@ void GnutellaPlugin::pingUhc(const QString &hostPort)
             if (self->m_uhcPings.size() > 64) self->m_uhcPings.erase(self->m_uhcPings.begin());
             const QByteArray dg = m.encode();
             if (self->m_udp->writeDatagram(dg, QHostAddress(ip), port) == dg.size() && self->m_ctx.limiter)   // [glue-3]
-                self->m_ctx.limiter->accountTraffic(mx::RateLimiter::Up, mx::Net::Gnutella, dg.size(), 0);
+                self->m_ctx.limiter->accountExempt(mx::RateLimiter::Up, mx::Net::Gnutella, dg.size(), 0);   // [bw-2] UDP: search
             qCDebug(lcGnut).noquote() << "UHC ping to" << hostPort << a.toString();
             return;
         }
@@ -554,7 +554,7 @@ void GnutellaPlugin::onUdpReadyRead()
         QByteArray d(int(sz), Qt::Uninitialized);
         m_udp->readDatagram(d.data(), sz, &from, &fromPort);
         if (mx::consumeProbeDatagram(d)) continue;   // [diag-1] overlay port probe
-        if (m_ctx.limiter) m_ctx.limiter->accountTraffic(mx::RateLimiter::Down, mx::Net::Gnutella, d.size(), 0);   // [glue-3]
+        if (m_ctx.limiter) m_ctx.limiter->accountExempt(mx::RateLimiter::Down, mx::Net::Gnutella, d.size(), 0);   // [glue-3] [bw-2] UDP: search
         Framer f;
         f.feed(d);
         Message m;

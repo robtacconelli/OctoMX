@@ -87,6 +87,8 @@ QString endpointString(const QString &host, int port);
 bool parseHostPort(const QString &s, QString *host, int *port, int defaultPort);
 
 // libtorrent settings for the config. online=false → no listen socket, no DHT/LSD/UPnP/NAT-PMP.
+// [bw-2] request queue and send buffer sizes that suit the rate limits (see bt_common.cpp)
+void applyRatePacing(lt::settings_pack &p, int downBps, int upBps, int upPeers);
 lt::settings_pack makeSettingsPack(const Config &c, bool online, int effectiveListenPort,
                                    const QStringList &userNodes, int downBps, int upBps);
 

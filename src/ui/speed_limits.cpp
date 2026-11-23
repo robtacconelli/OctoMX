@@ -248,11 +248,12 @@ QString scheduleNote(const Settings *s)
 QString toolTip(bool down)
 {
     if (down)
-        return QObject::tr("Limit the total download speed of all networks together (BitTorrent, eD2k, Kad, Gnutella, "
-                           "HTTP, OctoMX). Unchecked = unlimited. Type KB/s, or for example \"2.5 MB\".");
-    return QObject::tr("Limit the total upload speed of all networks together. Unchecked = unlimited. At least %1 KB/s: "
-                       "BitTorrent and eD2k peers give download speed to those who upload, so a lower limit would "
-                       "starve your downloads.")
+        return QObject::tr("Limit the total download speed of all networks together (BitTorrent, eD2k, Gnutella, "
+                           "HTTP, OctoMX). Applies to downloads and uploads; searching is not limited. Unchecked = "
+                           "unlimited. Type KB/s, or for example \"2.5 MB\".");
+    return QObject::tr("Limit the total upload speed of all networks together. Applies to downloads and uploads; "
+                       "searching is not limited. Unchecked = unlimited. At least %1 KB/s: BitTorrent and eD2k "
+                       "peers give download speed to those who upload, so a lower limit would starve your downloads.")
         .arg(bwlimit::kMinUploadKBs);
 }
 

@@ -228,7 +228,7 @@ void OverlayPlugin::start()
     cfg.channels = {QString::fromLatin1(kCtlChannel), QString::fromLatin1(kDataChannel)};
     if (!m_node) {
         m_node = new RatsNode(this);
-        m_node->setMeter(m_ctx.limiter, Net::Overlay);   // [glue-3] bandwidth graph
+        m_node->setMeter(m_ctx.limiter, Net::Overlay, QString::fromLatin1(kDataChannel));   // [glue-3] [bw-2] only file data is charged
         connect(m_node, &RatsNode::peerConnected, this, &OverlayPlugin::onPeerConnected);
         connect(m_node, &RatsNode::peerDisconnected, this, &OverlayPlugin::onPeerDisconnected);
         connect(m_node, &RatsNode::peerRerouted, this, [this](const QString &id) {
@@ -254,6 +254,9 @@ void OverlayPlugin::start()
                 }
             for (auto &src : m_sources)
                 if (src && src->nodeId() == id) src->linkMoved();
+            // [bw-2] and our own answers to it (the asker drops duplicates)
+            for (const SentAnswer &a : std::as_const(m_sentAnswers))
+                if (a.nodeId == id && nowMs() - a.ms < 10000) sendRaw(id, a.msg);
         });
         connect(m_node, &RatsNode::bytesReceived, this, &OverlayPlugin::onBytes);
         connect(m_node, &RatsNode::topicMessage, this, &OverlayPlugin::onTopic);
@@ -424,6 +427,14 @@ QStringList OverlayPlugin::ourAddresses() const
     out += loop;
     while (out.size() > 8) out.removeLast();
     return out;
+}
+
+void OverlayPlugin::rememberAnswer(const QString &nodeId, const QJsonObject &msg)
+{
+    const qint64 now = nowMs();
+    while (!m_sentAnswers.isEmpty() && (now - m_sentAnswers.first().ms >= 10000 || m_sentAnswers.size() >= 64))
+        m_sentAnswers.removeFirst();
+    m_sentAnswers.append(SentAnswer{nodeId, msg, now});
 }
 
 void OverlayPlugin::sendRaw(const QString &nodeId, const QJsonObject &msg)

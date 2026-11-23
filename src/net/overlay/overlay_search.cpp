@@ -173,6 +173,7 @@ void OverlayPlugin::onSearchEnvelope(const QString &uid, const QJsonObject &b)
         a[QStringLiteral("conn")] = connectionLabel();
         a[QStringLiteral("free")] = freeSlots();
         a[QStringLiteral("total")] = totalSlots();
+        rememberAnswer(node, a);   // [bw-2] sent again if the link moves
         sendToNode(node, a, addrs);
         return;
     }
@@ -204,6 +205,7 @@ void OverlayPlugin::onSearchEnvelope(const QString &uid, const QJsonObject &b)
                 a[QStringLiteral("conn")] = connectionLabel();
                 a[QStringLiteral("free")] = freeSlots();
                 a[QStringLiteral("total")] = totalSlots();
+                rememberAnswer(node, a);   // [bw-2]
                 sendToNode(node, a, addrs);
                 break;
             }

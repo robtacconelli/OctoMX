@@ -55,7 +55,7 @@ BtPlugin::BtPlugin(QObject *parent) : NetworkPlugin(parent)
     m_cfgTimer.setSingleShot(true);
     m_cfgTimer.setInterval(300);
     connect(&m_cfgTimer, &QTimer::timeout, this, &BtPlugin::reloadConfig);
-    m_rateTimer.setInterval(1000);
+    m_rateTimer.setInterval(200);   // [bw-2] the budget moves every 100 ms (was polled once a second)
     connect(&m_rateTimer, &QTimer::timeout, this, &BtPlugin::pollRates);
 }
 
@@ -947,6 +947,20 @@ void BtPlugin::wUploads(const QList<TransferInfo> &changed, const QStringList &f
 void BtPlugin::wLog(const QString &text)
 {
     emit logMessage(text);
+}
+
+void BtPlugin::wAccountDiscovery(qint64 down, qint64 up)
+{
+    if (!m_ctx.limiter) return;
+    if (down > 0) m_ctx.limiter->accountExempt(RateLimiter::Down, Net::BitTorrent, down, 0);
+    if (up > 0) m_ctx.limiter->accountExempt(RateLimiter::Up, Net::BitTorrent, up, 0);
+}
+
+void BtPlugin::wWaiting(qint64 down, qint64 up)
+{
+    if (!m_ctx.limiter || m_manualRates) return;
+    if (down > 0) m_ctx.limiter->reportWaiting(RateLimiter::Down, Net::BitTorrent, down);
+    if (up > 0) m_ctx.limiter->reportWaiting(RateLimiter::Up, Net::BitTorrent, up);
 }
 
 void BtPlugin::wAccount(qint64 wireDown, qint64 wireUp, qint64 payloadDown, qint64 payloadUp)

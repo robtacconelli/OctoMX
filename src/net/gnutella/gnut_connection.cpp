@@ -272,7 +272,8 @@ QString UltrapeerConnection::tlsInfo() const
 void UltrapeerConnection::meter(bool up, qint64 bytes)
 {
     if (m_cfg.meter && bytes > 0)
-        m_cfg.meter->accountTraffic(up ? mx::RateLimiter::Up : mx::RateLimiter::Down, mx::Net::Gnutella, bytes, 0);
+        // [bw-2] queries, hits, pings: search, never charged to the transfer limits
+        m_cfg.meter->accountExempt(up ? mx::RateLimiter::Up : mx::RateLimiter::Down, mx::Net::Gnutella, bytes, 0);
 }
 
 } // namespace mx::gnut

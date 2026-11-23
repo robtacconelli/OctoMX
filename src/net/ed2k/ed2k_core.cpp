@@ -271,7 +271,8 @@ void Ed2kCore::accountUdp(int dir, const QByteArray &d)
     mx::Net net = mx::Net::ED2K;
     if (b0 == PROT_KAD || b0 == PROT_KADPACK) net = mx::Net::Kad;
     else if (b0 != PROT_EDONKEY && b0 != PROT_EMULE) net = facadeActive(FacadeKad) ? mx::Net::Kad : mx::Net::ED2K;
-    m_ctx.limiter->accountTraffic(mx::RateLimiter::Dir(dir), net, d.size(), 0);
+    // [bw-2] UDP: server searches and source queries, Kad, reasks: never charged to the transfer limits
+    m_ctx.limiter->accountExempt(mx::RateLimiter::Dir(dir), net, d.size(), 0);
 }
 
 bool Ed2kCore::sendClientUdp(quint32 ip, quint16 port, quint8 opcode, const QByteArray &payload, const QByteArray &uh)

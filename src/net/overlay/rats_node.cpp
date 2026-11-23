@@ -289,7 +289,7 @@ bool RatsNode::Shared::build(quint16 listenPort, QString *error)
             if (!s) return;
             const QString pid = QString::fromStdString(p.id().to_hex());
             QByteArray bytes(reinterpret_cast<const char *>(v.data()), static_cast<qsizetype>(v.size()));
-            s->post([pid, chan, bytes](RatsNode *o) { o->meter(false, bytes.size()); Q_EMIT o->bytesReceived(pid, chan, bytes); });
+            s->post([pid, chan, bytes](RatsNode *o) { o->meter(false, bytes.size(), chan); Q_EMIT o->bytesReceived(pid, chan, bytes); });
         });
     }
     if (json)
@@ -555,7 +555,7 @@ bool RatsNode::sendBytes(const QString &peerId, const QString &channel, const QB
     const bool ok = d->node->send(*id, channel.toStdString(),
                                   librats::ByteView(reinterpret_cast<const uint8_t *>(bytes.constData()),
                                                     static_cast<size_t>(bytes.size())));
-    meter(true, bytes.size());   // [glue-3] queued even when "stop" is returned
+    meter(true, bytes.size(), channel);   // [glue-3] queued even when "stop" is returned
     return ok;
 }
 
@@ -581,7 +581,7 @@ bool RatsNode::sendBytesUrgent(const QString &peerId, const QString &channel, co
 bool RatsNode::broadcastBytes(const QString &channel, const QByteArray &bytes)
 {
     if (!d || !d->node) return false;
-    meter(true, qint64(bytes.size()) * peerCount());   // [glue-3]
+    meter(true, qint64(bytes.size()) * peerCount(), channel);   // [glue-3]
     return d->node->broadcast(channel.toStdString(),
                               librats::ByteView(reinterpret_cast<const uint8_t *>(bytes.constData()),
                                                 static_cast<size_t>(bytes.size())));

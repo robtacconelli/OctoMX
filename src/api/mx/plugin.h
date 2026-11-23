@@ -128,8 +128,8 @@ public:
     virtual void account(Dir d, Net net, qint64 bytes) = 0;
     virtual int limitBps(Dir d) const = 0;  // 0 = unlimited
     // [added by core] The rate this network may use right now (0 = unlimited). For BitTorrent it is
-    // what the other networks left of the global limit in the last second, never < 25 % of it,
-    // the BitTorrent plugin polls this once per second and applies it to libtorrent.
+    // its share of the global limit ([bw-2] recomputed every 100 ms, see src/core/rate_limiter.h);
+    // the BitTorrent plugin polls it several times a second and applies it to libtorrent.
     virtual int budgetBps(Dir d, Net net) const { Q_UNUSED(net) return limitBps(d); }
     // [added by glue-3] Bandwidth graph accounting with a payload split. wireBytes = everything this
     // network moved (file data + protocol: handshakes, queries, DHT/Kad/tracker packets, headers);
@@ -140,14 +140,26 @@ public:
     { Q_UNUSED(payloadBytes) account(d, net, wireBytes); }
     // [bw-1] One shared budget: the core charges every accounted wire byte that did not pass
     // acquire() (BitTorrent, Kad / UDP packets, protocol messages) to the same buckets, so the total
-    // of all networks stays within the limit. BitTorrent's budgetBps() is the global limit minus
-    // what the others used in the last second, never below half of it while BitTorrent is busy.
+    // of all networks stays within the limit. BitTorrent's budgetBps() is its fair share of the
+    // global limit (all of it while the others do not want more).
     // LAN peers are exempt unless bandwidth/limitLan: a plugin asks exempt(peer) as it moves data
     // (cheap, so a change of the setting applies at once); for an exempt peer it skips acquire() and
     // accounts with accountExempt() (counted in the graph, not charged to the budget).
+    // [bw-2] accountExempt() is also for search and discovery traffic of every network (servers,
+    // DHT, trackers, queries and their answers, overlay control): the limits are for file transfers
+    // only, so this traffic is never slowed down and never charged; it is counted for the graph.
     virtual bool exempt(const QHostAddress &peer) const { Q_UNUSED(peer) return false; }
     virtual void accountExempt(Dir d, Net net, qint64 wireBytes, qint64 payloadBytes)
     { accountTraffic(d, net, wireBytes, payloadBytes); }
+    // [bw-2] acquire() for one network: the core shares the limit fairly between the networks that
+    // want more than they get (each gets its share while another one waits; what one does not use,
+    // the others may take). A plugin that moves file data calls this one; acquire() is the same for
+    // an unknown network.
+    virtual qint64 acquireFor(Dir d, Net net, qint64 bytes) { Q_UNUSED(net) return acquire(d, bytes); }
+    // [bw-2] a network that limits itself (libtorrent) tells how many bytes wait for its budget right
+    // now; when that is more than it gets in a moment, it counts as wanting more (as a refused
+    // acquireFor() does), so it gets an equal share
+    virtual void reportWaiting(Dir d, Net net, qint64 bytes) { Q_UNUSED(d) Q_UNUSED(net) Q_UNUSED(bytes) }
 };
 
 // ---------------------------------------------------------------- a source of byte ranges

@@ -212,10 +212,11 @@ void HttpIndexProvider::pumpQueue()
 void meterReply(QNetworkReply *reply, mx::RateLimiter *limiter, qint64 requestBytes)
 {
     if (!reply || !limiter) return;
-    limiter->accountTraffic(mx::RateLimiter::Up, mx::Net::Web, requestBytes, 0);   // request line + headers (estimate)
+    // [bw-2] index queries are search: counted for the graph, never charged to the transfer limits
+    limiter->accountExempt(mx::RateLimiter::Up, mx::Net::Web, requestBytes, 0);   // request line + headers (estimate)
     auto last = std::make_shared<qint64>(0);
     QObject::connect(reply, &QNetworkReply::downloadProgress, reply, [limiter, last](qint64 got, qint64) {
-        if (got > *last) { limiter->accountTraffic(mx::RateLimiter::Down, mx::Net::Web, got - *last, 0); *last = got; }
+        if (got > *last) { limiter->accountExempt(mx::RateLimiter::Down, mx::Net::Web, got - *last, 0); *last = got; }
     });
 }
 

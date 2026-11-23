@@ -109,10 +109,13 @@
 //   and forces a DHT announce → torrentAdded(id) + BitTorrentEvents::seedReady(path, id).
 //   Idempotent: calling it again for a path that is seeded (or being hashed) returns true and
 //   re-emits seedReady (no second hashing).
-// * Rates/limits: once per second the plugin reads ctx.limiter->budgetBps(Down/Up, Net::BitTorrent)
-//   and applies it as libtorrent's session rate limit (0 = unlimited), and accounts the payload
-//   bytes moved since the last second with ctx.limiter->account(dir, Net::BitTorrent, bytes).
-//   LAN peers are exempt unless bandwidth/limitLan. BitTorrentControl::setRateLimits overrides it.
+// * Rates/limits: every 200 ms the plugin reads ctx.limiter->budgetBps(Down/Up, Net::BitTorrent)
+//   and applies it as libtorrent's session rate limit (0 = unlimited); every 100 ms it accounts the
+//   bytes moved since the last report with ctx.limiter->accountTraffic(dir, Net::BitTorrent, ...)
+//   and reports the bytes waiting for libtorrent's limiter (reportWaiting) [bw-2]. Under a limit
+//   libtorrent hands out quota every 100 ms with short request queues (bt_common.cpp
+//   applyRatePacing). LAN peers are exempt unless bandwidth/limitLan.
+//   BitTorrentControl::setRateLimits overrides it.
 // * NetworkStatus: Disconnected before start()/after stop(); Connecting until a listen socket is up
 //   and (with DHT on) the DHT has nodes, or any peer is connected; peers = DHT node count;
 //   firewalled until an incoming connection has been accepted; rates include protocol overhead.
@@ -128,7 +131,7 @@ class BitTorrentControl {
 public:
     virtual ~BitTorrentControl() = default;
     // Global libtorrent rate limits in BYTES per second (0 = unlimited). Optional: normally the
-    // plugin polls ctx.limiter->budgetBps() once per second itself (ARCHITECTURE "Bandwidth").
+    // plugin polls ctx.limiter->budgetBps() every 200 ms itself (ARCHITECTURE "Bandwidth").
     // Once this has been called, the explicit values win and polling stops (tools, tests, or a core
     // that prefers to push). Applied only when they change. Without a limiter: unlimited.
     virtual void setRateLimits(int downBps, int upBps) = 0;

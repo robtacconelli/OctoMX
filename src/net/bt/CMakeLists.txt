@@ -12,6 +12,8 @@ add_library(mxnet_bt STATIC
     bt_common.cpp
     bt_worker.h
     bt_worker.cpp
+    bt_pacing.h
+    bt_pacing.cpp
 )
 target_include_directories(mxnet_bt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mxnet_bt

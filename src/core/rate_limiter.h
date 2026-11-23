@@ -6,15 +6,12 @@
 // Thread-safe: acquire()/account() may be called from any thread.
 //
 // [bw-1] One shared budget per direction:
-//   * acquire(): file transfers of eD2k, Gnutella, HTTP and the overlay take tokens before they
-//     move bytes (and remember them as "granted");
+//   * acquire() / acquireFor(): file transfers of eD2k, Gnutella, HTTP and the overlay take tokens
+//     before they move bytes (and remember them as "granted");
 //   * accountTraffic(): wire bytes beyond what was granted (Kad / UDP packets, protocol messages,
 //     anything not throttled) are charged to the same bucket, which may go into debt (at most two
 //     seconds), so throttled transfers back off and the total stays within the limit;
-//   * BitTorrent (libtorrent limits itself) gets budgetBps(), set once per second in tick(): the
-//     limit minus what the others were charged in the last second while they got all they asked
-//     for; while acquire() had to refuse them, a fifth of the limit less each second, never below
-//     half of it (both busy: about half each); its accounted bytes are charged up to
+//   * BitTorrent (libtorrent limits itself) gets budgetBps(); its accounted bytes are charged up to
 //     that budget (what goes beyond it is LAN traffic in libtorrent's unlimited local class, or
 //     DHT / tracker packets);
 //   * exempt(peer) / accountExempt(): LAN peers while bandwidth/limitLan is off.
@@ -22,6 +19,20 @@
 //     (kTrickleBytes at most every kTrickleMs per direction) into the bucket's debt, so the protocol
 //     messages of a network that had no traffic yet (a hello, a hash set request, a file list) get
 //     through while another network uses the whole limit; the debt keeps the long-run total at it.
+// [bw-2] Second by second, not only on average:
+//   * the bucket refills smoothly and holds at most kSliceMs (100 ms) of the limit, so nobody can
+//     take a whole second's allowance at once after a pause (it held one second before: a network
+//     that came back got a second's worth in one read, on top of what the others moved);
+//   * every 100 ms (a "slice", computed when the limiter is next used) each network's rate is
+//     measured (granted + charged bytes, averaged over about half a second) and the limit is shared
+//     max-min fairly: a network that wants more than it gets ("hungry": acquire() had to refuse it in
+//     the last kHungryMs, or BitTorrent uses at least 85 % of its budget) may get an equal share, one
+//     that is satisfied keeps what it uses plus a margin, the rest goes to the hungry ones;
+//   * while another network is hungry, acquireFor() gives a network no more than its share (its own
+//     small bucket refilled at its share); while nobody else wants more, the whole bucket is open to
+//     it, so no throughput is lost;
+//   * BitTorrent's budget moves halfway to its share every slice (a stable share that changes
+//     gradually, a joining network gets its share within about half a second).
 #pragma once
 
 #include <QtCore/QDateTime>
@@ -45,6 +56,8 @@ public:
     explicit CoreRateLimiter(Settings *settings, QObject *parent = nullptr);
 
     qint64 acquire(Dir d, qint64 bytes) override;
+    qint64 acquireFor(Dir d, Net net, qint64 bytes) override;   // [bw-2] fair share per network
+    void reportWaiting(Dir d, Net net, qint64 bytes) override;    // [bw-2] libtorrent's queued bytes
     void account(Dir d, Net net, qint64 bytes) override;
     void accountTraffic(Dir d, Net net, qint64 wireBytes, qint64 payloadBytes) override;
     int limitBps(Dir d) const override;
@@ -70,39 +83,59 @@ public:
     static constexpr int kNets = 16;              // > every mx::Net value
     static constexpr int kTrickleBytes = 1500;    // [eng-1] see the head of this file
     static constexpr int kTrickleMs = 250;
-    // Called once per second by the BandwidthService: rolls the per-network "last second" counters
-    // used by budgetBps().
+    static constexpr int kSliceMs = 100;          // [bw-2] bucket depth and share update interval
+    static constexpr int kHungryMs = 300;         // [bw-2] "wants more" lasts this long after a refusal
+    // Called once per second by the BandwidthService: rolls the per-network "last second" counters.
     void tick();
+    // [bw-2] the share of every network now (bytes/s; tests, diagnostics); runs the slice first
+    int shareBps(Dir d, Net net);
 
 signals:
     void limitsChanged(int downBps, int upBps);
 
 private:
+    struct NetState {             // [bw-2] one network in one direction
+        double rate = 0;          // bytes/s it was granted or charged, averaged over ~0.5 s
+        qint64 slice = 0;         // bytes granted / charged in the current slice
+        qint64 wantNs = -(qint64(1) << 60);   // last time acquireFor() could not give all it asked
+        double share = 0;         // its fair share (bytes/s), set every slice
+        double tokens = 0;        // its own bucket, refilled at `share`
+        qint64 tokensNs = 0;
+        bool active = false;      // took part in the last share computation
+    };
     struct Bucket {
         qint64 rate = 0;      // bytes/s, 0 = unlimited
-        double tokens = 0;    // may be negative (debt of charged traffic), >= -2 * capacity
+        double tokens = 0;    // may be negative (debt of charged traffic), >= -maxDebt()
         qint64 lastNs = 0;
         double granted = 0;   // acquired, not yet seen in accountTraffic()
         // BitTorrent
-        mutable int btBudget = 0;   // last budget handed out
+        double btBudget = 0;        // its budget (moves towards its share every slice)
+        double btPeak = 0;          // [bw-2] the highest budget of the last 500 ms (charged at that rate)
+        qint64 btPeakNs = 0;
+        double btReserved = 0;      // [bw-2] reserved for libtorrent's bytes, not yet reported
+        qint64 btActualSlice = 0;   // [bw-2] all of libtorrent's bytes in this slice (not capped)
+        double btActualRate = 0;    //        averaged over about a second
+        double btTrim = 1.0;        //        what libtorrent is handed: budget x trim (0.9 to 1)
         double btAllow = 0;         // how much BitTorrent traffic may still be charged
         qint64 btAllowNs = 0;
         qint64 charged = 0;         // cumulative bytes charged (acquire + charge)
         qint64 btCharged = 0;       // the BitTorrent part of it
-        qint64 othersAtTick = 0;
-        qint64 others1s = 0;        // non-BitTorrent bytes charged in the last second
         qint64 denied = 0;          // cumulative bytes acquire() could not give
-        qint64 deniedAtTick = 0;
         qint64 trickleNs = 0;       // [eng-1] last small grant made while the bucket was empty
-        double capacity() const { return qMax<double>(double(rate), 4096.0); }   // <= 1 s burst
+        qint64 sliceNs = 0;         // [bw-2] start of the current slice
+        std::array<NetState, kNets> nets{};
+        double capacity() const { return qMax<double>(double(rate) * kSliceMs / 1000.0, 3000.0); }   // [bw-2] 100 ms
+        double maxDebt() const { return 2.0 * qMax<double>(double(rate), 4096.0); }                 // two seconds
     };
     void refill(Bucket &b, qint64 nowNs);
+    void slice(Bucket &b, qint64 nowNs) const;         // [bw-2] rates, hungry flags, shares
+    qint64 take(Bucket &b, int net, qint64 bytes, qint64 nowNs);
     void addTotals(Dir d, Net net, qint64 wireBytes, qint64 payloadBytes);
     void scheduleNextReload(const bwlimit::InForce &f);
 
     Settings *m_settings;
     mutable QMutex m_mutex;
-    Bucket m_buckets[2];
+    mutable Bucket m_buckets[2];   // mutable: budgetBps() runs a due slice first
     QElapsedTimer m_clock;
     std::array<std::atomic<qint64>, 2 * kNets> m_totals{};
     std::array<std::atomic<qint64>, 2 * kNets> m_payload{};

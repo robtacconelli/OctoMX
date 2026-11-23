@@ -25,6 +25,7 @@
 #include <libtorrent/torrent_status.hpp>
 
 #include "bt_common.h"
+#include "bt_pacing.h"
 #include "mx/plugin.h"
 
 namespace mx {
@@ -49,6 +50,8 @@ public:
     virtual void wLog(const QString &text) = 0;
     // [glue-3] wire = peer traffic + DHT + tracker bytes since the last call; payload = file data
     virtual void wAccount(qint64 wireDown, qint64 wireUp, qint64 payloadDown, qint64 payloadUp) = 0;
+    virtual void wWaiting(qint64 down, qint64 up) { Q_UNUSED(down) Q_UNUSED(up) }   // [bw-2] bytes queued for the rate limit
+    virtual void wAccountDiscovery(qint64 down, qint64 up) { Q_UNUSED(down) Q_UNUSED(up) }   // [bw-2] DHT + trackers
     // [diag-1] connection test counters, once a second with the snapshots
     virtual void wDiag(const QHash<QString, TorrentDiag> &torrents, const PluginDiagnostics &session)
     { Q_UNUSED(torrents) Q_UNUSED(session) }
@@ -216,6 +219,7 @@ private:
     std::map<QString, UpRow> m_up;
     std::atomic<bool> m_alertsPending{false};
     QTimer *m_tick = nullptr;
+    QTimer *m_statsTimer = nullptr;   // [bw-2] session stats every 100 ms
     QTimer *m_saveTimer = nullptr;
     QTimer *m_stateTimer = nullptr;
     QElapsedTimer m_clock;
@@ -229,6 +233,14 @@ private:
     qint64 m_lastRecvPayload = 0, m_lastSentPayload = 0;
     int m_idxRecvPayload = -1, m_idxSentPayload = -1;
     int m_idxDhtIn = -1, m_idxDhtOut = -1, m_idxTrackerIn = -1, m_idxTrackerOut = -1; // [glue-3]
+    int m_idxLimDownBytes = -1, m_idxLimUpBytes = -1;   // [bw-2] bytes waiting for the rate limit
+    int m_idxDownPeers = -1, m_idxUpPeers = -1;         // [bw-2] peers with requests outstanding
+    std::shared_ptr<PacingState> m_pacing = std::make_shared<PacingState>();
+    int m_upPeers = 1;
+    qint64 m_lastOtherRecv = 0, m_lastOtherSent = 0;   // [bw-2] DHT + tracker counters
+    int m_appliedSendBuf = -1;
+    void updatePacingPeers(int downPeers, int upPeers, qint64 recvBytes);
+    qint64 m_pacingSinceMs = -1, m_pacingRecv0 = 0;
     qint64 m_lastWireRecv = -1, m_lastWireSent = 0;
     int m_rateDown = 0, m_rateUp = 0;
     int m_idxDhtNodes = -1, m_idxRecv = -1, m_idxSent = -1, m_idxIncoming = -1;

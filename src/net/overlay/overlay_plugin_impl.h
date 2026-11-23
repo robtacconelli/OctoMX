@@ -141,6 +141,8 @@ public:
     QString nodeId() const { return m_node ? m_node->nodeId() : QString(); }
     quint16 listenPort() const { return m_node ? m_node->listenPort() : 0; }
     int connectedUsers() const;       // peers whose hello was verified
+    bool helloVerified(const QString &nodeId) const   // [bw-2] tests: this node's hello was verified
+    { auto it = m_peers.constFind(nodeId); return it != m_peers.constEnd() && it->hello; }
 
     // ---- used by OverlaySource / uploads (same module)
     struct PeerState {
@@ -410,6 +412,11 @@ private:
     QHash<quint32, BrowseReq> m_browse;
     struct WhoisReq { UserRef user; QString rid; qint64 sentMs = 0; };
     QHash<QString, WhoisReq> m_whois;         // rid → request
+    // [bw-2] answers pushed to a node (search hits, sources) in the last seconds: sent again when
+    // librats moves that node to another link (what went out on the replaced link may be lost)
+    struct SentAnswer { QString nodeId; QJsonObject msg; qint64 ms = 0; };
+    QList<SentAnswer> m_sentAnswers;
+    void rememberAnswer(const QString &nodeId, const QJsonObject &msg);
 
     // search / sources / hash links
     QList<SharedFile> m_shared;

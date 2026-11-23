@@ -205,12 +205,40 @@ setting `bt/seedLibrary`).
 `RateLimiter` (core) holds the global up/down limits. Non-libtorrent plugins call
 `acquire()`/`account()`. Once per second the core gives libtorrent what is left of the global
 limit (never less than 25 %). `BandwidthService` samples the totals once per second.
-[bw-1] One shared budget: wire bytes that did not pass `acquire()` (libtorrent within its budget,
-Kad / UDP packets, protocol messages) are charged to the same buckets; libtorrent's budget yields a
+[bw-1] One shared budget: wire bytes of transfers that did not pass `acquire()` (libtorrent within
+its budget, protocol messages of transfer connections) are charged to the same buckets ([bw-2]:
+search and discovery traffic is not, see below); libtorrent's budget yields a
 fifth of the limit per second while the others are refused tokens, never below half of it (the 25 %
-above is now 50 %). LAN peers are exempt unless `bandwidth/limitLan` (`exempt()` / `accountExempt()`).
+above is now 50 %; [bw-2] replaced by the fair shares below). LAN peers are exempt unless `bandwidth/limitLan` (`exempt()` / `accountExempt()`).
 The limits in force (schedule, "your limits win until the window ends", upload minimum 10 KB/s) come
 from `mx/bandwidth_limits.h`, the same code the UI uses.
+[bw-2] Second by second: the shared bucket holds 100 ms of the limit and refills smoothly; every
+100 ms each network's rate is measured and the limit is shared max-min fairly between the networks
+that want more (`acquireFor(dir, net, bytes)` refused them, or libtorrent reports bytes waiting for
+its limit with `reportWaiting()`); while another network wants more, a network gets no more than its
+share, otherwise all that is left. libtorrent's budget moves halfway to its share every 100 ms (the
+plugin polls it every 200 ms, accounts its bytes every 100 ms, which the bucket reserves ahead of the
+report). Under a limit libtorrent hands out quota every 100 ms and keeps in flight, over all peers it
+downloads from, an in-flight time of its budget (0.1 to 0.5 s, starting at 0.12 s, adapted once a
+second to the peers' round trip: longer while it stays under its budget with nothing waiting for
+quota, shorter while much waits), split among the peers, at least 2 blocks each; a libtorrent peer
+plugin (`src/net/bt/bt_pacing.*`) sets it on every connection, as the setting itself is replaced by
+each peer's "reqq". Without a limit libtorrent's defaults. Measured with `tests/engine/bw_slice_probe`
+(see `docs/status/bw-2.md`).
+
+**What the limits cover** [bw-2, owner's rule]: the download and upload limits are for file
+transfers only. Search and discovery traffic is never slowed down and never charged to the budget
+(so a search never takes allowance away from a transfer and a limit never makes a search slow); it is
+still counted, so the Bandwidth graph shows it.
+- Counted against the limits: BitTorrent peer connections (payload and peer protocol), HTTP / HTTPS
+  sources, eD2k peer connections (file data, hello, hash sets, source exchange, queue), Gnutella
+  HTTP downloads and uploads (with their request headers), overlay file data (the data channel).
+- Exempt (counted for the graph only): BitTorrent DHT and trackers; eD2k server connection (login,
+  searches, source lists) and all eD2k / Kad UDP; Kad; Gnutella ultrapeer connections (queries, hits,
+  pings), Gnutella UDP and the first bytes of an incoming connection; web index queries; Rats
+  searches and file lists; overlay control channel, pub-sub, presence, chat and search; LAN peers
+  unless `bandwidth/limitLan`. Plugins report exempt bytes with `accountExempt()`; the core treats
+  Kad, Web and Rats as exempt whatever a plugin calls.
 
 ## Overlay (the OctoMX network)
 

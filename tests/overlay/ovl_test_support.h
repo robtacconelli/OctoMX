@@ -205,6 +205,17 @@ struct Instance {
 // Dial b -> a and wait until both sides verified each other's hello.
 inline bool link(Instance &a, Instance &b, int timeoutMs = 10000)
 {
+    // [bw-2] a restarted peer keeps its node id: while `a` has not yet handled the end of its earlier
+    // link to it (librats closed it, the plugin's event for it can still wait in the queue on a busy
+    // machine), `a` counts that old link and the count below would never rise. Let it catch up first.
+    const QString bid = b.plugin->nodeId();
+    QElapsedTimer settle;
+    settle.start();
+    while (a.plugin->helloVerified(bid) && !(a.plugin->node() && a.plugin->node()->isConnected(bid)) && settle.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QTest::qWait(20);
+    }
+    const bool aHadB = a.plugin->node() && a.plugin->node()->isConnected(bid);
     const int na = a.plugin->connectedUsers(), nb = b.plugin->connectedUsers();
     b.plugin->connectPeer(a.addr());
     QElapsedTimer t;
@@ -214,6 +225,8 @@ inline bool link(Instance &a, Instance &b, int timeoutMs = 10000)
         if (a.plugin->connectedUsers() > na && b.plugin->connectedUsers() > nb) return true;
         QTest::qWait(20);
     }
+    qWarning("link: no new verified link after %d ms: a %d (was %d, a still had a link to b's node: %s), b %d (was %d)", timeoutMs,
+             a.plugin->connectedUsers(), na, aHadB ? "yes" : "no", b.plugin->connectedUsers(), nb);
     return false;
 }
 

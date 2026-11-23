@@ -273,8 +273,9 @@ int main(int argc, char **argv)
         for (Net n : keys) netTxt << netShortName(n) + QLatin1Char('=') + kb(x.netDown.value(n)) + QLatin1Char('/') + kb(x.netUp.value(n));
         out << QStringLiteral("[%1s] limit %2/%3 | prog %4/%5 pay %6/%7 | os-tcp %8/%9 KiB/s | done %10 | %11")
                    .arg(tick, 3).arg(x.limDown).arg(x.limUp).arg(kb(x.down), kb(x.up), kb(x.payDown), kb(x.payUp), kb(x.osDown), kb(x.osUp))
-                   .arg(done).arg(netTxt.join(QLatin1Char(' ')))
-            << Qt::endl;
+                   .arg(done).arg(netTxt.join(QLatin1Char(' ')));
+        if (searchId) out << " | hits " << core->search()->hits(searchId).size();   // [bw-2]
+        out << Qt::endl;
         if (tick >= seconds || (stopAfter > 0 && done >= stopAfter) || (complete && !keep && !dlIds.isEmpty())) {
             stopping = true;
             // the table: windows of `window` seconds with one limit in force throughout
