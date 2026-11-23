@@ -1,0 +1,48 @@
+OctoMX is free software, licensed under the GNU General
+Public License version 3 or (at your option) any later version.
+Parts of the eD2k/Kad code are adapted from eMule
+(GPL-2.0-or-later).
+
+The full licence texts and notices are in the "licenses"
+folder of the package (THIRD-PARTY-NOTICES.txt lists every
+component). OctoMX bundles or links:
+
+Qt 6 (Core, Gui, Widgets, Network, Sql, Concurrent)
+  The Qt Company Ltd. and contributors. LGPL-3.0.
+libtorrent-rasterbar 2.0
+  Arvid Norberg and contributors. BSD 3-clause.
+librats
+  librats contributors. MIT (with BSD-3-Clause parts).
+OpenSSL 3.5
+  The OpenSSL Project Authors. Apache License 2.0.
+Boost 1.92 (header-only libraries)
+  Boost Software License 1.0.
+zlib 1.3
+  Jean-loup Gailly and Mark Adler. zlib licence.
+SQLite (through the Qt SQLite driver)
+  Public domain.
+ICU (Linux package, shipped with Qt)
+  Unicode, Inc. Unicode/ICU licence.
+LLVM / MinGW-w64 runtime libraries (Windows package:
+libc++, libunwind, winpthreads)
+  Apache-2.0 with LLVM exception; MinGW-w64 licences.
+X11 / xcb helper libraries (Linux package)
+  MIT/X11-style licences.
+
+"OctoMX Tahoma" user-interface font
+  Derived from the Wine project's Tahoma (line metrics
+  adjusted, glyphs "1" and "J" of the 8-pt bitmap redrawn,
+  renamed). GNU LGPL version 2.1 or later. The font files
+  are in the "fonts" folder of the package and can be
+  replaced there.
+
+OctoMX is an independent open-source program. It is
+not affiliated with, endorsed by or derived from the
+original WinMX or its makers (Frontcode Technologies,
+2001-2005), and it contains none of their code.
+WinMX is named only to describe the style of the
+interface, which follows the classic WinMX 3.53 client.
+The icons and the program logo are original pixel art in
+the style of the Windows 2000 era toolbars (drawn anew in
+code by the OctoMX contributors; no artwork of the
+original program is used).

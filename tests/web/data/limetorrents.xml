@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+	<channel>
+		<title>Index - Search RSS for example</title>
+		<link>https://feed.example.org/</link>
+		<description>Synthetic test feed</description>
+		<language>en-us</language>
+		<pubDate>Fri, 20 Nov 2026 19:58:04 +0200</pubDate>
+		<lastBuildDate>Fri, 20 Nov 2026 19:58:04 +0200</lastBuildDate>
+		<generator>fixture</generator>
+<item><title>[ Fixture ] Example OS Users, Groups and Permissions - Complete Guide (fictional)</title><pubDate>14 Nov 2026 11:40:20 +0200</pubDate><link>https://feed.example.org/Fixture-1-torrent-3001.html</link><category>Other - Other</category><size>1141536878</size><description>Seeds: 41 , Leechers 17</description><comments>https://feed.example.org/Fixture-1-torrent-3001.html</comments><enclosure url="https://cache.example.org/torrent/8181818181818181818181818181818181818181.torrent?title=Fixture-1" type="application/x-bittorrent" /></item>
+<item><title>Sample Ensemble - Inspiration (2018, fictional)</title><pubDate>03 Nov 2026 00:25:12 +0200</pubDate><link>https://feed.example.org/Fixture-2-torrent-3002.html</link><category>Music</category><size>120000000</size><description>Seeds: 5 , Leechers 1</description><comments>https://feed.example.org/Fixture-2-torrent-3002.html</comments><enclosure url="https://cache.example.org/torrent/8282828282828282828282828282828282828282.torrent?title=Fixture-2" type="application/x-bittorrent" /></item>
+<item><title>Example Tool v5 0 Example OS x64 --&amp;gt; portable</title><pubDate>01 Nov 2026 12:00:00 +0200</pubDate><link>https://feed.example.org/Fixture-3-torrent-3003.html</link><category>Applications - Linux</category><size>30000000</size><description>Seeds: 2 , Leechers 0</description><comments>https://feed.example.org/Fixture-3-torrent-3003.html</comments><enclosure url="https://cache.example.org/torrent/8383838383838383838383838383838383838383.torrent?title=Fixture-3" type="application/x-bittorrent" /></item>
+<item><title>Example OS Bible (fictional) 11ed 2025</title><pubDate>28 Oct 2026 08:00:00 +0200</pubDate><link>https://feed.example.org/Fixture-4-torrent-3004.html</link><category>Other - E-books</category><size>8554738</size><description>Seeds: 9 , Leechers 2</description><comments>https://feed.example.org/Fixture-4-torrent-3004.html</comments><enclosure url="https://cache.example.org/torrent/8484848484848484848484848484848484848484.torrent?title=Fixture-4" type="application/x-bittorrent" /></item>
+<item><title>The Ultimate Example OS Handbook (fictional), 2025</title><pubDate>20 Oct 2026 18:30:00 +0200</pubDate><link>https://feed.example.org/Fixture-5-torrent-3005.html</link><category>Other - E-books</category><size>15000000</size><description>Seeds: 3 , Leechers 0</description><comments>https://feed.example.org/Fixture-5-torrent-3005.html</comments><enclosure url="https://cache.example.org/torrent/8585858585858585858585858585858585858585.torrent?title=Fixture-5" type="application/x-bittorrent" /></item>
+	</channel>
+</rss>

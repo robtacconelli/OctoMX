@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=OctoMX
+GenericName=File Sharing
+Comment=File sharing with the classic WinMX-style interface on BitTorrent, eD2k/Kad, Gnutella and its own peer network
+# Same desktop-file id as the one OctoMX itself writes for link associations (one menu entry).
+# install-desktop-entry.sh replaces @PREFIX@ with the absolute path of the unpacked folder
+Exec=@PREFIX@/octomx %U
+TryExec=@PREFIX@/octomx
+Icon=octomx
+Terminal=false
+Categories=Network;FileTransfer;P2P;
+MimeType=x-scheme-handler/magnet;x-scheme-handler/ed2k;application/x-bittorrent;
+StartupWMClass=octomx

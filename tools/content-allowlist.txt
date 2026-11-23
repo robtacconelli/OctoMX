@@ -1,0 +1,2 @@
+# tools/content-allowlist.txt: justified hits of tools/content-denylist.txt (tools/check-content.sh).
+#   <path pattern> :: <line regex, POSIX ERE, case sensitive> :: <reason>

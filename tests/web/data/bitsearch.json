@@ -1,0 +1,90 @@
+{
+ "success": true,
+ "query": "example os",
+ "results": [
+  {
+   "id": "fixture00000000000000001",
+   "infohash": "4141414141414141414141414141414141414141",
+   "title": "example-os-19.04-desktop-amd64.iso",
+   "size": 2097152000,
+   "category": 1,
+   "subCategory": 7,
+   "genres": [],
+   "seeders": 28,
+   "leechers": 41,
+   "downloads": 0,
+   "verified": false,
+   "createdAt": null,
+   "updatedAt": "2026-11-12T09:00:00.000Z"
+  },
+  {
+   "id": "fixture00000000000000002",
+   "infohash": "4242424242424242424242424242424242424242",
+   "title": "example-os-22.04.2-desktop-amd64.iso",
+   "size": 4900000000,
+   "category": 5,
+   "subCategory": 4,
+   "genres": [],
+   "seeders": 17,
+   "leechers": 3,
+   "downloads": 0,
+   "verified": false,
+   "createdAt": null,
+   "updatedAt": "2026-11-12T09:01:00.000Z"
+  },
+  {
+   "id": "fixture00000000000000003",
+   "infohash": "4343434343434343434343434343434343434343",
+   "title": "example-os-23.04-desktop-amd64.iso",
+   "size": 4930000000,
+   "category": 5,
+   "subCategory": 4,
+   "genres": [],
+   "seeders": 16,
+   "leechers": 4,
+   "downloads": 0,
+   "verified": false,
+   "createdAt": null,
+   "updatedAt": "2026-11-12T09:02:00.000Z"
+  },
+  {
+   "id": "fixture00000000000000004",
+   "infohash": "4444444444444444444444444444444444444444",
+   "title": "example-os-23.04-server-amd64.iso",
+   "size": 1200000000,
+   "category": 5,
+   "subCategory": 4,
+   "genres": [],
+   "seeders": 4,
+   "leechers": 1,
+   "downloads": 0,
+   "verified": false,
+   "createdAt": null,
+   "updatedAt": "2026-11-12T09:03:00.000Z"
+  },
+  {
+   "id": "fixture00000000000000005",
+   "infohash": "4545454545454545454545454545454545454545",
+   "title": "Sample Open Movie OST",
+   "size": 800000000,
+   "category": 2,
+   "subCategory": 1,
+   "genres": [],
+   "seeders": 2,
+   "leechers": 0,
+   "downloads": 0,
+   "verified": false,
+   "createdAt": null,
+   "updatedAt": "2026-11-12T09:04:00.000Z"
+  }
+ ],
+ "pagination": {
+  "page": 1,
+  "perPage": 20,
+  "total": 5,
+  "totalPages": 1,
+  "hasNext": false,
+  "hasPrev": false
+ },
+ "took": 3
+}

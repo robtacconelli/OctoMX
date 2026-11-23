@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Core unit tests (Qt Test, no GUI). Owner: core task.
+# Temp files go to <build>/tmp (never /tmp or $HOME).
+set(MX_CORE_TEST_TMP ${CMAKE_BINARY_DIR}/tmp)
+file(MAKE_DIRECTORY ${MX_CORE_TEST_TMP})
+# [engine-4] a real core in a test must never write into the real $HOME (default incoming dir =
+# <Downloads>/OctoMX): every test runs with HOME / XDG dirs inside the build tree
+set(MX_TEST_HOME ${CMAKE_BINARY_DIR}/test-home)
+file(MAKE_DIRECTORY ${MX_TEST_HOME})
+
+function(mx_core_test name)
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp)
+        return()
+    endif()
+    add_executable(${name} ${name}.cpp fake_plugin.h)
+    target_link_libraries(${name} PRIVATE mxcore Qt6::Test)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    string(REPLACE "tst_" "core_" test_name ${name})
+    add_test(NAME ${test_name} COMMAND ${name})
+    set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "MX_PORT_MAPPING=0;TMPDIR=${MX_CORE_TEST_TMP};QT_QPA_PLATFORM=offscreen;HOME=${MX_TEST_HOME};XDG_DOWNLOAD_DIR=${MX_TEST_HOME}/Downloads;XDG_CONFIG_HOME=${MX_TEST_HOME}/.config;XDG_DATA_HOME=${MX_TEST_HOME}/.local/share"
+        TIMEOUT 120)
+endfunction()
+
+mx_core_test(tst_settings)
+mx_core_test(tst_database)
+mx_core_test(tst_library)
+mx_core_test(tst_search)
+mx_core_test(tst_network)
+mx_core_test(tst_ratelimiter)
+mx_core_test(tst_chat)
+mx_core_test(tst_realcore)
+mx_core_test(tst_legacy_names)   # [ren-1] legacy profiles, database, download folder, settings
+# glue-2: schema batch + added service API + search hygiene
+mx_core_test(tst_glue2)
+if(TARGET tst_glue2)
+    target_link_libraries(tst_glue2 PRIVATE Qt6::Network)
+    # the "every literal settings key is in the schema" check scans the source tree
+    target_compile_definitions(tst_glue2 PRIVATE MX_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    if(TARGET mxmock)
+        target_link_libraries(tst_glue2 PRIVATE mxmock)
+        target_compile_definitions(tst_glue2 PRIVATE MX_HAVE_MOCK)
+    endif()
+endif()
+# glue-3: bandwidth accounting, library type filter / exclusion, chat networks, whois ids, queued uploads
+mx_core_test(tst_glue3)
+# diag-1: Connection Test (rules, masking, report text, port mapper against a fake router, manager)
+mx_core_test(tst_diag)
+if(TARGET tst_diag)
+    target_link_libraries(tst_diag PRIVATE Qt6::Network)
+endif()
+# glue-3: live bandwidth probe (real core + every plugin of this build; not a ctest)
+add_executable(bw_probe bw_probe.cpp)
+target_link_libraries(bw_probe PRIVATE mxcore Qt6::Network)
+foreach(p bt ed2k web http gnutella overlay)
+    if(TARGET mxnet_${p})
+        target_link_libraries(bw_probe PRIVATE mxnet_${p})
+        string(TOUPPER ${p} P)
+        target_compile_definitions(bw_probe PRIVATE MX_HAVE_${P}=1)
+    endif()
+endforeach()
+# [bw-1] live speed-limit probe: limits versus measured, program and OS counters (not a ctest)
+add_executable(bw_limit_probe bw_limit_probe.cpp)
+target_link_libraries(bw_limit_probe PRIVATE mxcore Qt6::Network)
+foreach(p bt ed2k web http gnutella overlay)
+    if(TARGET mxnet_${p})
+        target_link_libraries(bw_limit_probe PRIVATE mxnet_${p})
+        string(TOUPPER ${p} P)
+        target_compile_definitions(bw_limit_probe PRIVATE MX_HAVE_${P}=1)
+    endif()
+endforeach()

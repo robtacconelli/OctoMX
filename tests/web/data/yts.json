@@ -1,0 +1,125 @@
+{
+ "status": "ok",
+ "status_message": "Query was successful",
+ "data": {
+  "movie_count": 2,
+  "limit": 20,
+  "page_number": 1,
+  "movies": [
+   {
+    "id": 9001,
+    "url": "https://movies.example.org/movies/sample-open-movie-2026",
+    "imdb_code": "",
+    "title": "Sample Open Movie",
+    "title_english": "Sample Open Movie",
+    "title_long": "Sample Open Movie (2026)",
+    "slug": "sample-open-movie-2026",
+    "year": 2026,
+    "rating": 7.0,
+    "runtime": 12,
+    "genres": [
+     "Animation"
+    ],
+    "yt_trailer_code": "",
+    "language": "en",
+    "mpa_rating": "",
+    "state": "ok",
+    "torrents": [
+     {
+      "url": "https://movies.example.org/torrent/download/5151515151515151515151515151515151515151",
+      "hash": "5151515151515151515151515151515151515151",
+      "quality": "720p",
+      "type": "web",
+      "is_repack": "0",
+      "video_codec": "x264",
+      "bit_depth": "8",
+      "audio_channels": "2.0",
+      "seeds": 22,
+      "peers": 5,
+      "size": "650.55 MB",
+      "size_bytes": 682151117,
+      "date_uploaded": "2026-11-05 15:43:48",
+      "date_uploaded_unix": 1793889828
+     },
+     {
+      "url": "https://movies.example.org/torrent/download/5252525252525252525252525252525252525252",
+      "hash": "5252525252525252525252525252525252525252",
+      "quality": "1080p",
+      "type": "web",
+      "is_repack": "0",
+      "video_codec": "x264",
+      "bit_depth": "8",
+      "audio_channels": "2.0",
+      "seeds": 29,
+      "peers": 20,
+      "size": "1.18 GB",
+      "size_bytes": 1267015352,
+      "date_uploaded": "2026-11-05 16:15:32",
+      "date_uploaded_unix": 1793891732
+     }
+    ],
+    "date_uploaded": "2026-11-05 15:43:48",
+    "date_uploaded_unix": 1793889828
+   },
+   {
+    "id": 9002,
+    "url": "https://movies.example.org/movies/another-fictional-short-2025",
+    "imdb_code": "",
+    "title": "Another Fictional Short",
+    "title_english": "Another Fictional Short",
+    "title_long": "Another Fictional Short (2025)",
+    "slug": "another-fictional-short-2025",
+    "year": 2025,
+    "rating": 7.0,
+    "runtime": 12,
+    "genres": [
+     "Animation"
+    ],
+    "yt_trailer_code": "",
+    "language": "en",
+    "mpa_rating": "",
+    "state": "ok",
+    "torrents": [
+     {
+      "url": "https://movies.example.org/torrent/download/5353535353535353535353535353535353535353",
+      "hash": "5353535353535353535353535353535353535353",
+      "quality": "720p",
+      "type": "web",
+      "is_repack": "0",
+      "video_codec": "x264",
+      "bit_depth": "8",
+      "audio_channels": "2.0",
+      "seeds": 21,
+      "peers": 5,
+      "size": "650.55 MB",
+      "size_bytes": 682151117,
+      "date_uploaded": "2026-11-05 15:43:48",
+      "date_uploaded_unix": 1793889828
+     },
+     {
+      "url": "https://movies.example.org/torrent/download/5454545454545454545454545454545454545454",
+      "hash": "5454545454545454545454545454545454545454",
+      "quality": "1080p",
+      "type": "web",
+      "is_repack": "0",
+      "video_codec": "x264",
+      "bit_depth": "8",
+      "audio_channels": "2.0",
+      "seeds": 28,
+      "peers": 20,
+      "size": "1.18 GB",
+      "size_bytes": 1267015352,
+      "date_uploaded": "2026-11-05 16:15:32",
+      "date_uploaded_unix": 1793891732
+     }
+    ],
+    "date_uploaded": "2026-11-05 15:43:48",
+    "date_uploaded_unix": 1793889828
+   }
+  ]
+ },
+ "@meta": {
+  "api_version": 2,
+  "execution_time": "0.01 ms"
+ }
+}

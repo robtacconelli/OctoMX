@@ -1,0 +1,54 @@
+# OctoMX: what is NOT published. tools/make-source-tree.sh <dest> copies exactly the files
+# git would add with these rules, so the result can be inspected and test-built.
+
+# Build trees, packages, snapshots, screenshots (build/ also holds test profiles and logs)
+/build/
+/dist/
+/.snapshots/
+/shots/
+
+# Toolchain: compilers, Qt, venv, wine prefix, caches, downloads, logs, tmp, recreated by
+# tools/install-toolchain.sh. Only the environment script is part of the source.
+/toolchain/*
+!/toolchain/env.sh
+
+# Third-party sources, downloads and built prefixes, re-fetched (SHA-256 / commit pinned) and
+# built by tools/build-third-party.sh. This includes third_party/src/reference/ (GPL reference
+# sources used during development). Kept: the build notes and the LGPL Wine fonts the UI font
+# is derived from.
+/third_party/*
+!/third_party/BUILD.md
+!/third_party/fonts/
+
+# Screenshots of the original WinMX (third-party copyrighted): only the README that says
+# where they came from
+/reference/*
+!/reference/README.md
+
+# Internal development notes of the coordinator and workers (not project documentation)
+/NOTES.md
+/docs/status/
+/docs/WORKER_GUIDE.md
+
+# [upd-1] the release signing key (private): never published, never copied (docs/RELEASE.md);
+# tools/make-source-tree.sh also refuses keys/ and any private key it finds
+/keys/
+*.pem
+
+# Wine prefixes, app profiles and logs anywhere
+wineprefix/
+.wine/
+*.log
+
+# Editors, Python, local build configuration
+__pycache__/
+*.py[co]
+*.swp
+*~
+.vscode/
+.idea/
+CMakeUserPresets.json
+/compile_commands.json
+
+# coordinator-internal task briefs
+docs/briefs/

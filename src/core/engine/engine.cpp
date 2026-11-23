@@ -1,0 +1,1074 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// OctoMX core: the real multi-network DownloadEngine (see engine.h for the design).
+// This file: download list, local queue, persistence, plugin-signal routing, partial sharing and
+// throttled reporting. One Download (download.cpp) per file / torrent bundle does the real work.
+#include "core/engine/engine.h"
+
+#include "core/dao.h"
+#include "core/database.h"
+#include "core/download_request.h"
+#include "core/engine/download.h"
+#include "core/launcher.h"
+#include "core/library.h"
+#include "core/log.h"
+#include "core/search_manager.h"
+#include "core/upload_tracker.h"
+#include "mx/settings_keys.h"
+#include "mxhash/encoding.h"
+
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
+#include <QtCore/QMutex>
+#include <QtCore/QPointer>
+#include <QtCore/QStorageInfo>
+#include <QtCore/QThreadPool>
+#include <QtCore/QTimer>
+
+#include <algorithm>
+
+namespace mx {
+
+using engine::Download;
+
+namespace {
+bool finishedState(TransferState s)
+{
+    return s == TransferState::Completed || s == TransferState::Seeding || s == TransferState::Cancelled;
+}
+
+// [engine-4] what the Transfers tree shows of a download: an update that changes none of it is not
+// sent (idle downloads with many sources do not flood the UI)
+quint64 infoSignature(const TransferInfo &t)
+{
+    QByteArray b;
+    b.reserve(512 + 96 * t.sources.size());
+    auto add = [&b](const QString &x) { b += x.toUtf8(); b += '\x1f'; };
+    auto num = [&b](qint64 v) { b += QByteArray::number(v); b += '\x1f'; };
+    add(t.name); add(t.savePath); add(t.statusText); add(t.errorText); add(t.diagnosis);   // [diag-1] diagnosis
+    num(t.size); num(t.done); num(t.rateDownBps); num(t.rateUpBps); num(t.etaSec); num(int(t.state));
+    num(t.sourcesTotal); num(t.sourcesActive); num(t.priority); num(t.autoFindSourcesMin); num(t.autoEnterQueue);
+    for (Net n : t.networks) num(int(n));
+    b += t.pieceMap;
+    b += t.pieceFill;   // [ui-i]
+    b += t.hashes.ed2k + t.hashes.btih + t.hashes.sha1;
+    for (const BundleFile &f : t.files) { num(f.done); num(f.wanted ? 1 : 0); }
+    for (const TransferSource &s : t.sources) {
+        num(int(s.net)); add(s.user.name); add(s.statusText); num(s.bytes); num(s.rateBps); add(s.id); num(s.priority); add(s.client);
+    }
+    return qHash(b, 0x9e3779b9u);
+}
+} // namespace
+
+struct DownloadEngine::Private : public engine::EngineHost {
+    DownloadEngine *q = nullptr;
+    EngineContext ctx;
+    std::unique_ptr<DownloadsDao> daoPtr;
+    std::unique_ptr<HashLinksDao> linksDao;
+    QThreadPool threadPool;
+    engine::Tuning tune;
+    QList<Download *> list;                   // display / queue order
+    QHash<QString, Download *> byId;
+    bool started = false;
+    bool stopped = false;
+    QTimer tickTimer;
+    QTimer flushTimer;
+    QSet<QString> dirty;
+    QHash<QString, qint64> lastEmit;
+    qint64 lastTick = 0;
+    qint64 lastDiskCheck = 0;
+    bool rebalancePending = false;
+    QSet<NetworkPlugin *> connectedNets;
+    QHash<QString, QString> pendingSeeds;      // seeded local file → btih, waiting for its library hashes
+    // [engine-4] downloads started from a search hit follow that hit (sources merged into it later)
+    struct HitFollow { quint32 query = 0; QString key; QString downloadId; };
+    QList<HitFollow> follows;
+    QHash<quint32, QString> nameSearches;      // background size+name search id → download id
+    qint64 lastNameSearchMs = 0;
+    QString requestWhat;                       // [engine-4] downloadNotStarted(): the hit key being downloaded
+    QHash<QString, quint64> lastSig;           // signature of the last transferChanged per download
+
+    // A library file seeded as a torrent (bt/seedLibrary or explicit): link its btih with the
+    // library's hashes, keep it in HashLinksDao and publish it, so a magnet-only downloader can
+    // find the same file on the other networks through the hash-link registry.
+    void linkSeed(const QString &path)
+    {
+        const QString id = pendingSeeds.value(path);
+        if (id.isEmpty() || !ctx.library) return;
+        SharedFile f;
+        bool found = false;
+        for (const SharedFile &x : ctx.library->files())
+            if (x.hashed && QFileInfo(x.path).absoluteFilePath() == path) { f = x; found = true; break; }
+        if (!found) return;   // fileHashed will call us again
+        pendingSeeds.remove(path);
+        FileHashes all = f.hashes;
+        all.btih = hash::fromHex(id);
+        all.btFileIndex = -1;   // seedLocalFile makes single-file torrents: torrent == file (matches magnets)
+        if (all.btih.size() != 20) return;
+        if (linksDao) linksDao->upsert(all, f.size, f.name, QStringLiteral("library"));
+        for (NetworkPlugin *p : std::as_const(ctx.plugins))
+            if ((p->capabilities() & NetworkPlugin::CanHashLinks) && pluginUsable(p)) p->publishHashLinks(all, f.size, f.name);
+        qCInfo(lcEngine) << "hash link published for seeded file" << f.name << ": btih" << id.left(8) << "↔ ed2k"
+                         << f.hashes.ed2k.toHex().left(8) << "sha1" << f.hashes.sha1.toHex().left(8);
+    }
+    // partial sharing registry (read from plugin threads)
+    struct PartialEntry {
+        FileHashes hashes;
+        qint64 size = 0;
+        QString name, path;
+        std::function<QByteArray(qint64, qint64)> reader;
+    };
+    std::shared_ptr<QMutex> partialMutex = std::make_shared<QMutex>();
+    std::shared_ptr<QList<PartialEntry>> partials = std::make_shared<QList<PartialEntry>>();
+
+    // ---- EngineHost
+    Settings *settings() const override { return ctx.settings; }
+    DownloadsDao *dao() const override { return daoPtr.get(); }
+    HashLinksDao *links() const override { return linksDao.get(); }
+    Library *library() const override { return ctx.library; }
+    TorrentBackend *backend() const override { return ctx.torrents; }
+    QList<NetworkPlugin *> plugins() const override { return ctx.plugins; }
+    bool pluginUsable(NetworkPlugin *p) const override
+    {
+        if (!p) return false;
+        if (ctx.settings) {
+            const QString k = keys::enabledKey(p->net());
+            if (!k.isEmpty() && !ctx.settings->value(k).toBool() && ctx.settings->value(k).isValid()) return false;
+        }
+        return p->status().state != ConnState::Disabled || p->status().net == Net::Unknown;
+    }
+    NetworkPlugin *pluginFor(Net n) const override
+    {
+        NetworkPlugin *fallback = nullptr;
+        for (NetworkPlugin *p : ctx.plugins) {
+            if (!(p->capabilities() & NetworkPlugin::CanFetchRanges) || !pluginUsable(p)) continue;
+            if (p->net() == n) return p;
+            if (n == Net::Kad && p->net() == Net::ED2K) fallback = p;
+        }
+        return fallback;
+    }
+    QThreadPool *pool() const override { return const_cast<QThreadPool *>(&threadPool); }
+    const engine::Tuning &tuning() const override { return tune; }
+    QString incomingDir() const override
+    {
+        QString d = ctx.settings ? ctx.settings->s(keys::transfers::IncomingDir) : QString();
+        if (d.isEmpty()) d = ctx.profileDir + QStringLiteral("/incoming");
+        return QDir::cleanPath(d);
+    }
+    QString incompleteDir() const override
+    {
+        QString d = ctx.settings ? ctx.settings->s(keys::transfers::IncompleteDir) : QString();
+        if (d.isEmpty()) d = ctx.profileDir + QStringLiteral("/incomplete");
+        return QDir::cleanPath(d);
+    }
+    int openSourcesGlobal() const override
+    {
+        int n = 0;
+        for (Download *d : list) n += d->openSources();
+        return n;
+    }
+    qint64 bufferedGlobal() const override
+    {
+        qint64 n = 0;
+        for (Download *d : list) n += d->bufferedBytes();
+        return n;
+    }
+    void changed(Download *d, bool important) override
+    {
+        if (!started || stopped) return;
+        dirty.insert(d->id());
+        if (important) {
+            const qint64 now = engine::nowMs();
+            if (now - lastEmit.value(d->id()) >= 1000) emitNow(d);
+        }
+    }
+    void finished(Download *) override { requestRebalance(); }
+    void completedFile(Download *d) override
+    {
+        const TransferInfo t = d->info();
+        dirty.remove(d->id());
+        emitNow(d, true);
+        emit q->downloadCompleted(t);
+        if (ctx.settings && ctx.settings->b(keys::transfers::AutoClearCompleted)) {
+            const int sec = ctx.settings->i(keys::transfers::ClearCompleteDownloadsSec);
+            const QString id = d->id();
+            QTimer::singleShot(qMax(0, sec) * 1000, q, [this, id] {
+                Download *x = byId.value(id);
+                if (x && x->isFinished()) removeDownload(x, false);
+            });
+        }
+    }
+
+    // ---- helpers
+    void emitNow(Download *d, bool force = false)
+    {
+        lastEmit.insert(d->id(), engine::nowMs());
+        dirty.remove(d->id());
+        const TransferInfo t = d->info();
+        const quint64 sig = infoSignature(t);
+        if (!force && lastSig.value(d->id()) == sig) return;   // [engine-4] nothing visible changed
+        lastSig.insert(d->id(), sig);
+        emit q->transferChanged(t);
+    }
+    // [engine-4] hits of searches downloads follow, and the background size+name searches
+    void onSearchHits(quint32 id, const QList<SearchHit> &hits)
+    {
+        if (nameSearches.contains(id)) {
+            if (Download *x = byId.value(nameSearches.value(id)); x && !x->isFinished()) {
+                x->nameSearchHits(hits);
+                // [merge-1] folder torrents that may hold the file: their file lists decide
+                if (ctx.search)
+                    for (const QString &k : x->takeFileListWants()) ctx.search->requestBundleFiles(id, k);
+            }
+            return;
+        }
+        for (int i = 0; i < follows.size();) {
+            const HitFollow f = follows.at(i);
+            Download *x = byId.value(f.downloadId);
+            if (!x || x->isFinished()) { follows.removeAt(i); continue; }
+            ++i;
+            if (f.query != id) continue;
+            for (const SearchHit &h : hits) {
+                const bool same = h.key == f.key
+                                  || (!h.hashes.isEmpty() && x->hashes().matches(h.hashes) && !x->hashes().conflicts(h.hashes));
+                if (same) x->addHitSources(h);
+            }
+        }
+    }
+    void onSearchFinished(quint32 id)
+    {
+        if (!nameSearches.contains(id)) return;
+        if (Download *x = byId.value(nameSearches.value(id))) x->nameSearchFinished();
+        // late answers still merge for a minute, then the hidden search is dropped
+        QTimer::singleShot(60000, q, [this, id] {
+            nameSearches.remove(id);
+            if (ctx.search && !stopped) ctx.search->closeSearch(id);
+        });
+    }
+    void startNameSearches(qint64 now)
+    {
+        if (!ctx.search || now - lastNameSearchMs < 10000) return;   // one background search per 10 s
+        for (Download *x : std::as_const(list)) {
+            if (!x->wantsNameSearch(now)) continue;
+            const SearchQuery qq = x->nameSearchQuery();
+            if (qq.networks.isEmpty() || qq.text.isEmpty()) continue;   // nobody to ask right now
+            const quint32 sid = ctx.search->startBackgroundSearch(qq);
+            nameSearches.insert(sid, x->id());
+            x->nameSearchStarted(now, qq.networks);
+            lastNameSearchMs = now;
+            return;
+        }
+    }
+    void flush()
+    {
+        if (stopped) return;
+        const qint64 now = engine::nowMs();
+        const QSet<QString> ids = dirty;
+        for (const QString &id : ids) {
+            Download *d = byId.value(id);
+            if (!d) { dirty.remove(id); continue; }
+            if (now - lastEmit.value(id) >= 1000) emitNow(d);
+        }
+    }
+    void requestRebalance()
+    {
+        if (rebalancePending || stopped) return;
+        rebalancePending = true;
+        QTimer::singleShot(0, q, [this] { rebalancePending = false; rebalance(); });
+    }
+    void rebalance()
+    {
+        if (!started || stopped) return;
+        QList<Download *> run;
+        for (Download *d : list) if (d->wantsToRun()) run << d;
+        std::stable_sort(run.begin(), run.end(), [](Download *a, Download *b) {
+            if (a->record().priority != b->record().priority) return a->record().priority > b->record().priority;
+            return a->record().sortOrder < b->record().sortOrder;
+        });
+        const int maxActive = ctx.settings ? qMax(1, ctx.settings->i(keys::transfers::MaxDownloads)) : 40;
+        for (int i = 0; i < run.size(); ++i) {
+            if (i >= maxActive && run.at(i)->isActive()) run.at(i)->deactivate();
+        }
+        for (Download *d : list)
+            if (!d->wantsToRun() && d->isActive()) d->deactivate();
+        for (int i = 0; i < run.size() && i < maxActive; ++i)
+            if (!run.at(i)->isActive()) run.at(i)->activate();
+        for (int i = maxActive; i < run.size(); ++i) run.at(i)->deactivate();   // status "Locally Queued"
+    }
+    Download *adopt(const DownloadRecord &rec)
+    {
+        auto *d = new Download(this, rec, q);
+        list << d;
+        byId.insert(rec.id, d);
+        return d;
+    }
+    void removeDownload(Download *d, bool deleteData)
+    {
+        const QString id = d->id();
+        d->cancel(deleteData);
+        list.removeAll(d);
+        byId.remove(id);
+        dirty.remove(id);
+        lastEmit.remove(id);
+        lastSig.remove(id);
+        if (daoPtr) daoPtr->remove(id);
+        d->deleteLater();
+        emit q->transferRemoved(id, false);
+        updatePartials();
+        requestRebalance();
+    }
+    Download *findByTorrent(const QString &id) const
+    {
+        for (Download *d : list) if (d->torrentId() == id) return d;
+        return nullptr;
+    }
+    Download *findByPromote(const QString &id) const
+    {
+        for (Download *d : list) if (!d->promoteTorrentId().isEmpty() && d->promoteTorrentId() == id) return d;
+        return nullptr;
+    }
+    void tick()
+    {
+        if (stopped) return;
+        const qint64 now = engine::nowMs();
+        if (now - lastTick >= 950) {
+            lastTick = now;
+            for (Download *d : std::as_const(list)) d->tick(now);
+            startNameSearches(now);
+            updatePartials();
+            if (now - lastDiskCheck > 10000) {
+                lastDiskCheck = now;
+                checkDiskSpace();
+            }
+        }
+        flush();
+    }
+    void checkDiskSpace()
+    {
+        if (!ctx.settings) return;
+        const qint64 minFree = qint64(ctx.settings->i(keys::transfers::MinFreeSpaceMB)) << 20;
+        if (minFree <= 0) return;
+        const QStorageInfo si(incompleteDir());
+        if (!si.isValid() || si.bytesAvailable() < 0 || si.bytesAvailable() >= minFree) return;
+        for (Download *d : std::as_const(list)) {
+            if (d->isActive() && d->partStore()) {
+                qCWarning(lcEngine) << d->id() << "low disk space:" << si.bytesAvailable() / (1 << 20) << "MB free";
+                d->record().errorText = QStringLiteral("Low disk space");
+                d->setUserPaused(true);
+                d->record().errorText = QStringLiteral("Low disk space");
+                d->persist(true);
+                changed(d, true);
+            }
+        }
+        requestRebalance();
+    }
+    void updatePartials()
+    {
+        QList<PartialEntry> l;
+        const bool on = !ctx.settings || ctx.settings->b(keys::library::ShareIncomplete);
+        if (on) {
+            for (Download *d : std::as_const(list)) {
+                engine::PartStore *ps = d->partStore();
+                if (!ps || d->isFinished() || ps->verifiedBytes() <= 0 || d->hashes().isEmpty() || ps->extent() <= 0) continue;
+                PartialEntry e;
+                e.hashes = d->hashes();
+                e.size = ps->extent();
+                e.name = d->record().name;
+                e.path = ps->path();
+                e.reader = ps->verifiedReader();
+                l << e;
+            }
+        }
+        QMutexLocker lock(partialMutex.get());
+        *partials = l;
+    }
+    void installPartialProvider()
+    {
+        if (!ctx.library) return;
+        auto mtx = partialMutex;
+        auto parts = partials;
+        ctx.library->setPartialProvider(
+            [mtx, parts](const FileHashes &h, SharedFile *out) {
+                QMutexLocker l(mtx.get());
+                for (const PartialEntry &e : std::as_const(*parts)) {
+                    if (!e.hashes.matches(h)) continue;
+                    if (out) {
+                        out->path = e.path;
+                        out->name = e.name;
+                        out->size = e.size;
+                        out->hashes = e.hashes;
+                        out->hashed = true;
+                        out->type = mediaTypeForFileName(e.name);
+                    }
+                    return true;
+                }
+                return false;
+            },
+            [mtx, parts](const FileHashes &h, qint64 off, qint64 len) -> QByteArray {
+                std::function<QByteArray(qint64, qint64)> reader;
+                {
+                    QMutexLocker l(mtx.get());
+                    for (const PartialEntry &e : std::as_const(*parts))
+                        if (e.hashes.matches(h)) { reader = e.reader; break; }
+                }
+                return reader ? reader(off, len) : QByteArray();
+            });
+    }
+    void connectPlugins()
+    {
+        for (NetworkPlugin *p : std::as_const(ctx.plugins)) {
+            QPointer<NetworkPlugin> pp(p);
+            QObject::connect(p, &NetworkPlugin::sourcesFound, q, [this, pp](const QString &id, const QList<SearchSource> &s) {
+                if (Download *d = byId.value(id); d && !d->isFinished()) d->addSources(s, pp, false);
+            });
+            QObject::connect(p, &NetworkPlugin::hashesLearned, q, [this, pp](const QString &id, const FileHashes &h) {
+                // [core-5] Gnutella hashes come from one servent's hit or THEX tree and nobody vouches
+                // for them: provisional (a hint, its tree kept aside) until the whole-file check
+                // against the trusted kinds confirms or refutes them; a liar is banned then, the
+                // download goes on. Other networks' hashes are bound to the hash they were asked by.
+                const bool provisional = pp && pp->net() == Net::Gnutella;
+                if (Download *d = byId.value(id); d && !d->isFinished())
+                    d->learnHashes(h, !provisional, pp ? netName(pp->net()) : QStringLiteral("plugin"));
+            });
+            QObject::connect(p, &NetworkPlugin::hashSetLearned, q,
+                             [this](const QString &id, const QString &kind, qint64 unit, const QList<QByteArray> &hs) {
+                                 if (Download *d = byId.value(id); d && !d->isFinished()) d->learnHashSet(kind, unit, hs);
+                             });
+            QObject::connect(p, &NetworkPlugin::statusChanged, q, [this, pp](const NetworkStatus &st) {
+                if (!pp) return;
+                // "up" = connected AND talking to somebody (an overlay node alone is "Connected" too)
+                const bool up = st.state == ConnState::Connected && (st.peers > 0 || pp->net() == Net::Http);
+                const bool was = connectedNets.contains(pp.data());
+                if (up && !was) {
+                    connectedNets.insert(pp.data());
+                    for (Download *d : std::as_const(list)) d->networkCameUp(pp);
+                } else if (!up && was) {
+                    connectedNets.remove(pp.data());
+                }
+            });
+            if (p->status().state == ConnState::Connected && p->status().peers > 0) connectedNets.insert(p);
+            QObject::connect(p, &NetworkPlugin::hashLinksFound, q, [this](const FileHashes &known, const FileHashes &all, qint64 size) {
+                for (Download *d : std::as_const(list))
+                    if (!d->isFinished() && d->matchesLink(known, size)) d->hashLinksFound(all, size);
+            });
+        }
+        if (ctx.torrents) {
+            QObject *ev = ctx.torrents->torrentEvents();
+            auto *te = qobject_cast<TorrentEvents *>(ev);
+            if (te) {
+                QObject::connect(te, &TorrentEvents::torrentMetadata, q, [this](const QString &id) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentMetadata();
+                    else if (Download *p = findByPromote(id)) p->onTorrentMetadata();
+                });
+                QObject::connect(te, &TorrentEvents::torrentChanged, q, [this](const QString &id) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentChanged();
+                    else if (Download *p = findByPromote(id)) p->onTorrentMetadata();
+                });
+                QObject::connect(te, &TorrentEvents::torrentPieceFinished, q, [this](const QString &id, int piece) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentPieceFinished(piece);
+                });
+                QObject::connect(te, &TorrentEvents::torrentPieceFailed, q, [this](const QString &id, int piece) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentPieceFailed(piece);
+                });
+                QObject::connect(te, &TorrentEvents::torrentFinished, q, [this](const QString &id) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentFinished();
+                });
+                QObject::connect(te, &TorrentEvents::torrentError, q, [this](const QString &id, const QString &text) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentError(text);
+                    for (Download *d : std::as_const(list)) d->onUrlTorrentFailed(id, text);   // id = url for fetch errors
+                });
+                QObject::connect(te, &TorrentEvents::torrentStorageMoved, q,   // [engine-3]
+                                 [this](const QString &id, const QString &path, bool ok, const QString &err) {
+                    if (Download *d = findByTorrent(id)) d->onTorrentStorageMoved(path, ok, err);
+                });
+                QObject::connect(te, &TorrentEvents::torrentRemoved, q, [this](const QString &id) {
+                    if (Download *d = findByTorrent(id); d && !d->isFinished()) d->onTorrentRemoved();
+                });
+            }
+            // BitTorrentEvents extras (declared in the bt module; connect by name)
+            if (ev && ev->metaObject()->indexOfSignal("urlTorrentAdded(QString,QString)") >= 0) {
+                q->connect(ev, SIGNAL(urlTorrentAdded(QString,QString)), q, SLOT(onUrlTorrentAdded(QString,QString)));
+                q->connect(ev, SIGNAL(urlTorrentFailed(QString,QString)), q, SLOT(onUrlTorrentFailed(QString,QString)));
+            }
+            if (ev && ev->metaObject()->indexOfSignal("seedReady(QString,QString)") >= 0)
+                q->connect(ev, SIGNAL(seedReady(QString,QString)), q, SLOT(onSeedReady(QString,QString)));
+        }
+        if (ctx.library) {
+            QObject::connect(ctx.library, &Library::fileHashed, q, [this](const SharedFile &f) {
+                const QString p = QFileInfo(f.path).absoluteFilePath();
+                for (Download *d : std::as_const(list)) if (d->awaitsHashOf(p)) d->onFileHashed(f);
+                if (pendingSeeds.contains(p)) linkSeed(p);
+            });
+        }
+    }
+};
+
+// ============================================================================
+
+DownloadEngine::DownloadEngine(const EngineContext &ctx, QObject *parent)
+    : TransferServiceBase(ctx.uploads, parent), d(std::make_unique<Private>())
+{
+    d->q = this;
+    d->ctx = ctx;
+    if (ctx.db) {
+        d->daoPtr = std::make_unique<DownloadsDao>(ctx.db);
+        d->linksDao = std::make_unique<HashLinksDao>(ctx.db);
+    }
+    d->threadPool.setMaxThreadCount(4);
+    d->threadPool.setExpiryTimeout(30000);
+    d->tickTimer.setInterval(250);
+    connect(&d->tickTimer, &QTimer::timeout, this, [this] { d->tick(); });
+}
+
+DownloadEngine::~DownloadEngine()
+{
+    d->stopped = true;
+    d->tickTimer.stop();
+    if (d->ctx.library) d->ctx.library->setPartialProvider({}, {});
+    // kill-style teardown when shutdown() was not called: no persisting here (state written
+    // incrementally is what survives, exactly as after a crash)
+    for (Download *x : std::as_const(d->list)) delete x;
+    d->list.clear();
+    // removed downloads still waiting for deleteLater: destroy them while the pool exists
+    qDeleteAll(findChildren<Download *>(Qt::FindDirectChildrenOnly));
+    d->threadPool.waitForDone(2000);
+}
+
+void DownloadEngine::setTuning(const engine::Tuning &t) { d->tune = t; }
+engine::Tuning DownloadEngine::tuning() const { return d->tune; }
+QString DownloadEngine::incompleteDir() const { return d->incompleteDir(); }
+
+void DownloadEngine::start()
+{
+    if (d->started) return;
+    d->started = true;
+    QDir().mkpath(d->incompleteDir());
+    // [dl-1] preview links / copies of the last session (one still open in a player stays)
+    QDir(engine::Download::previewDirOf(d->incompleteDir())).removeRecursively();
+    d->connectPlugins();
+    d->installPartialProvider();
+    if (d->ctx.search) {   // [engine-4]
+        connect(d->ctx.search, &SearchService::hitsChanged, this, [this](quint32 id, const QList<SearchHit> &h) { d->onSearchHits(id, h); });
+        connect(d->ctx.search, &SearchService::searchFinished, this, [this](quint32 id) { d->onSearchFinished(id); });
+    }
+    if (d->daoPtr) {
+        const QList<DownloadRecord> recs = d->daoPtr->all();
+        for (DownloadRecord r : recs) {
+            if (r.id.isEmpty()) continue;
+            Download *x = d->adopt(r);
+            x->restoreState(r.engineState);
+            QList<SearchSource> srcs;
+            for (const SourceRecord &s : d->daoPtr->sources(r.id)) srcs << s.source;
+            x->addSources(srcs, nullptr, true);
+        }
+    }
+    qCInfo(lcEngine) << "engine: restored" << d->list.size() << "downloads";
+    for (Download *x : std::as_const(d->list)) emit transferAdded(x->info());
+    d->tickTimer.start();
+    d->rebalance();
+    d->updatePartials();
+}
+
+void DownloadEngine::shutdown()
+{
+    if (d->stopped) return;
+    QElapsedTimer t;
+    t.start();
+    d->tickTimer.stop();
+    // ≤ ~1.5 s for draining pending writes in total, then persist what is durable
+    for (Download *x : std::as_const(d->list)) x->shutdown(int(qMax<qint64>(0, 1500 - t.elapsed())));
+    d->stopped = true;
+    if (d->ctx.library) d->ctx.library->setPartialProvider({}, {});
+    if (d->ctx.db) d->ctx.db->flush();
+    qCInfo(lcEngine) << "engine shut down in" << t.elapsed() << "ms";
+}
+
+int DownloadEngine::knownSourceCount() const
+{
+    int n = 0;
+    for (Download *x : d->list) if (!x->isFinished()) n += x->knownSources();
+    return n;
+}
+
+int DownloadEngine::connectedSourceCount() const
+{
+    int n = 0;
+    for (Download *x : d->list) n += x->connectedSources();
+    return n;
+}
+
+QList<TransferInfo> DownloadEngine::downloadsBrief() const
+{
+    QList<TransferInfo> out;
+    out.reserve(d->list.size());
+    for (Download *x : d->list) out << x->briefInfo();
+    return out;
+}
+
+void DownloadEngine::setAutoFindSources(const QString &id, int minutes)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->setAutoFindSources(minutes);
+        d->changed(x, true);
+    }
+}
+
+// [dl-1] download order and preview
+void DownloadEngine::setSequentialDownload(const QString &id, bool on)
+{
+    if (Download *x = d->byId.value(id)) {
+        if (x->isFinished()) return;
+        x->setOrder(on, x->firstLast());
+        x->persist(false);
+    }
+}
+
+void DownloadEngine::setFirstLastPiecesFirst(const QString &id, bool on)
+{
+    if (Download *x = d->byId.value(id)) {
+        if (x->isFinished()) return;
+        x->setOrder(x->sequential(), on);
+        x->persist(false);
+    }
+}
+
+PreviewInfo DownloadEngine::previewInfo(const QString &id) const
+{
+    if (Download *x = d->byId.value(id)) return x->previewInfo();
+    return {};
+}
+
+QString DownloadEngine::preparePreview(const QString &id, int fileIndex, QString *error)
+{
+    Download *x = d->byId.value(id);
+    if (!x) {
+        if (error) *error = QStringLiteral("The download is gone.");
+        return QString();
+    }
+    return x->preparePreview(fileIndex, error);
+}
+
+void DownloadEngine::setAutoEnterQueue(const QString &id, int n)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->setAutoEnterQueue(n);
+        d->changed(x, true);
+    }
+}
+
+QString DownloadEngine::download(const DownloadRequest &reqIn)
+{
+    DownloadRequest req = reqIn;
+    QString err;
+    if (!resolveDownloadRequest(req, &err)) {
+        qCWarning(lcEngine) << "cannot download:" << err;
+        // [engine-4] never silently: the UI learns why nothing appeared
+        QString what = d->requestWhat;
+        if (what.isEmpty()) what = req.uri.isEmpty() ? req.name : req.uri;
+        QString why = err;
+        if (err == QLatin1String("Nothing to download"))
+            why = QStringLiteral("Nothing to download: no link, hash or reachable source is known for \"%1\"").arg(req.name.isEmpty() ? what : req.name);
+        emit downloadNotStarted(what, why);
+        return QString();
+    }
+    // join a download of the same file
+    for (Download *x : std::as_const(d->list)) {
+        const bool sameHash = !req.hashes.isEmpty() && x->hashes().matches(req.hashes);
+        const bool sameUri = req.hashes.isEmpty() && !req.uri.isEmpty() && x->originalUri() == req.uri.trimmed();
+        if (!sameHash && !sameUri) continue;
+        if (x->isFinished()) {
+            qCInfo(lcEngine) << "download of" << req.name << "already complete:" << x->id();
+            return x->id();
+        }
+        qCInfo(lcEngine) << "joining" << req.name << "into running download" << x->id();
+        x->mergeRequest(req);
+        d->requestRebalance();
+        return x->id();
+    }
+    // already in the library?
+    if (d->ctx.library && !req.hashes.isEmpty()) {
+        SharedFile f;
+        if (d->ctx.library->findByHash(req.hashes, &f) && QFileInfo::exists(f.path) && !f.path.endsWith(QLatin1String(".part"))) {
+            DownloadRecord r;
+            r.id = newDownloadId();
+            r.name = f.name.isEmpty() ? req.name : f.name;
+            r.size = f.size;
+            r.hashes = req.hashes;
+            r.hashes.mergeFrom(f.hashes);
+            r.state = int(TransferState::Completed);
+            r.statusText = QStringLiteral("Complete (already in your library)");
+            r.savePath = f.path;
+            r.uri = req.uri;
+            r.done = f.size;
+            r.added = r.completed = QDateTime::currentDateTime();
+            r.sortOrder = d->list.isEmpty() ? 0 : d->list.last()->record().sortOrder + 1;
+            Download *x = d->adopt(r);
+            x->persist(true);
+            emit transferAdded(x->info());
+            qCInfo(lcEngine) << req.name << "is already in the library:" << f.path;
+            return r.id;
+        }
+    }
+    DownloadRecord r;
+    r.id = newDownloadId();
+    r.name = req.name;
+    r.size = req.size > 0 ? req.size : 0;
+    r.hashes = req.hashes;
+    r.uri = req.uri.trimmed();
+    r.saveDir = req.saveDir;
+    r.wantedFiles = req.wantedFiles;
+    r.added = QDateTime::currentDateTime();
+    r.sortOrder = d->list.isEmpty() ? 0 : d->list.last()->record().sortOrder + 1;
+    const bool paused = req.startPaused || (d->ctx.settings && d->ctx.settings->b(keys::transfers::StartPaused));
+    r.state = int(paused ? TransferState::Paused : TransferState::Queued);
+    r.statusText = transferStateText(TransferState(r.state));
+    Download *x = d->adopt(r);
+    if (d->ctx.settings)   // [dl-1] the defaults of the order flags (Settings, File Transfers)
+        x->setOrder(d->ctx.settings->b(keys::transfers::SequentialDefault), d->ctx.settings->b(keys::transfers::FirstLastDefault), false);
+    x->persist(true);
+    x->addSources(req.sources, nullptr, true);
+    qCInfo(lcEngine) << "new download" << r.id << r.name << r.size << "bytes," << req.sources.size() << "sources";
+    emit transferAdded(x->info());
+    d->rebalance();
+    return r.id;
+}
+
+QString DownloadEngine::downloadHit(const SearchHit &hit, const QString &saveDir)
+{
+    d->requestWhat = hit.key.isEmpty() ? hit.fileName : hit.key;
+    const QString id = downloadHitRequest(hit, saveDir);
+    d->requestWhat.clear();
+    // [engine-4] the hit as the search knows it NOW (the UI's copy may be older or one user row of
+    // a group) carries every source of every network; the download keeps following it
+    if (!id.isEmpty() && d->ctx.search && hit.queryId) {
+        Download *x = d->byId.value(id);
+        if (x && !x->isFinished()) {
+            for (const SearchHit &h : d->ctx.search->hits(hit.queryId))
+                if (h.key == hit.key) { x->addHitSources(h); break; }
+            bool known = false;
+            for (const Private::HitFollow &f : std::as_const(d->follows))
+                if (f.query == hit.queryId && f.key == hit.key && f.downloadId == id) known = true;
+            if (!known) d->follows << Private::HitFollow{hit.queryId, hit.key, id};
+        }
+    }
+    return id;
+}
+
+QString DownloadEngine::downloadHitRequest(const SearchHit &hit, const QString &saveDir)
+{
+    DownloadRequest r = requestFromHit(hit, saveDir);
+    // the hit's first URI may be a network-internal source descriptor ("winmx:<node>...", "fake://..."):
+    // only real links are a download URI; the sources keep their descriptors
+    const QString u = r.uri.trimmed().toLower();
+    const bool link = u.startsWith(QLatin1String("magnet:")) || u.startsWith(QLatin1String("ed2k:"))
+                      || u.startsWith(QLatin1String("http://")) || u.startsWith(QLatin1String("https://"))
+                      || u.startsWith(QLatin1String("ftp://"));
+    if (!link) {
+        r.uri.clear();
+        for (const SearchSource &s : hit.sources) {
+            const QString su = s.uri.trimmed().toLower();
+            if (s.extra.value(QStringLiteral("candidate")).toBool()) continue;
+            if (su.startsWith(QLatin1String("magnet:")) || su.startsWith(QLatin1String("ed2k:"))) { r.uri = s.uri; break; }
+        }
+    }
+    return download(r);
+}
+
+QString DownloadEngine::downloadUri(const QString &uri, const QString &saveDir)
+{
+    DownloadRequest req;
+    req.uri = uri;
+    req.saveDir = saveDir;
+    return download(req);
+}
+
+QList<TransferInfo> DownloadEngine::downloads() const
+{
+    QList<TransferInfo> out;
+    for (Download *x : d->list) out << x->info();
+    return out;
+}
+
+TransferInfo DownloadEngine::transfer(const QString &id) const
+{
+    if (Download *x = d->byId.value(id)) return x->info();
+    TransferInfo t;
+    uploadTransfer(id, &t);
+    return t;
+}
+
+void DownloadEngine::pause(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->setUserPaused(true);
+        d->emitNow(x);
+        d->requestRebalance();
+    }
+}
+
+void DownloadEngine::resume(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->setUserPaused(false);
+        d->rebalance();
+        d->emitNow(x);
+    }
+}
+
+void DownloadEngine::pauseAll()
+{
+    for (Download *x : std::as_const(d->list)) if (!x->isFinished()) { x->setUserPaused(true); d->changed(x, true); }
+    d->requestRebalance();
+}
+
+void DownloadEngine::resumeAll()
+{
+    for (Download *x : std::as_const(d->list)) if (!x->isFinished()) { x->setUserPaused(false); d->changed(x, true); }
+    d->rebalance();
+}
+
+void DownloadEngine::cancel(const QString &id, bool deleteData)
+{
+    if (Download *x = d->byId.value(id)) d->removeDownload(x, deleteData);
+}
+
+void DownloadEngine::retry(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->retry();
+        d->rebalance();
+        d->emitNow(x);
+    }
+}
+
+void DownloadEngine::setPriority(const QString &id, int priority)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->setPriority(priority);
+        d->rebalance();
+    }
+}
+
+void DownloadEngine::clearCompleted()
+{
+    const QList<Download *> l = d->list;
+    for (Download *x : l)
+        if (finishedState(TransferState(x->record().state))) d->removeDownload(x, false);
+    if (m_uploads) m_uploads->clearFinished();
+}
+
+void DownloadEngine::setWantedFiles(const QString &id, const QList<int> &indexes)
+{
+    if (Download *x = d->byId.value(id)) x->setWantedFiles(indexes);
+}
+
+void DownloadEngine::openFile(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        const QString p = x->info().savePath;
+        if (QFileInfo::exists(p)) launchFile(d->ctx.settings, p);
+    }
+}
+
+void DownloadEngine::openFolder(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        const QString p = x->info().savePath;
+        openContainingFolder(QFileInfo::exists(p) ? p : QFileInfo(p).absolutePath());
+    }
+}
+
+QString DownloadEngine::incomingDir() const { return d->incomingDir(); }
+
+QVariantMap DownloadEngine::debugInfo(const QString &id) const
+{
+    if (Download *x = d->byId.value(id)) return x->debugInfo();
+    return {};
+}
+
+// [diag-1]
+QList<diag::DownloadFacts> DownloadEngine::diagFacts() const
+{
+    QList<diag::DownloadFacts> out;
+    for (Download *x : std::as_const(d->list))
+        if (!x->isFinished()) out << x->diagFacts();
+    return out;
+}
+
+void DownloadEngine::setDiagnosis(const QString &id, const QString &text, int level)
+{
+    Download *x = d->byId.value(id);
+    if (x && x->setDiagnosis(text, level)) d->emitNow(x);
+}
+
+int DownloadEngine::activeDownloadCount() const
+{
+    int n = 0;
+    for (Download *x : std::as_const(d->list))
+        if (x->isActive() && !x->isFinished()) ++n;
+    return n;
+}
+
+void DownloadEngine::onUrlTorrentAdded(const QString &url, const QString &id)
+{
+    for (Download *x : std::as_const(d->list)) if (x->waitsForUrl(url)) x->onUrlTorrentAdded(url, id);
+}
+
+void DownloadEngine::onSeedReady(const QString &path, const QString &id)
+{
+    const QString p = QFileInfo(path).absoluteFilePath();
+    d->pendingSeeds.insert(p, id);
+    d->linkSeed(p);
+    if (d->pendingSeeds.contains(p) && d->ctx.library) d->ctx.library->requestHash(p);   // not hashed yet
+}
+
+void DownloadEngine::onUrlTorrentFailed(const QString &url, const QString &error)
+{
+    for (Download *x : std::as_const(d->list)) if (x->waitsForUrl(url)) x->onUrlTorrentFailed(url, error);
+}
+
+// ============================================================================ [glue-2]
+
+void DownloadEngine::findMoreSources(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->findMoreSources();
+        d->emitNow(x);
+    }
+}
+
+void DownloadEngine::enterQueue(const QString &id)
+{
+    if (Download *x = d->byId.value(id)) {
+        x->enterQueue();
+        d->rebalance();
+        d->emitNow(x);
+    }
+}
+
+void DownloadEngine::cancelSource(const QString &id, const QString &sourceId)
+{
+    if (Download *x = d->byId.value(id); x && x->removeSource(sourceId)) d->emitNow(x);
+}
+
+void DownloadEngine::setSourcePriority(const QString &id, const QString &sourceId, int priority)
+{
+    if (Download *x = d->byId.value(id); x && x->setSourcePriority(sourceId, priority)) d->emitNow(x);
+}
+
+bool DownloadEngine::setDownloadTarget(const QString &id, const QString &dir, const QString &name)
+{
+    Download *x = d->byId.value(id);
+    if (!x || !x->setTarget(dir, name)) return false;
+    d->emitNow(x);
+    return true;
+}
+
+QString DownloadEngine::resumeDownload(const DownloadRequest &reqIn, const QString &existingFile)
+{
+    DownloadRequest req = reqIn;
+    QString err;
+    if (!resolveDownloadRequest(req, &err)) {
+        qCWarning(lcEngine) << "resume: unusable request:" << err;
+        emit downloadNotStarted(req.name.isEmpty() ? existingFile : req.name, err);
+        return QString();
+    }
+    const QFileInfo fi(existingFile);
+    if (!fi.isFile() || !fi.isReadable() || !fi.isWritable()) {
+        qCWarning(lcEngine) << "resume: cannot use" << existingFile;
+        return QString();
+    }
+    const QString path = fi.absoluteFilePath();
+    for (Download *x : std::as_const(d->list)) {
+        const bool same = (!req.hashes.isEmpty() && x->hashes().matches(req.hashes))
+                          || QFileInfo(x->info().savePath).absoluteFilePath() == path;
+        if (same && !x->isFinished()) {
+            qCWarning(lcEngine) << "resume: already downloading as" << x->id();
+            return QString();
+        }
+    }
+    // a torrent identity: libtorrent checks existing data itself when the file sits at its place
+    if (!req.hashes.btih.isEmpty()) {
+        if (req.name.isEmpty()) return QString();
+        const QString dir = req.saveDir.isEmpty() ? d->incomingDir() : req.saveDir;
+        const QString target = QDir(dir).filePath(req.name);
+        if (QFileInfo(target).absoluteFilePath() != path) {
+            if (QFileInfo::exists(target) || !QDir().mkpath(dir) || !QFile::rename(path, target)) {
+                qCWarning(lcEngine) << "resume: cannot place" << path << "at" << target;
+                return QString();
+            }
+        }
+        return download(req);
+    }
+    if (req.size <= 0 || fi.size() > req.size) {
+        qCWarning(lcEngine) << "resume:" << path << "is" << fi.size() << "bytes, the download" << req.size;
+        return QString();
+    }
+    // data = the file up to its last non-zero byte (a preallocated tail is not data); only the
+    // last 16 MiB are scanned so this stays cheap on the GUI thread
+    qint64 held = fi.size();
+    {
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly)) {
+            const qint64 block = 1 << 20;
+            qint64 scanned = 0;
+            while (held > 0 && scanned < (16LL << 20)) {
+                const qint64 from = qMax<qint64>(0, held - block);
+                f.seek(from);
+                const QByteArray b = f.read(held - from);
+                int last = int(b.size()) - 1;
+                while (last >= 0 && b.at(last) == 0) --last;
+                if (last >= 0) { held = from + last + 1; break; }
+                held = from;
+                scanned += b.size();
+            }
+        }
+    }
+    DownloadRecord r;
+    r.id = newDownloadId();
+    r.name = req.name.isEmpty() ? fi.fileName() : req.name;
+    r.size = req.size;
+    r.hashes = req.hashes;
+    r.uri = req.uri.trimmed();
+    r.saveDir = req.saveDir;
+    r.added = QDateTime::currentDateTime();
+    r.sortOrder = d->list.isEmpty() ? 0 : d->list.last()->record().sortOrder + 1;
+    r.state = int(req.startPaused ? TransferState::Paused : TransferState::Queued);
+    r.statusText = transferStateText(TransferState(r.state));
+    r.done = held;
+    r.engineState = engine::Download::stateForExistingFile(path, held);
+    Download *x = d->adopt(r);
+    x->restoreState(r.engineState);
+    if (d->ctx.settings)   // [dl-1]
+        x->setOrder(d->ctx.settings->b(keys::transfers::SequentialDefault), d->ctx.settings->b(keys::transfers::FirstLastDefault), false);
+    x->persist(true);
+    x->addSources(req.sources, nullptr, true);
+    qCInfo(lcEngine) << "resumed download" << r.id << r.name << "from" << path << "with" << held << "of" << r.size << "bytes";
+    emit transferAdded(x->info());
+    d->rebalance();
+    return r.id;
+}
+
+QList<PartialFile> DownloadEngine::partialFiles() const
+{
+    QList<PartialFile> out;
+    QHash<QString, QString> owner;   // absolute path → download id
+    for (Download *x : std::as_const(d->list)) {
+        if (x->isFinished()) continue;
+        const QString p = x->info().savePath;
+        if (!p.isEmpty()) owner.insert(QFileInfo(p).absoluteFilePath(), x->id());
+    }
+    const QDir dir(d->incompleteDir());
+    for (const QFileInfo &fi : dir.entryInfoList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Time)) {
+        PartialFile pf;
+        pf.path = fi.absoluteFilePath();
+        pf.name = fi.fileName();
+        pf.size = fi.size();
+        pf.modified = fi.lastModified();
+        pf.downloadId = owner.value(pf.path);
+        out << pf;
+    }
+    return out;
+}
+
+} // namespace mx

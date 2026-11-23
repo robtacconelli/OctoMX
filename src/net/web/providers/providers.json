@@ -1,0 +1,320 @@
+{
+  "version": 1,
+  "_defaultsHelp": "Which built-in providers are ON by default. The build picks a profile with -DMX_WEB_DEFAULT_PROFILE=<name> (default: standard). Listed ids start enabled, every other built-in provider is present but starts disabled; [\"*\"] = all. Users can still switch each provider on/off (web/providerEnabled) or override it in providers.d/. See src/net/web/README.md.",
+  "defaults": {
+    "standard":     ["*"],
+    "conservative": ["internet-archive", "linuxtracker"]
+  },
+  "providers": [
+    {
+      "id": "apibay",
+      "name": "The Pirate Bay (apibay)",
+      "homepage": "https://apibay.org/",
+      "request": {
+        "url": "https://apibay.org/q.php?q={query}&cat={category}",
+        "headers": { "Accept": "application/json" },
+        "categories": { "any": "0", "audio": "100", "video": "200", "software": "300", "document": "601", "image": "603", "other": "600" }
+      },
+      "limits": { "minIntervalMs": 1000, "timeoutMs": 12000 },
+      "response": {
+        "format": "json",
+        "items": "[]",
+        "fields": {
+          "name": "name",
+          "infoHash": "info_hash",
+          "size": "size",
+          "seeders": "seeders",
+          "leechers": "leechers",
+          "numFiles": "num_files",
+          "published": { "path": "added", "transform": "unixtime" },
+          "category": "category",
+          "detailsUrl": { "template": "https://thepiratebay.org/description.php?id={id}" }
+        }
+      },
+      "categoryTypes": [
+        { "match": "^1\\d\\d$", "type": "audio" },
+        { "match": "^2\\d\\d$", "type": "video" },
+        { "match": "^[34]\\d\\d$", "type": "software" },
+        { "match": "^60[12]$", "type": "document" },
+        { "match": "^603$", "type": "image" }
+      ],
+      "adultCategories": ["^5\\d\\d$"]
+    },
+    {
+      "id": "knaben",
+      "name": "Knaben",
+      "homepage": "https://knaben.org/",
+      "request": {
+        "url": "https://api.knaben.org/v1",
+        "method": "POST",
+        "contentType": "application/json",
+        "body": "{\"search_type\":\"100%\",\"search_field\":\"title\",\"query\":{query_json},\"order_by\":\"seeders\",\"order_direction\":\"desc\",\"from\":{offset},\"size\":50,\"hide_unsafe\":true,\"hide_xxx\":{adult_hide}{category}}",
+        "categories": { "any": "", "video": ",\"categories\":[2000000,3000000,6000000]", "audio": ",\"categories\":[1000000]", "software": ",\"categories\":[4000000]" }
+      },
+      "paging": { "first": 1, "maxPages": 2, "pageSize": 50 },
+      "limits": { "minIntervalMs": 1000, "timeoutMs": 12000 },
+      "response": {
+        "format": "json",
+        "items": "hits[]",
+        "fields": {
+          "name": "title",
+          "infoHash": "hash",
+          "size": "bytes",
+          "seeders": "seeders",
+          "leechers": "peers",
+          "published": "date",
+          "category": "category",
+          "magnet": "magnetUrl",
+          "torrentUrl": "link",
+          "detailsUrl": "details"
+        }
+      },
+      "categoryTypes": [
+        { "match": "^Audio", "type": "audio" },
+        { "match": "^(TV|Movies|Anime)", "type": "video" },
+        { "match": "^(PC|Games)", "type": "software" },
+        { "match": "^(Books|E-?books)", "type": "document" }
+      ],
+      "adultCategories": ["^XXX"]
+    },
+    {
+      "id": "torrents-csv",
+      "name": "Torrents-CSV",
+      "homepage": "https://torrents-csv.com/",
+      "request": { "url": "https://torrents-csv.com/service/search?q={query}&size=50" },
+      "limits": { "minIntervalMs": 1000, "timeoutMs": 12000 },
+      "response": {
+        "format": "json",
+        "items": "torrents[]",
+        "fields": {
+          "name": "name",
+          "infoHash": "infohash",
+          "size": "size_bytes",
+          "seeders": "seeders",
+          "leechers": "leechers",
+          "published": { "path": "created_unix", "transform": "unixtime" }
+        }
+      }
+    },
+    {
+      "id": "bitsearch",
+      "name": "BitSearch",
+      "homepage": "https://bitsearch.eu/",
+      "request": { "url": "https://bitsearch.eu/api/v1/search?q={query}&page={page}", "spaceAs": "+" },
+      "paging": { "first": 1, "maxPages": 2, "pageSize": 20 },
+      "limits": { "minIntervalMs": 1000, "timeoutMs": 12000 },
+      "response": {
+        "format": "json",
+        "items": "results[]",
+        "fields": {
+          "name": "title",
+          "infoHash": "infohash",
+          "size": "size",
+          "seeders": "seeders",
+          "leechers": "leechers",
+          "published": "createdAt",
+          "detailsUrl": { "template": "https://bitsearch.eu/torrent/{id}" }
+        }
+      }
+    },
+    {
+      "id": "yts",
+      "name": "YTS (movies)",
+      "homepage": "https://yts.pw/",
+      "notes": "yts.mx is gone; the API answers on movies-api.accel.li (announced by yts.pw itself).",
+      "request": {
+        "url": "https://movies-api.accel.li/api/v2/list_movies.json?query_term={query}&limit=50&page={page}",
+        "categories": { "any": "", "video": "" },
+        "strictCategories": true,
+        "probeQuery": "night"
+      },
+      "limits": { "minIntervalMs": 1000, "timeoutMs": 12000 },
+      "response": {
+        "format": "json",
+        "items": "data.movies[].torrents[]",
+        "fields": {
+          "name": { "template": "{title_long} [{quality}] [{video_codec}] [{type}] [YTS]" },
+          "infoHash": "hash",
+          "size": "size_bytes",
+          "seeders": "seeds",
+          "leechers": "peers",
+          "published": { "path": "date_uploaded_unix", "transform": "unixtime" },
+          "category": { "value": "Movies" },
+          "torrentUrl": "url",
+          "detailsUrl": "../url"
+        }
+      },
+      "defaultType": "video",
+      "trackers": ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.com:1337/announce"]
+    },
+    {
+      "id": "nyaa",
+      "name": "Nyaa (anime)",
+      "homepage": "https://nyaa.si/",
+      "request": {
+        "url": "https://nyaa.si/?page=rss&q={query}&c={category}&f=0",
+        "spaceAs": "+",
+        "categories": { "any": "0_0", "video": "1_0", "audio": "2_0", "document": "3_0", "image": "5_0", "software": "6_0" },
+        "probeQuery": "one piece"
+      },
+      "limits": { "minIntervalMs": 1500, "timeoutMs": 12000 },
+      "response": {
+        "format": "rss",
+        "items": "item",
+        "fields": {
+          "name": "title",
+          "infoHash": "nyaa:infoHash",
+          "size": "nyaa:size",
+          "seeders": "nyaa:seeders",
+          "leechers": "nyaa:leechers",
+          "published": "pubDate",
+          "category": "nyaa:category",
+          "torrentUrl": "link",
+          "detailsUrl": "guid"
+        }
+      },
+      "categoryTypes": [
+        { "match": "^(Anime|Live Action)", "type": "video" },
+        { "match": "^Audio", "type": "audio" },
+        { "match": "^Literature", "type": "document" },
+        { "match": "^Pictures", "type": "image" },
+        { "match": "^Software", "type": "software" }
+      ],
+      "trackers": ["http://nyaa.tracker.wf:7777/announce"]
+    },
+    {
+      "id": "bt4g",
+      "name": "BT4G",
+      "homepage": "https://bt4gprx.com/",
+      "request": { "url": "https://bt4gprx.com/search?q={query}&page=rss", "spaceAs": "+" },
+      "limits": { "minIntervalMs": 2000, "timeoutMs": 12000 },
+      "response": {
+        "format": "rss",
+        "items": "item",
+        "fields": {
+          "name": "title",
+          "magnet": "link",
+          "infoHash": { "path": "link", "transform": "magnet" },
+          "size": { "path": "description", "regex": "<br>\\s*([0-9.,]+\\s*[KMGTP]?i?B)\\s*<br>" },
+          "category": { "path": "description", "regex": "^[^<]*<br>[^<]*<br>([^<]*)<br>" },
+          "published": "pubDate",
+          "detailsUrl": "guid"
+        }
+      },
+      "categoryTypes": [
+        { "match": "^Video", "type": "video" },
+        { "match": "^Audio", "type": "audio" },
+        { "match": "^Doc", "type": "document" },
+        { "match": "^(App|Software)", "type": "software" },
+        { "match": "^Image", "type": "image" },
+        { "match": "^Archive", "type": "archive" }
+      ]
+    },
+    {
+      "id": "limetorrents",
+      "name": "LimeTorrents",
+      "homepage": "https://www.limetorrents.fun/",
+      "request": { "url": "https://www.limetorrents.fun/searchrss/{query}/" },
+      "limits": { "minIntervalMs": 2000, "timeoutMs": 12000 },
+      "response": {
+        "format": "rss",
+        "items": "item",
+        "fields": {
+          "name": "title",
+          "infoHash": { "path": "enclosure@url", "regex": "/torrent/([0-9A-Fa-f]{40})" },
+          "size": "size",
+          "seeders": { "path": "description", "regex": "Seeds:\\s*([0-9,]+)" },
+          "leechers": { "path": "description", "regex": "Leechers:?\\s*([0-9,]+)" },
+          "published": "pubDate",
+          "category": "category",
+          "torrentUrl": "enclosure@url",
+          "detailsUrl": "link"
+        }
+      },
+      "categoryTypes": [
+        { "match": "Audio Books", "type": "audio" },
+        { "match": "^(Movies|TV|Anime)", "type": "video" },
+        { "match": "^Music", "type": "audio" },
+        { "match": "^(Applications|Games)", "type": "software" },
+        { "match": "E-?books", "type": "document" }
+      ],
+      "adultCategories": ["adult|xxx"]
+    },
+    {
+      "id": "internet-archive",
+      "name": "Internet Archive",
+      "homepage": "https://archive.org/",
+      "notes": "Legal content. Every item has an archive.org-seeded torrent and plain HTTP file URLs.",
+      "request": {
+        "url": "https://archive.org/advancedsearch.php?q=title%3A%28{query}%29%20AND%20btih%3A*{category}&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=btih&fl%5B%5D=item_size&fl%5B%5D=files_count&fl%5B%5D=mediatype&fl%5B%5D=publicdate&rows=50&page={page}&output=json&sort%5B%5D=downloads%20desc",
+        "categories": {
+          "any": "",
+          "video": "%20AND%20mediatype%3Amovies",
+          "audio": "%20AND%20mediatype%3A%28audio%20OR%20etree%29",
+          "document": "%20AND%20mediatype%3Atexts",
+          "image": "%20AND%20mediatype%3Aimage",
+          "software": "%20AND%20mediatype%3Asoftware"
+        },
+        "probeQuery": "big buck bunny"
+      },
+      "paging": { "first": 1, "maxPages": 1, "pageSize": 50 },
+      "limits": { "minIntervalMs": 1000, "timeoutMs": 15000 },
+      "response": {
+        "format": "json",
+        "items": "response.docs[]",
+        "fields": {
+          "name": "title",
+          "infoHash": "btih",
+          "size": "item_size",
+          "numFiles": "files_count",
+          "published": "publicdate",
+          "category": "mediatype",
+          "torrentUrl": { "template": "https://archive.org/download/{identifier|urlencode}/{identifier|urlencode}_archive.torrent" },
+          "detailsUrl": { "template": "https://archive.org/details/{identifier|urlencode}" }
+        },
+        "files": {
+          "items": "details.result[]",
+          "path": "name",
+          "size": "size",
+          "url": { "template": "https://archive.org/download/{identifier|urlencode}/{name|urlpath}" },
+          "filter": { "field": "source", "regex": "^original$" },
+          "exclude": "(^__ia_thumb\\.jpg$|_meta\\.xml$|_files\\.xml$|_meta\\.sqlite$|_reviews\\.xml$|\\.torrent$)",
+          "maxFiles": 200
+        }
+      },
+      "details": { "url": "https://archive.org/metadata/{identifier|urlencode}/files", "maxItems": 10, "timeoutMs": 8000 },
+      "categoryTypes": [
+        { "match": "^movies$", "type": "video" },
+        { "match": "^(audio|etree)$", "type": "audio" },
+        { "match": "^texts$", "type": "document" },
+        { "match": "^image$", "type": "image" },
+        { "match": "^software$", "type": "software" }
+      ],
+      "trackers": ["http://bt1.archive.org:6969/announce", "http://bt2.archive.org:6969/announce"]
+    },
+    {
+      "id": "linuxtracker",
+      "name": "LinuxTracker",
+      "homepage": "https://linuxtracker.org/",
+      "notes": "No API or working RSS search; parsed from the HTML result table (regex format).",
+      "request": { "url": "https://linuxtracker.org/torrents/?q={query}", "spaceAs": "+", "probeQuery": "debian" },
+      "limits": { "minIntervalMs": 2000, "timeoutMs": 12000 },
+      "response": {
+        "format": "regex",
+        "items": "<tr>\\s*<td class=\"torrent-name-cell\">.*?</tr>",
+        "fields": {
+          "name": { "path": "_", "regex": "class=\"torrent-name\"[^>]*>([^<]+)<" },
+          "infoHash": { "path": "_", "regex": "href=\"/torrents/([0-9a-fA-F]{40})/" },
+          "category": { "path": "_", "regex": "class=\"category-badge\">([^<]+)<" },
+          "published": { "path": "_", "regex": "<td class=\"muted-cell\">([^<]+)</td>" },
+          "size": { "path": "_", "regex": "<td class=\"numeric muted-cell\">([^<]+)</td>" },
+          "seeders": { "path": "_", "regex": "class=\"numeric seeds[^\"]*\">\\s*<strong>(\\d+)" },
+          "leechers": { "path": "_", "regex": "class=\"numeric leeches[^\"]*\">\\s*<strong>(\\d+)" },
+          "torrentUrl": { "template": "https://linuxtracker.org/torrents/{@infoHash}/download/" },
+          "detailsUrl": { "template": "https://linuxtracker.org/torrents/{@infoHash}/" }
+        }
+      },
+      "defaultType": "software"
+    }
+  ]
+}

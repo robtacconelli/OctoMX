@@ -1,0 +1,143 @@
+# tools/content-denylist.txt: names of real commercial works and their makers that must not appear in
+# the published tree (tools/check-content.sh, ctest "tools_check_content"). Owner's rule: never upload
+# any copyrighted content, and the tree must not even show such names as if they were shared files
+# (demo data, tests, tools, documents, comments). Use invented names, public-domain works (a composer
+# and a composition, a public-domain text) or freely licensed ones (the Blender open films, Linux
+# distributions) instead.
+#
+# One entry per line, matched case-insensitively as whole words: a letter or digit right before or
+# after the entry is no hit ("Queensland" is not "Queen"), an underscore, dot or dash is a separator
+# ("Glenn_Miller_-_..." is a hit). Blanks, dots, dashes and underscores inside an entry match any run
+# of them, or none ("Spider-Man" also finds "spiderman", "Spider Man", "spider_man"). Regular
+# expression characters are taken literally. A justified hit goes into tools/content-allowlist.txt
+# with its reason. This is a tripwire, not a database: add the name when you remove one.
+
+# ---- removed from the demo data, tests and docs (demo-1)
+Sade
+Glenn Miller
+Count Basie
+Duke Ellington
+# the dub artist; the word is common, a real use needs an allow-list entry
+Scientist
+Everything But The Girl
+Ron Trent
+Chris Brann
+DJ Pisces
+Daft Punk
+Kevin MacLeod
+Ohys-Raws
+Smooth Operator
+Sweetest Taboo
+No Ordinary Love
+Love Deluxe
+Moonlight Serenade
+Chattanooga Choo Choo
+Mood Indigo
+Take The A Train
+Cantaloupe Island
+Watermelon Man
+My Favorite Things
+
+# ---- very well known artists and bands
+Beatles
+Rolling Stones
+Madonna
+Michael Jackson
+Elvis Presley
+Metallica
+Nirvana
+Eminem
+Britney Spears
+Shakira
+Beyonce
+Rihanna
+Taylor Swift
+Adele
+Coldplay
+Queen
+Pink Floyd
+Led Zeppelin
+ABBA
+Bob Marley
+Radiohead
+Linkin Park
+Bon Jovi
+Celine Dion
+Mariah Carey
+Lady Gaga
+Justin Bieber
+Ed Sheeran
+Snoop Dogg
+Tupac
+Frank Sinatra
+Miles Davis
+John Coltrane
+Louis Armstrong
+Bob Dylan
+David Bowie
+AC/DC
+Iron Maiden
+Black Sabbath
+Depeche Mode
+Kanye West
+
+# ---- film studios, record labels, broadcasters
+Disney
+Pixar
+DreamWorks
+Warner Bros
+Paramount Pictures
+Universal Pictures
+Universal Music
+Sony Music
+Sony Pictures
+Columbia Records
+Def Jam
+Motown
+Lucasfilm
+Marvel
+Netflix
+HBO
+Metro-Goldwyn-Mayer
+20th Century Fox
+
+# ---- film and series titles
+Star Wars
+Harry Potter
+Lord Of The Rings
+Jurassic Park
+Titanic
+Shrek
+Toy Story
+Finding Nemo
+Game Of Thrones
+Breaking Bad
+The Simpsons
+Pulp Fiction
+The Godfather
+Spider-Man
+Batman
+Star Trek
+Avengers
+James Bond
+Back To The Future
+Indiana Jones
+Pirates Of The Caribbean
+The Lion King
+
+# ---- game titles and commercial software people pirate
+Super Mario
+Zelda
+Pokemon
+Grand Theft Auto
+Call Of Duty
+World Of Warcraft
+Minecraft
+Counter-Strike
+The Sims
+Fortnite
+Tetris
+Pac-Man
+Final Fantasy
+Photoshop
+AutoCAD

@@ -1,0 +1,104 @@
+{
+ "result": [
+  {
+   "name": "Sample Open Movie - fictional.mkv",
+   "source": "original",
+   "mtime": "1570010445",
+   "size": "81782463",
+   "md5": "00000000000000000000000000000001",
+   "crc32": "00000001",
+   "sha1": "0000000000000000000000000000000000000001",
+   "format": "Matroska",
+   "length": "464.14",
+   "height": "858",
+   "width": "2048"
+  },
+  {
+   "name": "Sample Open Movie - fictional.mp4",
+   "source": "derivative",
+   "format": "h.264",
+   "original": "Sample Open Movie - fictional.mkv",
+   "mtime": "1570012489",
+   "size": "48274047",
+   "md5": "00000000000000000000000000000002",
+   "crc32": "00000002",
+   "sha1": "0000000000000000000000000000000000000002",
+   "length": "464.15",
+   "height": "480",
+   "width": "1146"
+  },
+  {
+   "name": "Sample Open Movie - fictional.ogv",
+   "source": "derivative",
+   "format": "Ogg Video",
+   "original": "Sample Open Movie - fictional.mkv",
+   "mtime": "1570013630",
+   "size": "36721117",
+   "md5": "00000000000000000000000000000003",
+   "crc32": "00000003",
+   "sha1": "0000000000000000000000000000000000000003",
+   "length": "464.13",
+   "height": "300",
+   "width": "716"
+  },
+  {
+   "name": "__ia_thumb.jpg",
+   "source": "original",
+   "mtime": "1613698669",
+   "size": "4741",
+   "md5": "00000000000000000000000000000004",
+   "crc32": "00000004",
+   "sha1": "0000000000000000000000000000000000000004",
+   "format": "Item Tile",
+   "rotation": "0"
+  },
+  {
+   "name": "sample_open_movie_fixture_archive.torrent",
+   "source": "metadata",
+   "btih": "9292929292929292929292929292929292929292",
+   "mtime": "1658611141",
+   "size": "8671",
+   "md5": "00000000000000000000000000000005",
+   "crc32": "00000005",
+   "sha1": "0000000000000000000000000000000000000005",
+   "format": "Archive BitTorrent"
+  },
+  {
+   "name": "sample_open_movie_fixture_files.xml",
+   "source": "original",
+   "format": "Metadata",
+   "md5": "00000000000000000000000000000006",
+   "summation": "md5"
+  },
+  {
+   "name": "sample_open_movie_fixture_meta.sqlite",
+   "source": "original",
+   "mtime": "1570010515",
+   "size": "11264",
+   "format": "Metadata",
+   "md5": "00000000000000000000000000000007",
+   "crc32": "00000007",
+   "sha1": "0000000000000000000000000000000000000007"
+  },
+  {
+   "name": "sample_open_movie_fixture_meta.xml",
+   "source": "original",
+   "mtime": "1613698669",
+   "size": "951",
+   "format": "Metadata",
+   "md5": "00000000000000000000000000000008",
+   "crc32": "00000008",
+   "sha1": "0000000000000000000000000000000000000008"
+  },
+  {
+   "name": "sample_open_movie_fixture_reviews.xml",
+   "source": "original",
+   "mtime": "1658611139",
+   "size": "1051",
+   "md5": "00000000000000000000000000000009",
+   "crc32": "00000009",
+   "sha1": "0000000000000000000000000000000000000009",
+   "format": "Metadata"
+  }
+ ]
+}

@@ -1,0 +1,58 @@
+{
+ "responseHeader": {
+  "status": 0,
+  "QTime": 12,
+  "params": {
+   "query": "(text:sample OR text__reviews:sample)",
+   "qin": "sample open movie",
+   "fields": "identifier,title,item_size,mediatype,publicdate,btih",
+   "wt": "json",
+   "rows": 10,
+   "start": 0
+  }
+ },
+ "response": {
+  "numFound": 5,
+  "start": 0,
+  "docs": [
+   {
+    "btih": "9191919191919191919191919191919191919191",
+    "identifier": "example_short_720p_fixture",
+    "item_size": 2194559,
+    "mediatype": "movies",
+    "publicdate": "2025-08-10T06:15:42Z",
+    "title": "Generic image"
+   },
+   {
+    "btih": "9292929292929292929292929292929292929292",
+    "identifier": "sample_open_movie_fixture",
+    "item_size": 167352831,
+    "mediatype": "movies",
+    "publicdate": "2019-10-02T10:00:46Z",
+    "title": "Sample Open Movie (fictional)"
+   },
+   {
+    "identifier": "fixture_radio_20190409",
+    "item_size": 29814013,
+    "mediatype": "audio",
+    "publicdate": "2019-04-09T09:24:59Z",
+    "title": "Fixture Radio : April 09, 2019 (fictional)"
+   },
+   {
+    "identifier": "fixture_radio_20170906",
+    "item_size": 90379318,
+    "mediatype": "audio",
+    "publicdate": "2017-09-06T07:31:33Z",
+    "title": "Fixture Radio : September 06, 2017 (fictional)"
+   },
+   {
+    "btih": "9595959595959595959595959595959595959595",
+    "identifier": "example_short_1080p_fixture.mov",
+    "item_size": 1513427684,
+    "mediatype": "movies",
+    "publicdate": "2022-10-15T19:10:02Z",
+    "title": "Example Short 1080p"
+   }
+  ]
+ }
+}

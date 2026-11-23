@@ -1,0 +1,75 @@
+OctoMX
+======
+
+Copyright (C) 2026 The OctoMX authors (see AUTHORS below).
+
+OctoMX is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version (SPDX: GPL-3.0-or-later). It is distributed in
+the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. The full licence text is in LICENSE.
+
+OctoMX is an independent open-source program. It is not affiliated with, endorsed by or derived
+from the original WinMX or its makers (Frontcode Technologies), and contains none of its code;
+WinMX is named only to describe the style of the interface. Nor is OctoMX affiliated with the
+eMule, aMule, gtk-gnutella, LimeWire, BitTorrent or rats-search projects, whose names are used
+only to describe what the program interoperates with.
+
+
+AUTHORS
+-------
+
+The OctoMX authors: the project owner and the contributors listed in the version-control
+history of the OctoMX source repository.
+
+
+Code adapted from eMule
+-----------------------
+
+eMule, Copyright (C) 2002-2010 Merkur (devteam at emule-project.net, http://www.emule-project.net);
+its Kademlia code: Copyright (C) 2003 Barry Dunne, (C) 2002 Petar Maymounkov, (C) 2004-2010
+Merkur. Licensed under the GNU General Public License version 2 or (at your option) any later
+version. Reference version: eMule 0.50a (source mirror
+https://github.com/irwir/eMule, commit 88a8c8f). OctoMX uses it under GPL-3.0-or-later as
+that licence permits.
+
+Parts of these files are adapted (re-written in C++17/Qt, following eMule's structure and
+control flow; no file was copied verbatim) from the eMule sources named in parentheses:
+
+  src/net/ed2k/kad/kad_routing.cpp  Kad routing table: contact type ageing, zone add/split/
+                                    consolidate, small/big timers (kademlia/routing/Contact.cpp,
+                                    RoutingZone.cpp, RoutingBin.cpp)
+  src/net/ed2k/kad/kad_search.cpp   Kad lookup state machine and keyword splitting
+                                    (kademlia/kademlia/Search.cpp, SearchManager.cpp)
+  src/net/ed2k/kad/kad_node.cpp     Kad packet flood tracking and the HELLO handler sequencing
+                                    (kademlia/net/PacketTracking.cpp, KademliaUDPListener.cpp)
+  src/net/ed2k/kad/kad_wire.cpp     Kad UDP de-obfuscation key-try order
+                                    (EncryptedDatagramSocket.cpp)
+  src/net/ed2k/ed2k_crypto.cpp      obfuscated TCP stream negotiation and the random protocol
+                                    marker (EncryptedStreamSocket.cpp)
+  src/net/ed2k/ed2k_upload.cpp      UDP file re-ask handling (ClientUDPSocket.cpp)
+  src/net/ed2k/ed2k_peer.cpp        client software/version detection (BaseClient.cpp)
+
+In addition, several files use eMule's protocol identifiers (opcode/tag names and values, the
+96-byte DH prime of the stream obfuscation, timing constants such as re-ask intervals and Kad
+parameters) because interoperating with eMule-compatible clients requires them; and
+src/hash/aich.cpp implements eMule's AICH hash-tree layout. Protocol facts like these are not
+copied code, but they are credited here as well.
+
+
+Other credits
+-------------
+
+* QRP keyword hash: from the public "Query Routing for the Gnutella Network" specification
+  (LimeWire, C. Rohrs). The Gnutella module is an independent implementation; some behaviour
+  parameters follow gtk-gnutella (GPL-2.0-or-later, https://gtk-gnutella.sourceforge.io),
+  e.g. the THEX serving-depth thresholds and the 30-minute search re-query interval, and its
+  default UDP host caches are a subset of gtk-gnutella's list.
+* The eD2k seed server list comes from the eMule Security server.met (emule-security.org).
+* Tiger: the key schedule follows the public-domain reference by R. Anderson and E. Biham.
+* The user-interface font "OctoMX Tahoma" is derived from Wine's Tahoma (LGPL-2.1-or-later);
+  see src/ui/res/fonts/ and third_party/fonts/.
+
+Third-party libraries (Qt, libtorrent-rasterbar, OpenSSL, Boost, zlib, librats, ...) keep their
+own licences. They are not part of this source tree (the build scripts download them), and the
+binary packages list them in THIRD-PARTY-NOTICES.txt with their licence texts.

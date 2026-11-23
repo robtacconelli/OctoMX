@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// OctoMX engine: PartFileStore: a sparse <incomplete>/<id>.part file with a range map.
+//
+// Range states: missing → (requested: tracked by the Download) → held (received; written or queued
+// for writing) → verified. "durable" = held bytes whose write has completed (what gets persisted).
+// Verification units, by preference: eD2k part hashes (9 728 000 bytes), TTH leaves, else the
+// whole file at completion (finalCheck). All file I/O and hashing run on the store's serial
+// IoQueue; results are posted back to the main thread.
+#pragma once
+
+#include <QtCore/QMutex>
+#include <QtCore/QSet>
+
+#include <functional>
+#include <memory>
+
+#include "core/engine/io_queue.h"
+#include "core/engine/store.h"
+#include "mx/types.h"
+
+class QFile;
+
+namespace mx::engine {
+
+class PartStore : public Store {
+    Q_OBJECT
+public:
+    enum Scheme { NoUnits = 0, Ed2kParts = 1, TthLeaves = 2 };
+    static constexpr qint64 Ed2kPart = 9728000;
+
+    PartStore(QThreadPool *pool, const QString &path, qint64 size, bool preallocate, QObject *parent = nullptr);
+    ~PartStore() override;
+
+    void open();                                  // async; storeError on failure
+    QString path() const { return m_path; }
+    qint64 size() const { return m_size; }
+    void setSize(qint64 size);                    // unknown size became known
+    void restore(const RangeSet &held, const RangeSet &verified);
+    RangeSet held() const { return m_have; }
+    RangeSet verified() const { return m_verified; }
+    RangeSet durable() const { return m_durable; }
+    RangeSet persistable() const;                 // durable ∪ verified
+
+    // Fine verification (the caller validated the set against the trusted root first).
+    void setEd2kParts(const QList<QByteArray> &parts);
+    void setTthLeaves(qint64 unit, const QList<QByteArray> &leaves);
+    // [engine-3] drop the fine units (a provisional hash set proved wrong): verified bytes become
+    // held-but-unverified again; the caller may install another set afterwards.
+    void clearUnits();
+    Scheme scheme() const { return m_scheme; }
+    qint64 unitSize() const { return m_unit; }
+    QList<QByteArray> unitHashes() const { return m_hashes; }
+
+    bool fullyHeld() const;
+    bool fullyVerified() const;
+    void verifyHeldUnits();                       // queue a check for every complete, unverified unit
+    void discardUnverified();                     // whole-file failure: drop everything not verified
+    void markAllVerified();                       // whole-file check passed
+    void clearError() { m_error = false; }
+    bool hasError() const { return m_error; }
+    int verifyingCount() const { return m_verifying.size(); }
+
+    struct FinalResult {
+        bool ok = false;
+        QString error;
+        FileHashes hashes;
+        QList<QByteArray> ed2kParts, aichParts;
+    };
+    void finalCheck(std::function<void(const FinalResult &)> done);
+    // Close the file and move it to dir/name (collision-safe "name (1).ext"). done(ok, path, error).
+    // [dl-1] allowCopy = false: only a rename (same volume); fails while another program keeps the file
+    // open without delete sharing (a preview player on Windows) instead of copying it
+    void moveTo(const QString &dir, const QString &name, std::function<void(bool, const QString &, const QString &)> done,
+                bool allowCopy = true);
+    // Close the file and hand it over at exactly `target` (promotion to a torrent). Overwrites
+    // nothing: fails if target exists.
+    void moveExact(const QString &target, std::function<void(bool, const QString &)> done);
+    void removeFile();                            // delete (cancel)
+    // SHA-1 of [s, e) as written so far (promotion check against a torrent piece hash).
+    void sha1Range(qint64 s, qint64 e, std::function<void(const QByteArray &)> done);
+    // [engine-3] SHA-1 of each range as it is on disk right now (queued behind earlier writes,
+    // ahead of later ones). An unreadable range yields an empty hash.
+    void sha1Ranges(const QList<Range> &ranges, std::function<void(const QList<QByteArray> &)> done);
+    bool drain(int timeoutMs) { return m_io.drain(timeoutMs); }
+    void abandon() { m_io.discardPending(); }
+
+    // Thread-safe read of verified bytes (partial sharing). Empty unless fully verified.
+    QByteArray readVerified(qint64 off, qint64 len) const;
+    // The same as a free-standing, thread-safe function that stays valid after the store is gone.
+    std::function<QByteArray(qint64, qint64)> verifiedReader() const;
+
+    // Store
+    Kind kind() const override { return Part; }
+    qint64 extent() const override { return m_size; }
+    RangeSet fetchTarget() const override;
+    Range unitAt(qint64 pos) const override;
+    bool canVerifyUnit(qint64 pos) const override;
+    RangeSet deliver(qint64 off, const QByteArray &bytes) override;
+    qint64 bufferedBytes() const override { return m_pendingWrite; }
+    bool acceptingData() const override { return !m_error && !m_closed; }
+    qint64 verifiedBytes() const override { return m_verified.total(); }
+    qint64 heldBytes() const override { return m_have.total(); }
+    void pieceMap(int cells, const RangeSet &inFlight, QByteArray *state, QByteArray *fill) const override;
+    // [ui-i] the same map from stored ranges, for a download whose store does not exist yet
+    // (restored after a restart, not resumed): complete = verified (with fine units) or held
+    static void mapOf(int cells, qint64 size, const RangeSet &complete, QByteArray *state, QByteArray *fill);
+
+private:
+    struct Shared {
+        mutable QMutex mutex;
+        std::unique_ptr<QFile> file;          // used only by IoQueue tasks
+        RangeSet verified;                    // copy for readVerified()
+        QString path;
+    };
+    void checkUnitsIn(qint64 start, qint64 end);
+    void queueVerify(qint64 s, qint64 e);
+    void onWritten(qint64 off, qint64 n, bool ok, const QString &err, bool diskFull);
+    void onVerified(qint64 s, qint64 e, bool ok, quint64 gen);
+    void publishVerified();
+
+    QString m_path;
+    qint64 m_size;
+    bool m_prealloc;
+    IoQueue m_io;
+    std::shared_ptr<Shared> m_sh;
+    RangeSet m_have, m_durable, m_verified;
+    QSet<qint64> m_verifying;                 // unit starts being checked
+    Scheme m_scheme = NoUnits;
+    qint64 m_unit = Ed2kPart;
+    QList<QByteArray> m_hashes;
+    quint64 m_unitsGen = 0;                   // [engine-3] bumped by clearUnits(): stale checks are ignored
+    qint64 m_pendingWrite = 0;
+    bool m_error = false;
+    bool m_closed = false;
+};
+
+} // namespace mx::engine

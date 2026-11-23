@@ -1,0 +1,72 @@
+[
+ {
+  "id": "1000001",
+  "name": "Example OS 22.04 LTS",
+  "info_hash": "1111111111111111111111111111111111111111",
+  "leechers": "3",
+  "seeders": "12",
+  "size": "3000000000",
+  "num_files": "1",
+  "username": "fixture",
+  "added": "1700000000",
+  "status": "member",
+  "category": "303",
+  "imdb": ""
+ },
+ {
+  "id": "1000002",
+  "name": "Example OS 24.04 LTS Server",
+  "info_hash": "1212121212121212121212121212121212121212",
+  "leechers": "1",
+  "seeders": "7",
+  "size": "2100000000",
+  "num_files": "1",
+  "username": "fixture",
+  "added": "1700086400",
+  "status": "member",
+  "category": "303",
+  "imdb": ""
+ },
+ {
+  "id": "1000003",
+  "name": "Sample Open Movie 1080p",
+  "info_hash": "1313131313131313131313131313131313131313",
+  "leechers": "0",
+  "seeders": "4",
+  "size": "734003200",
+  "num_files": "2",
+  "username": "fixture",
+  "added": "1700172800",
+  "status": "member",
+  "category": "201",
+  "imdb": ""
+ },
+ {
+  "id": "1000004",
+  "name": "Fixture Audio Collection (CC0)",
+  "info_hash": "1414141414141414141414141414141414141414",
+  "leechers": "2",
+  "seeders": "9",
+  "size": "52428800",
+  "num_files": "14",
+  "username": "fixture",
+  "added": "1700259200",
+  "status": "member",
+  "category": "101",
+  "imdb": ""
+ },
+ {
+  "id": "1000005",
+  "name": "Example OS 20.04 netinst",
+  "info_hash": "1515151515151515151515151515151515151515",
+  "leechers": "5",
+  "seeders": "1",
+  "size": "471859200",
+  "num_files": "1",
+  "username": "fixture",
+  "added": "1700345600",
+  "status": "member",
+  "category": "303",
+  "imdb": ""
+ }
+]

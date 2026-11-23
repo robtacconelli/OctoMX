@@ -1,0 +1,66 @@
+# tools/names-allowlist.txt: where "WinMX" may still appear in the published tree, and why
+# (tools/check-names.sh, ctest "tools_check_names"). One entry per line:
+#   <class> :: <path pattern> :: <line regex, POSIX ERE, case sensitive> :: <reason>
+# The program is called OctoMX. Class L is the short, explicit list of compatibility literals: the
+# only lines that may carry the identifiers of copies installed before 5.0 (rule 2 of the checker).
+
+# ---------------------------------------------------------------------------------------------
+# Class L: compatibility literals, byte for byte (identifier strings and the tests that exercise them)
+L :: src/net/overlay/overlay_plugin_impl.h :: kOverlayProtocol = "winmx-ng/1"; :: overlay protocol string: Noise prologue and DHT rendezvous key, nodes of every version find each other
+L :: src/net/overlay/rats_node.h :: protocol = QStringLiteral\("winmx-ng/1"\); :: the same protocol string as the node's default
+L :: src/net/overlay/ovl_crypto.cpp :: kPmKeyLabel = QByteArrayLiteral\("winmx-ng/1 pm"\); :: key-derivation label of private messages (wire format)
+L :: src/net/overlay/PROTOCOL.md :: the protocol string `P = "winmx-ng/1"` :: the protocol specification names the protocol string once
+L :: tests/overlay/ovl_test_support.h :: c\.protocol = QStringLiteral\("winmx-ng/1"\); :: the overlay tests speak the real wire format
+L :: tests/overlay/tst_overlay_chat.cpp :: QByteArrayLiteral\("winmx-ng/1\\n"\)|c\.protocol = QStringLiteral\("winmx-ng/1"\); :: the signed-envelope prefix and the protocol string, as on the wire
+L :: src/api/update_install.cpp :: kSignatureHeader = QByteArrayLiteral\("winmx-ng-signature 1"\);|kJournalHeader = QByteArrayLiteral\("winmx-ng-update-journal 1"\); :: update file formats: the SHA256SUMS.sig header every installed copy reads, the journal header so a journal of an earlier version is finished
+L :: tools/release/sign.sh :: echo "winmx-ng-signature 1" :: writes that signature header
+L :: tests/ui/tst_update_install.cpp :: "winmx-ng-signature 1\\nkey x :: tests that signature format
+L :: tests/ui/tst_update_bridge.cpp :: "winmx-ng-update-journal 1\\nstate committed :: a journal exactly as an earlier version writes it
+L :: src/app/single_instance.cpp :: QStringLiteral\("winmx-ng-"\) :: single-instance server name prefix: copies of every version on the same profile find each other
+L :: src/api/mx/legacy_names.h :: kLegacyUpdateUrl = "https://api.github.com/repos/robtacconelli/WinMX-NG/releases/latest";|kLegacyUserAgentPrefix = "WinMX NG/"; :: stored legacy defaults (update address, user agent) mapped to the current ones
+L :: src/ui/os_integration.cpp :: kLegacyRunValue\[\] = "WinMX NG";|kLegacyDesktopId\[\] = "winmx-ng\.desktop";|kLegacyTorrentClass\[\] = "WinMXNG\.torrent"; :: legacy registrations (Run value, desktop entry, .torrent class) moved to the current names
+L :: tests/ui/tst_os_integration.cpp :: kLegacyDesktopId = QStringLiteral\("winmx-ng\.desktop"\);|kLegacyRunKey = QStringLiteral\("Microsoft/Windows/CurrentVersion/Run/WinMX NG"\);|kLegacyTorrentClass = QStringLiteral\("WinMXNG\.torrent"\); :: tests of that move
+L :: tools/release/files/install-desktop-entry.sh :: ^OLD=\$DATA/applications/winmx-ng\.desktop$ :: removes the legacy menu entry of the same folder
+
+# ---------------------------------------------------------------------------------------------
+# Class 2: other legacy names with "WinMX" that the carry-over of copies installed before 5.0 needs
+2 :: src/api/mx/legacy_names.h :: kLegacy(AppName|Database|DownloadFolder|FontFamily|NetName) = "(WinMX|winmx\.db|WinMX Tahoma)";|/WinMX|"WinMX"\)|legacy winmx\.db :: the legacy names a copy installed before 5.0 left: profile folder, winmx.db, Downloads/WinMX, font family, network name
+2 :: src/api/types.cpp :: "winmx": the legacy name|QLatin1String\("winmx"\) :: netFromName() still understands the legacy network name (stored lists, scripts)
+2 :: src/ui/pages/networks_page.cpp :: QLatin1String\("winmx"\) :: script name of the legacy tab still understood
+2 :: src/api/update_install.cpp :: QStringLiteral\("winmx\.exe"\)|QStringLiteral\("winmx"\), QStringLiteral\("bin/winmx"\) :: legacy starter files kept in place by the updater (legacyStarterFiles())
+2 :: src/api/mx/update_install.h :: `WinMX-<v>-<platform>`, with `winmx\.exe`, resp\. `winmx` \+ `bin/winmx` :: names the legacy package layout whose starter files the updater keeps
+2 :: docs/RELEASE.md :: `WinMX-<v>-<platform>`|`winmx\.exe`, resp\. `winmx` \+ `bin/winmx` :: the same, for maintainers
+2 :: src/ui/os_integration.cpp :: kLegacyIconName\[\] = "winmx";|kLegacyExeNames = \{QStringLiteral\("winmx\.exe"\), QStringLiteral\("winmx"\)\}; :: the legacy icon and program file names in registrations moved to the current names
+2 :: tests/ui/tst_os_integration.cpp :: winmx\.exe|/winmx|winmx\.png|Name=WinMX|Icon=winmx|WinMX-4\.5- :: tests of that move (legacy entries of this copy move, those of another copy stay)
+2 :: tools/release/files/install-desktop-entry.sh :: winmx\.png :: removes the legacy menu entry of the same folder and its icon
+2 :: src/app/main.cpp :: legacy profile folder <AppData>/WinMX :: the legacy profile folder honoured as it is
+2 :: src/core/* :: Downloads/WinMX|<AppData>/WinMX|winmx\.db|winmx\.exe|"winmx:<node>\.\.\." :: the legacy profile folder, database file, download folder and source descriptor honoured; firewall rules of the legacy program file winmx.exe named in the Connection Test
+2 :: src/api/mx/settings_keys.h :: legacy <Downloads>/WinMX :: the legacy download folder as a computed default
+2 :: src/net/overlay/overlay_search.cpp :: "winmx:<user id>"|QStringLiteral\("winmx:%1"\) :: source descriptor scheme winmx:<user id>, stored with downloads
+2 :: src/ui/README.md :: "WinMX Tahoma" :: the legacy family name of the bundled font (a stored font setting with it is read as Tahoma)
+2 :: docs/ARCHITECTURE.md :: %APPDATA%/WinMX|share/WinMX|winmx\.db|<Downloads>/WinMX :: legacy profile folder, database file and download folder of existing users, honoured as they are
+2 :: docs/research-librats.md :: winmx/room/lobby :: the test topic of the recorded research PoC run
+2 :: tests/core/tst_legacy_names.cpp :: [Ww]in[Mm][Xx] :: tests of the carry-over (legacy profile, winmx.db, Downloads/WinMX, stored defaults)
+2 :: tests/core/tst_realcore.cpp :: ~/Downloads/WinMX :: the legacy download folder named in a comment
+2 :: tests/overlay/old_meets_new.sh :: [Ww]in[Mm][Xx] :: a profile written by version 4.5 opened by the current version from the legacy default place (folder names, winmx.db, logs/winmx.log, the 4.5 program)
+2 :: tests/ui/tst_update_bridge.cpp :: [Ww]in[Mm][Xx] :: the 5.x side of legacy starter files: their names, assets under the old package name never taken, a journal of an earlier version
+2 :: tools/check-names.sh :: [Ww]in[Mm][Xx] :: this check itself
+2 :: tools/names-allowlist.txt :: [Ww]in[Mm][Xx] :: this list itself
+
+# Class 3: the original WinMX as a historical fact: the interface is modelled on WinMX 3.53
+# (Frontcode Technologies); comments, docs and tests name it as the model, the statement of
+# independence names it once.
+3 :: src/* :: original WinMX|Original WinMX|WinMX 3\.|classic WinMX|WinMX-style|WinMX-like|WinMX is named only|Windows 2000 / WinMX|winmx\.com|settings_winmx_peer_network :: the original WinMX as the model of the interface
+3 :: tests/* :: original WinMX|WinMX 3\.|classic WinMX|WinMX-style|WinMX-like|\[WinMX Language File\] :: the same in tests (and the header of a WinMX 3.x language file, which is refused)
+3 :: tools/* :: original WinMX|WinMX 3\.|classic WinMX|WinMX-style|WinMX is named only :: the same in the packaging texts
+3 :: README.md :: original WinMX|WinMX 3\.|classic WinMX|WinMX-style|WinMX is named only :: the model of the interface and the statement of independence
+3 :: NOTICE :: original WinMX|WinMX is named only :: the statement of independence
+3 :: CONTRIBUTING.md :: original WinMX :: no artwork of the original WinMX may be contributed
+3 :: CMakeLists.txt :: classic WinMX-style :: the look of mxui
+3 :: .gitignore :: original WinMX :: its screenshots are not published
+3 :: docs/UI_SPEC.md :: WinMX 3\.53 :: section 8.11 names the original's texts that were reworded
+3 :: docs/UI_SPEC.md :: original WinMX|WinMX 3\.5[0-9]|WinMX v3\.5[0-9]|WinMX-style|classic WinMX|winmxworld|WinM[Xx] ?World|winmx\.com|winmx-chat-getting_started|settings_winmx_peer_network :: descriptions of the original WinMX 3.53 screens and their reference sources (sites, help pages, screenshot files)
+3 :: docs/UI_SPEC.md :: WinMX Peer Network|WinMX Decentralized Chat|WinMX Color Scheme Files|WinMX Community Patch|WinMX Network Window|WinMX Main Thread Priority|Start WinMX hidden|restart WinMX|RESTART WINMX|main WinMX window|or keep WinMX|the WinMX software|<user> on WinMX|Title `WinMX`|_[0-9]{5} WinMX :: verbatim labels and texts quoted from the original WinMX 3.53 screens (sections 1-7, and the old labels named in section 8)
+3 :: reference/README.md :: original WinMX|WinMX v3\.5[0-9]|WinMX_v3\.5[0-9]|winmxworld|winmx\.com|WMW-[TH] .*winmx|WinMX Peer Network|WinMX Decentralized Chat|settings_winmx_peer_network :: index of the screenshots of the original WinMX, their sources and the labels they show
+3 :: docs/ARCHITECTURE.md :: WinMX 3\.5[0-9]|classic WinMX :: the interface is modelled on the original WinMX 3.53
+3 :: third_party/fonts/README.md :: WinMX 3\.5[0-9] :: Tahoma was the UI font of the original WinMX 3.53
