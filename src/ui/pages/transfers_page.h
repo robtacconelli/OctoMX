@@ -75,7 +75,14 @@ private:
     void startUpload(const mx::TransferInfo &t);
     void showNotice(const QString &text);
     int ask(const QString &title, const QString &text, int icon);
-    void deleteFile(const mx::TransferInfo &t);
+    // [ui-j] every way of removing a download (Cancel, Clear, Del, the menu, Delete File...) comes
+    // here: one question for all of them (keep the file / delete it / Cancel), or the remembered
+    // choice (Settings, File Transfers); Delete File... always asks
+    enum class RemoveWay { Cancel, Clear, DeleteFile };
+    void removeDownloads(const QList<mx::TransferInfo> &sel, RemoveWay way);
+    void onFilesDeleted(const QString &id, const QString &name, const QStringList &trashed, const QStringList &deleted,
+                        const QStringList &failed, const QStringList &errors);
+    void reportDeletes();
     // [ui-e] completed downloads: open the file (a bundle: its folder) / show it in the file manager
     void addLaunchEntries(QMenu *menu, const mx::TransferInfo &t, bool finished);   // [ui-h]
     void openTransfer(const mx::TransferInfo &t);
@@ -100,6 +107,9 @@ private:
     StaticText *m_summary;
     QTimer *m_summaryTimer;
     QString m_notice;                          // transient status-bar note (8 s)
+    // [ui-j] outcome of deletes, reported together (status bar; a message box for what failed)
+    QTimer *m_deleteReport = nullptr;
+    QStringList m_trashedNames, m_deletedNames, m_failedPaths, m_failedErrors;
     bool m_splitRestored = false;
 };
 

@@ -733,7 +733,16 @@ QString sourceStatus(const SearchSource &s, bool torrentSrc)
     // [merge-1] the copy matched only by name and size: the mark the user sees
     if (s.extra.value(QStringLiteral("candidate")).toBool())
         parts << QObject::tr("same name and size, checked while downloading");
-    if (torrentSrc) {
+    if (torrentSrc && s.net != Net::BitTorrent && s.net != Net::Unknown) {
+        // [ui-j] eD2k / Kad report sources (and how many have the complete file), not a swarm:
+        // their own words, never "seeds" and "peers"
+        const int all = qMax(qMax(0, s.peers), qMax(0, s.seeds));
+        const int complete = qMax(0, s.seeds);
+        QString t = all == 1 ? QObject::tr("1 source") : QObject::tr("%1 sources").arg(all);
+        if (complete > 0 && complete < all)
+            t += QObject::tr(" (%1 complete)").arg(complete);
+        parts << t;
+    } else if (torrentSrc) {
         parts << seedsPeersText(qMax(0, s.seeds), qMax(0, s.peers));
     } else if (s.totalSlots > 0 && s.freeSlots > 0) {
         parts << QObject::tr("%1 of %2 available").arg(s.freeSlots).arg(s.totalSlots);

@@ -408,6 +408,38 @@ struct PartialFile {
     qint64    size = 0;
     QDateTime modified;
     QString   downloadId;              // non-empty: belongs to this download (cannot be attached again)
+    // [added by ui-j] the partial data of a download removed from the list with "keep the file":
+    // name = the download's name, link = its identity (magnet: / ed2k://), held = bytes of data in
+    // it. Resuming it (TransferService::resumeDownload with this path, or downloading the same file
+    // again) continues the download where it stopped.
+    bool      kept = false;
+    QString   link;
+    qint64    held = -1;
+    qint64    total = 0;               // size of the whole download (0 = unknown)
+};
+
+// [added by ui-j] What removing a download from the list leaves or deletes on disk
+// (TransferService::diskInfo / removeDownload).
+enum class FileRemoval : int {
+    Keep = 0,                          // the row goes; a finished file stays, partial data stays and can be resumed
+    Trash = 1,                         // the row goes; its data goes to the trash / Recycle Bin (what cannot stays)
+    TrashOrDelete = 2,                 // the same, and what cannot go to the trash is deleted for good (the user was told)
+};
+struct DownloadDiskInfo {
+    bool        known = false;         // the core reported it (false: an old core, nothing is deleted)
+    bool        finished = false;
+    bool        torrent = false;
+    QStringList paths;                 // what "delete" removes: the finished file or folder, or the partial data
+                                       // (part file, torrent files, libtorrent's .parts file); only what this
+                                       // download created
+    qint64      bytes = 0;             // data in them now (finished: the file sizes; partial: what was received)
+    qint64      total = 0;             // size of the whole download (0 = unknown)
+    QStringList kept;                  // files the download uses but did not create: stay in every case
+    QString     keptWhy;               // why ("they were on the disk before this download", ...)
+    QString     inPlaceFile;           // resumed from this file in place (Manually Resume / Load Incomplete):
+                                       // deleting the data deletes this file
+    bool        trash = true;          // every path can go to the trash / Recycle Bin
+    QString     folder;                // where the data is (for the question)
 };
 
 // ---------------------------------------------------------------- chat

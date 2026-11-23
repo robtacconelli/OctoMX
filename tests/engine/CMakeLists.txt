@@ -4,7 +4,8 @@
 set(MX_ENGINE_TEST_TMP ${CMAKE_BINARY_DIR}/tmp)
 file(MAKE_DIRECTORY ${MX_ENGINE_TEST_TMP})
 # [engine-4] a real core in a test must never write into the real $HOME (default incoming dir =
-# <Downloads>/OctoMX): every test runs with HOME / XDG dirs inside the build tree
+# <Downloads>/OctoMX): every test runs with HOME / XDG dirs inside the build tree; [ui-j] MX_OS_ROOT
+# there too, so a deleted download's data goes to the trash seam of mx/trash.h, never the real trash
 set(MX_TEST_HOME ${CMAKE_BINARY_DIR}/test-home)
 file(MAKE_DIRECTORY ${MX_TEST_HOME})
 
@@ -15,7 +16,7 @@ function(mx_engine_test name)
     string(REPLACE "tst_" "engine_" test_name ${name})
     add_test(NAME ${test_name} COMMAND ${name})
     set_tests_properties(${test_name} PROPERTIES
-        ENVIRONMENT "MX_PORT_MAPPING=0;TMPDIR=${MX_ENGINE_TEST_TMP};QT_QPA_PLATFORM=offscreen;HOME=${MX_TEST_HOME};XDG_DOWNLOAD_DIR=${MX_TEST_HOME}/Downloads;XDG_CONFIG_HOME=${MX_TEST_HOME}/.config;XDG_DATA_HOME=${MX_TEST_HOME}/.local/share"
+        ENVIRONMENT "MX_PORT_MAPPING=0;TMPDIR=${MX_ENGINE_TEST_TMP};QT_QPA_PLATFORM=offscreen;HOME=${MX_TEST_HOME};XDG_DOWNLOAD_DIR=${MX_TEST_HOME}/Downloads;XDG_CONFIG_HOME=${MX_TEST_HOME}/.config;XDG_DATA_HOME=${MX_TEST_HOME}/.local/share;MX_OS_ROOT=${CMAKE_BINARY_DIR}/os-root"
         TIMEOUT 600)
 endfunction()
 
@@ -26,6 +27,7 @@ mx_engine_test(tst_engine_order)     # [dl-1] sequential / first and last pieces
 mx_engine_test(tst_engine_merge)     # [merge-1] copies matched by name and size: judge, confirm, drop, waste cap
 mx_engine_test(tst_engine_map)       # [ui-i] the map of the file for the Transfers bar
 mx_engine_test(tst_engine_join)      # [eng-1] torrents that hold the same file: ranking, no file list, restart, row
+mx_engine_test(tst_engine_remove)    # [ui-j] removing a download: keep the file (and resume it) or delete it
 if(TARGET mxnet_bt)
     mx_engine_test(tst_engine_bt)
     target_link_libraries(tst_engine_bt PRIVATE mxnet_bt)

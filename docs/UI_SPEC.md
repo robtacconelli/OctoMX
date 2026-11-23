@@ -1726,3 +1726,54 @@ Fidelity checks must treat these as intentional (the classic forms stay reachabl
   say `Complete`. The status tool tip starts with `412 MB of 1.09 GB (38 %), 6 parts downloading`
   (parts = runs of cells in progress). The core reports the map in `TransferInfo::pieceMap` / `pieceFill`
   (512 cells: state and verified share per cell).
+* **Removing a download asks what happens to its file** [ui-j] (owner: "when you delete a transfer
+  (completed or not) to keep the file (complete or partial) or to delete both, row and file"). Every way
+  a download leaves the list (row D `Cancel` / `Clear`, the file-row menu `Cancel` / `Clear` /
+  `Delete File...`, Del, a multi-selection: one question for all) shows one classic question,
+  `Remove Download` / `Remove Downloads`: it names the file (or `these 5 downloads`, the first six by name,
+  `and 3 more`), says what is on the disk (`The download is finished. The file (263 MB) is in ...`,
+  `The download is not finished: 120 of 263 MB are on the disk, in ...`, `On the disk: 1.5 GB in 2 finished
+  files and the partial data of 3 downloads.`), what keeping does and, in bold, what deleting does
+  (`moved to the trash` / `Recycle Bin`, `where you can restore it`, or `deleted for good. It is on a drive
+  without a Recycle Bin and cannot be restored.` with the warning icon), with the buttons
+  `Remove from the list, keep the file` / `Remove from the list and delete the file` / `Cancel`
+  (plural `files` for several) and `Do not ask again`. Cancel is the default button (Enter and Esc
+  change nothing); the delete button is off when nothing is on the disk. Settings ▸ File Transfers
+  `Removing a download: [Ask what to do with the file | Keep the file | Delete the file too]` is the
+  remembered choice; `Delete File...` asks every time, and a delete that would be for good (no trash) or
+  that would delete a file the user chose for Manually Resume / Load Incomplete is always asked. Keep:
+  a finished file stays; partial data stays where it is and OctoMX remembers the download
+  (`<profile>/kept-downloads.json`): Load Incomplete lists it by its name (`Removed download, 120 of
+  263 MB kept`) with its link, the Search mark `Matches incomplete local file` (yellow) shows it, and
+  downloading the same file again (or Resume in Load Incomplete) brings the download back with what it
+  had (part files: the range map; torrents: libtorrent checks the data it finds). Delete: only what the
+  download created goes (the finished file, or the part file / the torrent's files and libtorrent's
+  `.parts` file, the folder of a folder torrent as one item when the download created it and nothing
+  else is in it, else its files and the folders they leave empty), with its resume data and its record
+  in the profile; files that were there before the download, a row that only points to a library file
+  (`Complete (already in your library)`) and a finished file whose size changed since are never deleted
+  (the question names them). The classic `Confirm File Delete` (`Are you sure you want to send ... to
+  the Recycle Bin?` `Yes` / `No`) and the setting `Confirm cancel` are gone: this question replaces both.
+  `Clear Complete` (and the automatic clearing of finished downloads) keeps its classic meaning: it tidies
+  the list, never asks and never deletes a file; the upload buttons never touch the shared files. Del on
+  the download list is `Clear` (it was `Cancel`, which ignored finished rows).
+* **Shared Files ▸ Delete File... / Delete Folder...** [ui-j] (owner: "in shared files, give the
+  possibility to delete a file or folder"; not in 3.53, which could only unshare). In the menu of a file
+  row (`Delete File...`, or `Delete 3 Items...` for a selection), of a folder row (`Delete Folder...`)
+  and with Del. The question (`Delete File` / `Delete Folder` / `Delete Shared Folder` / `Delete Files`)
+  names the file, or the folder with its number of files and their size, says `It leaves OctoMX's shared
+  files and the disk` and whether it goes to the trash / Recycle Bin or is deleted for good; for a shared
+  folder (one added with Share Folder) the path is in bold, `Deleting it removes the share AND deletes
+  its content (...) from the disk`, and `To stop sharing it without deleting anything, use Unshare
+  Folder instead.` Buttons `Delete File` / `Delete Folder` / `Delete 3 Items` and `Cancel` (the default).
+  Refused with the reason (nothing deleted, no question): anything outside the shared folders or reached
+  through a link that leads out of them; the incoming folder itself or a folder that holds it; the folder
+  of unfinished downloads, anything in it or holding it; the profile and the program folder likewise; the
+  data of a download still in the Transfers list (unfinished, or a seeding torrent: `Remove that download
+  there first: it can delete its file too.`); a file being uploaded right now (`... is being sent to
+  <user> right now. Cancel that upload on the Transfers page, or wait until it has finished`: refused,
+  never cut off). The library forgets the deleted files at once (the page, what others browse and find).
+* **Search** [ui-j]: the results filter hides a merged row that has an excluded word even when one of its
+  source rows does not (so `-eD2k -Kad` or `-debian` alone filter; before, a source row without the word
+  kept its parent on the list). Source rows of eD2k / Kad say `4 sources (2 complete)`, never `seeds` and
+  `peers` (BitTorrent rows keep `2 seeds, 2 peers`).

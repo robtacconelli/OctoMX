@@ -315,6 +315,7 @@ public:
     QHash<QString, FakeTorrent> known;   // "swarm knowledge": id → torrent (metadata + data)
     QHash<QString, FakeTorrent> active;
     int metadataDelayMs = 100;
+    bool checkOnAdd = false;             // [ui-j] like libtorrent: data already at the save path counts once the metadata is known
     QList<QPair<int, bool>> reserveLog;  // (piece, reserve)
     int maxReservedSeen = 0;
     double maxReservedShareSeen = 0;
@@ -377,6 +378,11 @@ public:
             QTimer::singleShot(metadataDelayMs, this, [this, id] {
                 if (!active.contains(id)) return;
                 active[id].metadata = true;
+                if (checkOnAdd) {   // [ui-j] libtorrent checks the files it finds before it downloads
+                    const QStringList before = rechecks;
+                    recheck(id);
+                    rechecks = before;
+                }
                 emit events->torrentMetadata(id);
             });
         }

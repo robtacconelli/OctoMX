@@ -25,8 +25,10 @@
 #include "mx/download_order.h"
 #include "mx/services.h"
 #include "mx/settings_keys.h"
+#include "mx/trash.h"
 #include "ui/dialogs/file_download_dialog.h"
 #include "ui/dialogs/preview_dialog.h"
+#include "ui/dialogs/remove_dialogs.h"
 #include "ui/dialogs/simple_dialogs.h"
 #include "ui/kit/tips.h"
 #include "ui/kit/colors.h"
@@ -156,6 +158,12 @@ TransfersPage::TransfersPage(mx::Core *core, MainWindow *mw, QWidget *parent)
         }
     });
     connect(core->transfers(), &TransferService::transferRemoved, this, kick);
+    // [ui-j] what happened to the files of removed downloads
+    m_deleteReport = new QTimer(this);
+    m_deleteReport->setSingleShot(true);
+    m_deleteReport->setInterval(300);
+    connect(m_deleteReport, &QTimer::timeout, this, &TransfersPage::reportDeletes);
+    connect(core->transfers(), &TransferService::downloadFilesDeleted, this, &TransfersPage::onFilesDeleted);
     updateSummary();
 }
 
@@ -209,7 +217,8 @@ QWidget *TransfersPage::buildDownloadHalf()
     });
 
     // [ui-g] what each button does
-    m_rowC[0]->setToolTip(tr("Remove the finished and cancelled downloads from the list; the files stay on your disk"));
+    m_rowC[0]->setToolTip(tr("Remove the finished downloads from the list; their files stay on your disk (nothing is deleted, "
+                             "no question)"));
     m_rowC[1]->setToolTip(tr("Continue a download from an earlier session: pick a partial file from the incomplete folder "
                              "and OctoMX looks for sources again."));
     m_rowC[2]->setToolTip(tr("Reconnect at once to every source of the downloads that failed, timed out or are queued "
@@ -217,9 +226,11 @@ QWidget *TransfersPage::buildDownloadHalf()
     m_rowC[3]->setToolTip(tr("Settings for how many downloads and uploads run at the same time and how queues work"));
     m_rowC[4]->setToolTip(tr("Settings for downloads: folders, what happens when a download finishes, limits"));
     m_rowC[5]->setToolTip(tr("Open the folder where finished downloads are saved"));
-    m_rowD[0]->setToolTip(tr("Stop the selected downloads; the partial file is kept so Load Incomplete can continue it "
-                             "(with a source row selected: drop only that source)"));
-    m_rowD[1]->setToolTip(tr("Remove the selected rows from the list; a partial file stays on the disk"));
+    m_rowD[0]->setToolTip(tr("Stop the selected unfinished downloads and remove them from the list; you are asked whether the "
+                             "partial file stays (Load Incomplete continues it) or is deleted (with a source row selected: drop "
+                             "only that source)"));
+    m_rowD[1]->setToolTip(tr("Remove the selected downloads from the list, finished or not; you are asked whether the file stays "
+                             "or is deleted (Settings, File Transfers can remember the answer)"));
     m_retry->setToolTip(tr("Connect to the known sources of the selected downloads again now, without waiting for the next attempt"));
     m_rowD[3]->setToolTip(tr("Search all networks again for more users who have the selected downloads"));
     m_afs->setToolTip(tr("Search again for more sources of the selected downloads (and of new ones) every so many minutes "
@@ -357,8 +368,8 @@ bool TransfersPage::eventFilter(QObject *o, QEvent *e)
             pasteLinks();
             return true;
         }
-        if (k->key() == Qt::Key_Delete) {
-            cancelSelected();
+        if (k->key() == Qt::Key_Delete) {   // [ui-j] Del = Clear: the selected rows leave the list (the question)
+            clearSelected();
             return true;
         }
     }
@@ -503,38 +514,19 @@ void TransfersPage::cancelSelected()
 {
     if (cancelSelectedSources())
         return;
-    const QList<TransferInfo> sel = selectedDownloads();
-    if (sel.isEmpty())
-        return;
-    // [ui-g] the question names what is cancelled (the row the user clicked), as Delete File does
-    QStringList names;
-    for (const TransferInfo &t : sel)
+    // Cancel acts on the unfinished downloads of the selection (a finished one is left alone)
+    QList<TransferInfo> sel;
+    for (const TransferInfo &t : selectedDownloads())
         if (!transfers::isFinished(t))
-            names << t.name;
-    if (names.isEmpty())
-        return;
-    QString text;
-    if (names.size() == 1) {
-        text = tr("Cancel the download of '%1'?\n\nThe partial file is kept; Load Incomplete can continue it later.").arg(names.first());
-    } else {
-        QStringList shown = names.mid(0, 5);
-        if (names.size() > 5)
-            shown << tr("and %1 more").arg(names.size() - 5);
-        text = tr("Cancel these %1 downloads?\n\n%2\n\nThe partial files are kept.").arg(names.size()).arg(shown.join(QLatin1Char('\n')));
-    }
-    if (core()->settings()->b(keys::transfers::ConfirmCancel) && ask(tr("OctoMX"), text, QMessageBox::Question) != QMessageBox::Yes)
-        return;
-    for (const TransferInfo &t : sel)
-        if (!transfers::isFinished(t))
-            core()->transfers()->cancel(t.id, false);
+            sel << t;
+    removeDownloads(sel, RemoveWay::Cancel);
 }
 
 void TransfersPage::clearSelected()
 {
     if (cancelSelectedSources())
         return;
-    for (const TransferInfo &t : selectedDownloads())
-        core()->transfers()->cancel(t.id, false);   // removes the row, keeps the (partial) file
+    removeDownloads(selectedDownloads(), RemoveWay::Clear);
 }
 
 void TransfersPage::retrySelected()
@@ -562,28 +554,92 @@ int TransfersPage::ask(const QString &title, const QString &text, int icon)
 
 std::function<int(const QString &, const QString &)> TransfersPage::s_askHook;
 
-void TransfersPage::deleteFile(const TransferInfo &t)
+void TransfersPage::removeDownloads(const QList<TransferInfo> &sel, RemoveWay way)
 {
-    // a manual resume uses the chosen file in place: deleting the data deletes that file
+    if (sel.isEmpty())
+        return;
+    TransferService *ts = core()->transfers();
     Settings *st = core()->settings();
-    QVariantMap resumed = st->value(QStringLiteral("ui/resumedFiles")).toMap();
-    const QString own = resumed.value(t.id).toString();
-    if (!own.isEmpty() && !transfers::isFinished(t)) {
-        if (ask(tr("OctoMX"),
-                tr("This download was resumed from the file\n\n%1\n\nand uses that file in place.  Deleting the download's "
-                   "data will delete this file from your computer.\n\nDelete it anyway?")
-                    .arg(QDir::toNativeSeparators(own)),
-                QMessageBox::Warning) != QMessageBox::Yes)
-            return;
-    } else {
-        const QString shown = transfers::isFinished(t) ? t.name : QStringLiteral("__INCOMPLETE___") + t.name;
-        if (ask(tr("Confirm File Delete"), tr("Are you sure you want to send '%1' to the Recycle Bin?").arg(shown),
-                QMessageBox::Question) != QMessageBox::Yes)
-            return;
+    QList<RemoveItem> items;
+    bool risky = false;   // something would be deleted for good, or a file the user chose is written into
+    for (const TransferInfo &t : sel) {
+        RemoveItem it{t, ts->diskInfo(t.id)};
+        if (!it.disk.paths.isEmpty() && (!it.disk.trash || !it.disk.inPlaceFile.isEmpty()))
+            risky = true;
+        items << it;
     }
-    core()->transfers()->cancel(t.id, true);
-    if (resumed.remove(t.id))
+    const QString remembered = st->s(keys::transfers::RemoveAction);
+    bool askNow = way == RemoveWay::DeleteFile || (remembered != QLatin1String("keep") && remembered != QLatin1String("delete"));
+    if (remembered == QLatin1String("delete") && risky)
+        askNow = true;   // "deleted for good" is never done without the question
+    RemoveDownloadDialog::Choice choice = remembered == QLatin1String("delete") ? RemoveDownloadDialog::Delete : RemoveDownloadDialog::Keep;
+    if (askNow) {
+        RemoveDownloadDialog dlg(items, this);
+        choice = dlg.ask();
+        if (choice == RemoveDownloadDialog::Cancel)
+            return;
+        if (dlg.dontAskAgain())
+            st->setValue(keys::transfers::RemoveAction, choice == RemoveDownloadDialog::Delete ? QStringLiteral("delete") : QStringLiteral("keep"));
+    }
+    // a manual resume used its file in place: the row is gone, so is the note about it
+    QVariantMap resumed = st->value(QStringLiteral("ui/resumedFiles")).toMap();
+    bool resumedChanged = false;
+    for (const RemoveItem &it : std::as_const(items)) {
+        FileRemoval mode = FileRemoval::Keep;
+        if (choice == RemoveDownloadDialog::Delete && !it.disk.paths.isEmpty())
+            mode = it.disk.trash ? FileRemoval::Trash : (askNow ? FileRemoval::TrashOrDelete : FileRemoval::Trash);
+        ts->removeDownload(it.t.id, mode);
+        resumedChanged = resumed.remove(it.t.id) > 0 || resumedChanged;
+    }
+    if (resumedChanged)
         st->setValue(QStringLiteral("ui/resumedFiles"), resumed);
+    if (choice == RemoveDownloadDialog::Keep)
+        showNotice(items.size() == 1 ? tr("Removed \"%1\" from the list; its file stays on the disk.").arg(items.first().t.name)
+                                     : tr("Removed %1 downloads from the list; their files stay on the disk.").arg(items.size()));
+}
+
+void TransfersPage::onFilesDeleted(const QString &id, const QString &name, const QStringList &trashed, const QStringList &deleted,
+                                   const QStringList &failed, const QStringList &errors)
+{
+    Q_UNUSED(id)
+    if (!trashed.isEmpty())
+        m_trashedNames << name;
+    if (!deleted.isEmpty())
+        m_deletedNames << name;
+    m_failedPaths << failed;
+    m_failedErrors << errors;
+    m_deleteReport->start();
+}
+
+void TransfersPage::reportDeletes()
+{
+    const QString where = trash::placeName();
+    QStringList parts;
+    if (m_trashedNames.size() == 1)
+        parts << tr("Moved \"%1\" to the %2.").arg(m_trashedNames.first(), where);
+    else if (m_trashedNames.size() > 1)
+        parts << tr("Moved the files of %1 downloads to the %2.").arg(m_trashedNames.size()).arg(where);
+    if (m_deletedNames.size() == 1)
+        parts << tr("Deleted \"%1\" for good.").arg(m_deletedNames.first());
+    else if (m_deletedNames.size() > 1)
+        parts << tr("Deleted the files of %1 downloads for good.").arg(m_deletedNames.size());
+    const QStringList failed = m_failedPaths, errors = m_failedErrors;
+    m_trashedNames.clear();
+    m_deletedNames.clear();
+    m_failedPaths.clear();
+    m_failedErrors.clear();
+    if (!failed.isEmpty()) {
+        QStringList shown;
+        for (int i = 0; i < failed.size() && i < 5; ++i)
+            shown << QDir::toNativeSeparators(failed.at(i));
+        if (failed.size() > 5)
+            shown << tr("and %1 more").arg(failed.size() - 5);
+        launchFailed(tr("These files could not be deleted and are still on the disk:\n\n%1\n\n%2")
+                         .arg(shown.join(QLatin1Char('\n')), errors.value(0)));
+        return;
+    }
+    if (!parts.isEmpty())
+        showNotice(parts.join(QLatin1Char(' ')));
 }
 
 void TransfersPage::changeDestination(const TransferInfo &t)
@@ -615,7 +671,7 @@ void TransfersPage::loadIncomplete()
     if (!link.isEmpty()) {
         DownloadRequest req;
         req.uri = link;
-        req.name = QFileInfo(file).fileName();
+        req.name = dlg.chosenName().isEmpty() ? QFileInfo(file).fileName() : dlg.chosenName();
         if (req.name.startsWith(QLatin1String("__INCOMPLETE___")))
             req.name = req.name.mid(15);
         const QString id = ts->resumeDownload(req, file);
@@ -629,7 +685,7 @@ void TransfersPage::loadIncomplete()
         return;
     }
     // no link: search for the name; the double-clicked result resumes from the file
-    QString name = QFileInfo(file).completeBaseName();
+    QString name = QFileInfo(dlg.chosenName().isEmpty() ? file : dlg.chosenName()).completeBaseName();
     if (name.startsWith(QLatin1String("__INCOMPLETE___")))
         name = name.mid(15);
     mainWindow()->startSearch(name);
@@ -789,10 +845,23 @@ void TransfersPage::showDownloadMenu(const QModelIndex &viewIndex, const QPoint 
         menu->popup(globalPos);
         return;
     }
-    menu->addAction(tr("Cancel"), this, &TransfersPage::cancelSelected)->setEnabled(!finished);
-    menu->addAction(tr("Clear"), this, &TransfersPage::clearSelected);
+    // [ui-j] Cancel, Clear and Delete File... remove the row(s) through the same question
+    QAction *cancelAct = menu->addAction(tr("Cancel"), this, &TransfersPage::cancelSelected);
+    cancelAct->setEnabled(!finished);
+    cancelAct->setToolTip(tr("Stop the download and remove it from the list; you choose whether its partial file stays or is deleted"));
+    menu->addAction(tr("Clear"), this, &TransfersPage::clearSelected)
+        ->setToolTip(tr("Remove the download from the list; you choose whether its file stays or is deleted"));
     menu->addSeparator();
-    menu->addAction(tr("Delete File"), this, [this, t] { deleteFile(t); });
+    QAction *delAct = menu->addAction(tr("Delete File..."), this, [this, t] {
+        QList<TransferInfo> sel = selectedDownloads();
+        bool inSel = false;
+        for (const TransferInfo &x : std::as_const(sel))
+            inSel = inSel || x.id == t.id;
+        removeDownloads(inSel ? sel : QList<TransferInfo>{t}, RemoveWay::DeleteFile);
+    });
+    delAct->setObjectName(QStringLiteral("actDeleteFile"));
+    delAct->setToolTip(tr("Remove the download from the list and choose to delete its file (finished or partial); you are "
+                          "always asked first"));
     menu->addAction(tr("Trim 10K from end of file"))->setEnabled(false);
     menu->addSeparator();
     menu->addAction(tr("Find Sources Now"), this, &TransfersPage::findSourcesSelected)->setEnabled(!finished);

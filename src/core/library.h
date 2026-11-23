@@ -54,6 +54,7 @@ public:
     bool isScanning() const override;
     QString scanStatus() const override;
     void unshareFile(const QString &path) override;   // a file or a whole sub-directory
+    void forgetPaths(const QStringList &paths) override;   // [ui-j] deleted from the disk
     // [glue-3] Shared File Types filter (settings library/sharedTypes, otherExtensions,
     // shareUnlistedTypes), sub-folder exclusion, media folder suggestions
     QStringList sharedTypes() const override;

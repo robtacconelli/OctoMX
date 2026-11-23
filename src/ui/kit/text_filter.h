@@ -28,6 +28,9 @@ public:
     bool isEmpty() const { return m_need.isEmpty() && m_not.isEmpty(); }
     // true when `text` (for a row: its searchable cells joined with tabs) passes the filter
     bool matches(const QString &text) const;
+    // [ui-j] the two halves of matches(): every required term is there / an excluded term is there
+    bool hasRequired(const QString &text) const;
+    bool excludes(const QString &text) const;
     QStringList required() const { return m_need; }
     QStringList excluded() const { return m_not; }
 

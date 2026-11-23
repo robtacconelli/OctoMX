@@ -12,13 +12,18 @@
 #include "core/library.h"
 #include "core/log.h"
 #include "core/search_manager.h"
+#include "core/search_merge.h"
 #include "core/upload_tracker.h"
 #include "mx/settings_keys.h"
+#include "mx/trash.h"
 #include "mxhash/encoding.h"
+#include "mxhash/links.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QSaveFile>
 #include <QtCore/QMutex>
 #include <QtCore/QPointer>
 #include <QtCore/QStorageInfo>
@@ -57,6 +62,73 @@ quint64 infoSignature(const TransferInfo &t)
         num(int(s.net)); add(s.user.name); add(s.statusText); num(s.bytes); num(s.rateBps); add(s.id); num(s.priority); add(s.client);
     }
     return qHash(b, 0x9e3779b9u);
+}
+
+// [ui-j] a download removed with "keep the file": its record as JSON (kept-downloads.json)
+QVariantMap recordToVariant(const DownloadRecord &r)
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("id"), r.id);
+    m.insert(QStringLiteral("name"), r.name);
+    m.insert(QStringLiteral("size"), r.size);
+    m.insert(QStringLiteral("hashes"), r.hashes.toVariant());
+    m.insert(QStringLiteral("saveDir"), r.saveDir);
+    m.insert(QStringLiteral("savePath"), r.savePath);
+    m.insert(QStringLiteral("uri"), r.uri);
+    QVariantList wanted;
+    for (int i : r.wantedFiles) wanted << i;
+    m.insert(QStringLiteral("wanted"), wanted);
+    m.insert(QStringLiteral("priority"), r.priority);
+    m.insert(QStringLiteral("isBundle"), r.isBundle);
+    QVariantList files;
+    for (const BundleFile &f : r.files)
+        files << QVariantMap{{QStringLiteral("path"), f.path}, {QStringLiteral("size"), f.size}, {QStringLiteral("index"), f.index},
+                             {QStringLiteral("done"), f.done}, {QStringLiteral("wanted"), f.wanted}};
+    m.insert(QStringLiteral("files"), files);
+    m.insert(QStringLiteral("done"), r.done);
+    m.insert(QStringLiteral("added"), r.added.toString(Qt::ISODate));
+    m.insert(QStringLiteral("state"), QString::fromLatin1(r.engineState.toBase64()));
+    return m;
+}
+
+DownloadRecord recordFromVariant(const QVariantMap &m)
+{
+    DownloadRecord r;
+    r.id = m.value(QStringLiteral("id")).toString();
+    r.name = m.value(QStringLiteral("name")).toString();
+    r.size = m.value(QStringLiteral("size")).toLongLong();
+    r.hashes = FileHashes::fromVariant(m.value(QStringLiteral("hashes")).toMap());
+    r.saveDir = m.value(QStringLiteral("saveDir")).toString();
+    r.savePath = m.value(QStringLiteral("savePath")).toString();
+    r.uri = m.value(QStringLiteral("uri")).toString();
+    for (const QVariant &v : m.value(QStringLiteral("wanted")).toList()) r.wantedFiles << v.toInt();
+    r.priority = m.value(QStringLiteral("priority")).toInt();
+    r.isBundle = m.value(QStringLiteral("isBundle")).toBool();
+    for (const QVariant &v : m.value(QStringLiteral("files")).toList()) {
+        const QVariantMap f = v.toMap();
+        BundleFile b;
+        b.path = f.value(QStringLiteral("path")).toString();
+        b.size = f.value(QStringLiteral("size")).toLongLong();
+        b.index = f.value(QStringLiteral("index")).toInt();
+        b.done = f.value(QStringLiteral("done")).toLongLong();
+        b.wanted = f.value(QStringLiteral("wanted"), true).toBool();
+        r.files << b;
+    }
+    r.done = m.value(QStringLiteral("done")).toLongLong();
+    r.added = QDateTime::fromString(m.value(QStringLiteral("added")).toString(), Qt::ISODate);
+    r.engineState = QByteArray::fromBase64(m.value(QStringLiteral("state")).toString().toLatin1());
+    return r;
+}
+
+bool pathOnDisk(const QString &p)
+{
+    const QFileInfo fi(p);
+    return !p.isEmpty() && (fi.exists() || fi.isSymLink());
+}
+
+QString samePath(const QString &p)
+{
+    return QDir::cleanPath(QDir::fromNativeSeparators(QFileInfo(p).absoluteFilePath()));
 }
 } // namespace
 
@@ -194,7 +266,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
             const QString id = d->id();
             QTimer::singleShot(qMax(0, sec) * 1000, q, [this, id] {
                 Download *x = byId.value(id);
-                if (x && x->isFinished()) removeDownload(x, false);
+                if (x && x->isFinished()) removeDownload(x, FileRemoval::Keep);
             });
         }
     }
@@ -302,20 +374,206 @@ struct DownloadEngine::Private : public engine::EngineHost {
         byId.insert(rec.id, d);
         return d;
     }
-    void removeDownload(Download *d, bool deleteData)
+    // [ui-j] removing a download: Keep (finished file stays; partial data stays and is remembered
+    // so the download can continue from it) or Trash / TrashOrDelete (its own data, nothing else)
+    struct KeptDownload {
+        DownloadRecord rec;
+        QStringList paths;                    // where its data is
+        qint64 held = 0;
+        QDateTime keptAt;
+    };
+    QList<KeptDownload> kept;
+    struct PendingDelete {
+        QString id, name, torrentId;
+        QStringList paths, pruneDirs;
+        bool forGood = false;
+    };
+    QList<PendingDelete> pendingDeletes;      // torrents: their files go once libtorrent let them go
+    QSet<QString> removingTorrents;           // torrents removed with their download, until the backend confirms
+    qint64 lastKeptCheck = 0;
+
+    QString keptFile() const
+    {
+        return ctx.profileDir.isEmpty() ? QString() : QDir(ctx.profileDir).filePath(QStringLiteral("kept-downloads.json"));
+    }
+    void loadKept()
+    {
+        kept.clear();
+        QFile f(keptFile());
+        if (keptFile().isEmpty() || !f.open(QIODevice::ReadOnly)) return;
+        const QVariantMap root = QJsonDocument::fromJson(f.readAll()).toVariant().toMap();
+        for (const QVariant &v : root.value(QStringLiteral("kept")).toList()) {
+            const QVariantMap m = v.toMap();
+            KeptDownload k;
+            k.rec = recordFromVariant(m.value(QStringLiteral("record")).toMap());
+            k.paths = m.value(QStringLiteral("paths")).toStringList();
+            k.held = m.value(QStringLiteral("held")).toLongLong();
+            k.keptAt = QDateTime::fromString(m.value(QStringLiteral("keptAt")).toString(), Qt::ISODate);
+            if (!k.rec.id.isEmpty() && !k.paths.isEmpty()) kept << k;
+        }
+        pruneKept();
+    }
+    void saveKept()
+    {
+        if (keptFile().isEmpty()) return;
+        if (kept.isEmpty()) {
+            QFile::remove(keptFile());
+            return;
+        }
+        QVariantList l;
+        for (const KeptDownload &k : std::as_const(kept))
+            l << QVariantMap{{QStringLiteral("record"), recordToVariant(k.rec)}, {QStringLiteral("paths"), k.paths},
+                             {QStringLiteral("held"), k.held}, {QStringLiteral("keptAt"), k.keptAt.toString(Qt::ISODate)}};
+        QSaveFile f(keptFile());
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QJsonDocument::fromVariant(QVariantMap{{QStringLiteral("v"), 1}, {QStringLiteral("kept"), l}}).toJson(QJsonDocument::Indented));
+            if (!f.commit()) qCWarning(lcEngine) << "cannot write" << keptFile();
+        }
+    }
+    // kept data that is gone from the disk (deleted by the user, resumed elsewhere) is forgotten
+    void pruneKept()
+    {
+        bool changedAny = false;
+        for (int i = int(kept.size()) - 1; i >= 0; --i) {
+            bool any = false;
+            for (const QString &p : std::as_const(kept.at(i).paths)) any = any || pathOnDisk(p);
+            if (!any) {
+                qCInfo(lcEngine) << "kept partial download" << kept.at(i).rec.id << kept.at(i).rec.name << "is gone from the disk";
+                kept.removeAt(i);
+                changedAny = true;
+            }
+        }
+        while (kept.size() > 500) { kept.removeFirst(); changedAny = true; }
+        if (changedAny) saveKept();
+    }
+    int keptForRequest(const DownloadRequest &req) const
+    {
+        const QString uri = req.uri.trimmed();
+        for (int i = 0; i < kept.size(); ++i) {
+            const DownloadRecord &r = kept.at(i).rec;
+            if (!req.hashes.isEmpty() && r.hashes.matches(req.hashes)) return i;
+            if (req.hashes.isEmpty() && !uri.isEmpty() && r.uri.trimmed() == uri) return i;
+        }
+        // the rule of the "matches incomplete local file" mark (RealCore::flagHit): same name and size
+        if (req.size >= 1024 * 1024 && !req.name.isEmpty()) {
+            const QString norm = SearchMerger::normalizedName(req.name);
+            for (int i = 0; i < kept.size(); ++i) {
+                const DownloadRecord &r = kept.at(i).rec;
+                if (r.size == req.size && !r.hashes.conflicts(req.hashes) && SearchMerger::normalizedName(r.name) == norm) return i;
+            }
+        }
+        return -1;
+    }
+    int keptForPath(const QString &path) const
+    {
+        const QString p = samePath(path);
+        for (int i = 0; i < kept.size(); ++i)
+            for (const QString &k : kept.at(i).paths)
+                if (samePath(k) == p) return i;
+        return -1;
+    }
+    // the kept download comes back to the list and continues from its data
+    Download *resurrect(int i, const DownloadRequest *req)
+    {
+        KeptDownload k = kept.takeAt(i);
+        saveKept();
+        DownloadRecord r = k.rec;
+        if (byId.contains(r.id)) r.id = newDownloadId();
+        const bool paused = (req && req->startPaused) || (ctx.settings && ctx.settings->b(keys::transfers::StartPaused));
+        r.state = int(paused ? TransferState::Paused : TransferState::Queued);
+        r.statusText = transferStateText(TransferState(r.state));
+        r.errorText.clear();
+        r.sortOrder = list.isEmpty() ? 0 : list.last()->record().sortOrder + 1;
+        Download *x = adopt(r);
+        x->restoreState(r.engineState);
+        if (x->isPausedByUser() && !paused) x->setUserPaused(false);
+        if (req) {
+            x->mergeRequest(*req);
+            x->addSources(req->sources, nullptr, true);
+        }
+        x->persist(true);
+        qCInfo(lcEngine) << "resumed kept download" << r.id << r.name << "from" << k.paths << "with" << k.held << "bytes";
+        emit q->transferAdded(x->info());
+        rebalance();
+        return x;
+    }
+    void removeDownload(Download *d, FileRemoval mode)
     {
         const QString id = d->id();
-        d->cancel(deleteData);
+        const QString name = d->record().name;
+        const bool finished = d->isFinished();
+        QStringList prune;
+        const DownloadDiskInfo di = d->diskInfo(&prune);
+        const bool keep = mode == FileRemoval::Keep;
+        const QString torrentId = d->torrentId();
+        TorrentBackend *be = ctx.torrents;
+        const bool inBackend = be && !torrentId.isEmpty() && be->torrents().contains(torrentId);
+        const bool waitTorrent = !keep && inBackend;
+        if (inBackend) removingTorrents.insert(torrentId);
+        d->stopForRemoval(keep);
+        if (keep && !finished && !di.paths.isEmpty()) {
+            KeptDownload k;
+            k.rec = d->record();
+            k.rec.engineState = d->saveState();
+            k.paths = di.paths;
+            k.held = di.bytes;
+            k.keptAt = QDateTime::currentDateTime();
+            for (int i = int(kept.size()) - 1; i >= 0; --i)
+                if (kept.at(i).rec.id == k.rec.id) kept.removeAt(i);
+            kept << k;
+            saveKept();
+            qCInfo(lcEngine) << "removed" << id << name << "from the list, kept its partial data:" << di.paths;
+        }
         list.removeAll(d);
         byId.remove(id);
         dirty.remove(id);
         lastEmit.remove(id);
         lastSig.remove(id);
         if (daoPtr) daoPtr->remove(id);
+        for (int i = int(follows.size()) - 1; i >= 0; --i)
+            if (follows.at(i).downloadId == id) follows.removeAt(i);
         d->deleteLater();
         emit q->transferRemoved(id, false);
         updatePartials();
         requestRebalance();
+        if (keep) return;
+        PendingDelete p{id, name, torrentId, di.paths, prune, mode == FileRemoval::TrashOrDelete};
+        if (waitTorrent) {
+            // libtorrent closes the files when the torrent has left the session (torrentRemoved)
+            pendingDeletes << p;
+            QTimer::singleShot(10000, q, [this, id] { flushPendingDelete(id, QString()); });
+        } else {
+            QTimer::singleShot(0, q, [this, p] { runDelete(p); });
+        }
+    }
+    void flushPendingDelete(const QString &id, const QString &torrentId)
+    {
+        for (int i = 0; i < pendingDeletes.size(); ++i) {
+            const PendingDelete &p = pendingDeletes.at(i);
+            if ((!id.isEmpty() && p.id == id) || (!torrentId.isEmpty() && p.torrentId == torrentId)) {
+                const PendingDelete x = pendingDeletes.takeAt(i);
+                // a moment for the disk thread to close its handles
+                QTimer::singleShot(300, q, [this, x] { runDelete(x); });
+                return;
+            }
+        }
+    }
+    void runDelete(const PendingDelete &p)
+    {
+        // the same torrent was taken up again by a download meanwhile: its files are that download's now
+        if (!p.torrentId.isEmpty() && findByTorrent(p.torrentId)) {
+            qCWarning(lcEngine) << "not deleting the data of" << p.id << ": the torrent is downloading again";
+            emit q->downloadFilesDeleted(p.id, p.name, {}, {}, p.paths,
+                                         QStringList(p.paths.size(), QStringLiteral("it is used by a download again")));
+            return;
+        }
+        const trash::Result r = trash::dispose(p.paths, p.forGood);
+        for (const QString &dir : p.pruneDirs)
+            if (QFileInfo(dir).isDir() && !QFileInfo(dir).isSymLink()) QDir().rmdir(dir);   // only when empty
+        if (ctx.library && (!r.trashed.isEmpty() || !r.deleted.isEmpty())) ctx.library->forgetPaths(r.trashed + r.deleted);
+        qCInfo(lcEngine) << "deleted the data of" << p.id << p.name << ": trash" << r.trashed << "for good" << r.deleted
+                         << "failed" << r.failed << r.errors;
+        emit q->downloadFilesDeleted(p.id, p.name, r.trashed, r.deleted, r.failed, r.errors);
     }
     Download *findByTorrent(const QString &id) const
     {
@@ -336,6 +594,10 @@ struct DownloadEngine::Private : public engine::EngineHost {
             for (Download *d : std::as_const(list)) d->tick(now);
             startNameSearches(now);
             updatePartials();
+            if (now - lastKeptCheck > 30000) {   // [ui-j]
+                lastKeptCheck = now;
+                pruneKept();
+            }
             if (now - lastDiskCheck > 10000) {
                 lastDiskCheck = now;
                 checkDiskSpace();
@@ -482,6 +744,13 @@ struct DownloadEngine::Private : public engine::EngineHost {
                     if (Download *d = findByTorrent(id)) d->onTorrentStorageMoved(path, ok, err);
                 });
                 QObject::connect(te, &TorrentEvents::torrentRemoved, q, [this](const QString &id) {
+                    // [ui-j] a torrent we removed with its download: its files may go now; a download
+                    // that took the same torrent again meanwhile adds it anew
+                    if (removingTorrents.remove(id)) {
+                        flushPendingDelete(QString(), id);
+                        if (Download *d = findByTorrent(id)) d->torrentReAdd();
+                        return;
+                    }
                     if (Download *d = findByTorrent(id); d && !d->isFinished()) d->onTorrentRemoved();
                 });
             }
@@ -547,6 +816,7 @@ void DownloadEngine::start()
     QDir(engine::Download::previewDirOf(d->incompleteDir())).removeRecursively();
     d->connectPlugins();
     d->installPartialProvider();
+    d->loadKept();   // [ui-j]
     if (d->ctx.search) {   // [engine-4]
         connect(d->ctx.search, &SearchService::hitsChanged, this, [this](quint32 id, const QList<SearchHit> &h) { d->onSearchHits(id, h); });
         connect(d->ctx.search, &SearchService::searchFinished, this, [this](quint32 id) { d->onSearchFinished(id); });
@@ -685,6 +955,8 @@ QString DownloadEngine::download(const DownloadRequest &reqIn)
         d->requestRebalance();
         return x->id();
     }
+    // [ui-j] removed earlier with "keep the file": it continues from its data
+    if (const int k = d->keptForRequest(req); k >= 0) return d->resurrect(k, &req)->id();
     // already in the library?
     if (d->ctx.library && !req.hashes.isEmpty()) {
         SharedFile f;
@@ -703,6 +975,7 @@ QString DownloadEngine::download(const DownloadRequest &reqIn)
             r.added = r.completed = QDateTime::currentDateTime();
             r.sortOrder = d->list.isEmpty() ? 0 : d->list.last()->record().sortOrder + 1;
             Download *x = d->adopt(r);
+            x->setNotOwned(true);   // [ui-j] removing this row never deletes the library's file
             x->persist(true);
             emit transferAdded(x->info());
             qCInfo(lcEngine) << req.name << "is already in the library:" << f.path;
@@ -829,7 +1102,49 @@ void DownloadEngine::resumeAll()
 
 void DownloadEngine::cancel(const QString &id, bool deleteData)
 {
-    if (Download *x = d->byId.value(id)) d->removeDownload(x, deleteData);
+    // the earlier meaning: deleteData drops the partial data of an unfinished download; a finished
+    // file always stayed. [ui-j] the data goes to the trash where there is one
+    if (Download *x = d->byId.value(id))
+        d->removeDownload(x, deleteData && !x->isFinished() ? FileRemoval::TrashOrDelete : FileRemoval::Keep);
+}
+
+// [ui-j]
+DownloadDiskInfo DownloadEngine::diskInfo(const QString &id) const
+{
+    if (Download *x = d->byId.value(id)) return x->diskInfo();
+    return {};
+}
+
+void DownloadEngine::removeDownload(const QString &id, FileRemoval mode)
+{
+    if (Download *x = d->byId.value(id)) d->removeDownload(x, mode);
+}
+
+bool DownloadEngine::matchesKept(const SearchHit &h) const
+{
+    DownloadRequest r;
+    r.name = h.fileName;
+    r.size = h.size;
+    r.hashes = h.hashes;
+    return d->keptForRequest(r) >= 0;
+}
+
+QList<TransferInfo> DownloadEngine::keptDownloads() const
+{
+    QList<TransferInfo> out;
+    for (const Private::KeptDownload &k : std::as_const(d->kept)) {
+        TransferInfo t;
+        t.id = k.rec.id;
+        t.name = k.rec.name;
+        t.size = k.rec.size;
+        t.done = k.held;
+        t.hashes = k.rec.hashes;
+        t.isBundle = k.rec.isBundle;
+        t.savePath = k.paths.value(0);
+        t.state = TransferState::Paused;
+        out << t;
+    }
+    return out;
 }
 
 void DownloadEngine::retry(const QString &id)
@@ -853,7 +1168,7 @@ void DownloadEngine::clearCompleted()
 {
     const QList<Download *> l = d->list;
     for (Download *x : l)
-        if (finishedState(TransferState(x->record().state))) d->removeDownload(x, false);
+        if (finishedState(TransferState(x->record().state))) d->removeDownload(x, FileRemoval::Keep);
     if (m_uploads) m_uploads->clearFinished();
 }
 
@@ -979,6 +1294,15 @@ QString DownloadEngine::resumeDownload(const DownloadRequest &reqIn, const QStri
         return QString();
     }
     const QString path = fi.absoluteFilePath();
+    // [ui-j] the kept data of a download removed from the list: it comes back with all it knew
+    if (const int k = d->keptForPath(path); k >= 0) {
+        if (!req.hashes.isEmpty() && d->kept.at(k).rec.hashes.conflicts(req.hashes)) {
+            emit downloadNotStarted(req.name.isEmpty() ? existingFile : req.name,
+                                    QStringLiteral("The link is of another file than this partial download"));
+            return QString();
+        }
+        return d->resurrect(k, &req)->id();
+    }
     for (Download *x : std::as_const(d->list)) {
         const bool same = (!req.hashes.isEmpty() && x->hashes().matches(req.hashes))
                           || QFileInfo(x->info().savePath).absoluteFilePath() == path;
@@ -1067,6 +1391,35 @@ QList<PartialFile> DownloadEngine::partialFiles() const
         pf.modified = fi.lastModified();
         pf.downloadId = owner.value(pf.path);
         out << pf;
+    }
+    // [ui-j] downloads removed with "keep the file": their data (a part file above, or the files of a
+    // torrent in its save folder) with the name and the link that continue it
+    for (const Private::KeptDownload &k : std::as_const(d->kept)) {
+        const QString first = k.paths.value(0);
+        if (!pathOnDisk(first)) continue;
+        PartialFile *pf = nullptr;
+        for (PartialFile &x : out)
+            if (samePath(x.path) == samePath(first)) pf = &x;
+        if (!pf) {
+            PartialFile x;
+            x.path = QFileInfo(first).absoluteFilePath();
+            const QFileInfo fi(first);
+            x.size = fi.isDir() ? trash::sizeOnDisk(first) : fi.size();
+            x.modified = fi.lastModified();
+            out << x;
+            pf = &out.last();
+        }
+        pf->kept = true;
+        pf->name = k.rec.name;
+        pf->held = k.held;
+        pf->total = k.rec.size;
+        const QString uri = k.rec.uri.trimmed();
+        if (uri.startsWith(QLatin1String("magnet:"), Qt::CaseInsensitive) || uri.startsWith(QLatin1String("ed2k:"), Qt::CaseInsensitive))
+            pf->link = uri;
+        else if (!k.rec.hashes.btih.isEmpty() || k.rec.hashes.ed2k.isEmpty())
+            pf->link = k.rec.hashes.isEmpty() ? QString() : k.rec.hashes.toMagnet(k.rec.name, k.rec.isBundle ? -1 : k.rec.size);
+        else
+            pf->link = hash::formatEd2kLink(k.rec.name, k.rec.size, k.rec.hashes);
     }
     return out;
 }

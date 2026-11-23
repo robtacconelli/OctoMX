@@ -79,6 +79,15 @@ public:
     void setUserPaused(bool paused);
     void retry();
     void cancel(bool deleteData);
+    // [ui-j] what the download has on disk (what deleting it would remove, what always stays)
+    // pruneDirs: folders of a folder torrent to remove afterwards when they are then empty
+    DownloadDiskInfo diskInfo(QStringList *pruneDirs = nullptr) const;
+    // [ui-j] stop for removal: every source closed, pending writes of the part file written (keep)
+    // or dropped (delete), the part file closed; a torrent leaves the backend (its files stay, its
+    // resume data in the profile goes). Nothing is deleted here.
+    void stopForRemoval(bool keepData);
+    // [ui-j] a finished row that points to a file the download did not create (already in the library)
+    void setNotOwned(bool on) { m_notOwned = on; }
     void setPriority(int p);
     void setWantedFiles(const QList<int> &idx);
     void shutdown(int drainMs);       // persist, close sources, release reservations (no deletes)
@@ -132,6 +141,7 @@ public:
     void onTorrentFinished();
     void onTorrentError(const QString &text);
     void onTorrentRemoved();
+    void torrentReAdd();              // [ui-j] the removal of an earlier download of this torrent finished
     void onTorrentStorageMoved(const QString &path, bool ok, const QString &error);   // [engine-3]
     void onUrlTorrentAdded(const QString &url, const QString &id);
     void onUrlTorrentFailed(const QString &url, const QString &error);
@@ -345,6 +355,13 @@ private:
     qint64 m_lastReannounceMs = 0;            // data from a trusted source (provisional mode decision)
     // [dl-1]
     bool m_seq = false, m_firstLast = false;
+    // [ui-j] which torrent files were on the disk before this download (never deleted with it) and
+    // whether it created the top folder of a folder torrent; known once the file list was known
+    bool m_ownKnown = false;
+    QStringList m_preexisting;                // torrent file paths (TorrentFile::path) that existed before
+    bool m_topExisted = false;
+    bool m_notOwned = false;                  // finished row of a file that was already in the library
+    void noteOwnership(const TorrentSnapshot &sn);
     bool m_orderBackendOk = false;            // the torrent backend follows the flags
     QString m_previewPath;                    // link / copy handed to a player (part files)
     int m_moveRetries = 0;                    // completion waits for a preview player to let go (Windows)

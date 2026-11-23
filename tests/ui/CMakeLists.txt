@@ -2,12 +2,13 @@
 # UI tests (Qt Test, offscreen). Owner: ui-a.
 find_package(Qt6 REQUIRED COMPONENTS Test Widgets)
 
+# [ui-j] MX_OS_ROOT: OS integration and the trash go to a folder of the build tree, never the real ones
 function(mx_ui_test name)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE mxui mxmock mxapi Qt6::Test Qt6::Widgets)
     add_test(NAME ui_${name} COMMAND ${name})
     set_tests_properties(ui_${name} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8;MX_DEMO_FROZEN=1;MX_PORT_MAPPING=0"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8;MX_DEMO_FROZEN=1;MX_PORT_MAPPING=0;MX_OS_ROOT=${CMAKE_BINARY_DIR}/os-root"
         TIMEOUT 120)
 endfunction()
 
@@ -57,6 +58,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/dl1_tests.cmake OPTIONAL)
 
 # [ui-h] settings registry, sounds, the settings made to work
 include(${CMAKE_CURRENT_SOURCE_DIR}/ui_h_tests.cmake OPTIONAL)
+
+# [ui-j] removing transfers and shared files, with a choice about the file
+include(${CMAKE_CURRENT_SOURCE_DIR}/ui_j_tests.cmake OPTIONAL)
 
 # [logo-1] the OctoMX application icon
 include(${CMAKE_CURRENT_SOURCE_DIR}/logo1_tests.cmake OPTIONAL)

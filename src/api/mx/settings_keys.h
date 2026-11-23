@@ -397,7 +397,8 @@ inline constexpr K AutoClearCancelled{"transfers/autoClearCancelled"};
 inline constexpr K ShareCompleted{"transfers/shareCompleted"};
 inline constexpr K Preallocate{"transfers/preallocate"};
 inline constexpr K StartPaused{"transfers/startPaused"};
-inline constexpr K ConfirmCancel{"transfers/confirmCancel"};
+inline constexpr K ConfirmCancel{"transfers/confirmCancel"};   // [ui-j] retired: removeAction asks instead (kept hidden)
+inline constexpr K RemoveAction{"transfers/removeAction"};     // [ui-j] Enum: ask | keep | delete (a download leaves the list)
 inline constexpr K BundleSubfolders{"transfers/bundleSubfolders"};
 inline constexpr K MinFreeSpaceMB{"transfers/minFreeSpaceMB"};
 inline constexpr K VerifyCompleted{"transfers/verifyCompleted"};

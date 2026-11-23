@@ -11,6 +11,8 @@
 
 #include <QtCore/QSet>
 
+#include <functional>
+
 #include "ui/pages/page.h"
 
 class QTimer;
@@ -40,6 +42,10 @@ public:
     void scanForMedia();
     void showContextMenu(const QModelIndex &viewIndex, const QPoint &globalPos);
     void reload();                      // rebuild the tree from the service now
+    // [ui-j] Delete File... / Delete Folder... (context menu, Del): the selected rows, or `only`
+    void deleteSelected(const QStringList &only = QStringList());
+    // tests: replaces the message box of a refused or failed delete
+    static std::function<void(const QString &title, const QString &text)> s_messageHook;
 
 protected:
     void resizeEvent(QResizeEvent *) override;
@@ -49,6 +55,7 @@ private:
     void scheduleReload();
     void unshareFolderKey(const QString &key);
     void activate(const QModelIndex &viewIndex);
+    void message(const QString &title, const QString &text);   // [ui-j]
     QList<ThinButton *> m_buttons;
     MxListView *m_list;
     SharedFilesModel *m_model;

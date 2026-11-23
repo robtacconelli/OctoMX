@@ -13,7 +13,9 @@
 #include <QtWidgets/QMessageBox>
 
 #include "uib_helpers.h"
+#include "mx/trash.h"
 #include "ui/dialogs/file_download_dialog.h"
+#include "ui/dialogs/remove_dialogs.h"
 #include "ui/dialogs/server_messages.h"
 #include "ui/dialogs/settings_dialog.h"
 #include "ui/dialogs/share_dialogs.h"
@@ -339,22 +341,25 @@ private slots:
         QCOMPARE(n.done, qint64(1048576));   // the incomplete file's data counts as received
         const QVariantMap resumed = st()->value(QStringLiteral("ui/resumedFiles")).toMap();
         QVERIFY(resumed.value(n.id).toString().endsWith(QStringLiteral("__INCOMPLETE___Velorine - Velvet Engine.mp3")));
-        // the file is used in place: Delete File names it first, "No" keeps the download
-        m_asked.clear();
-        m_answer = QMessageBox::No;
+        // the file is used in place: Delete File... names it first, Cancel keeps the download [ui-j]
+        QStringList asked;
+        RemoveDownloadDialog::s_execHook = [&asked](RemoveDownloadDialog *d) {
+            asked << d->texts().warning + QLatin1Char('|') + d->texts().question;
+            return int(RemoveDownloadDialog::Cancel);
+        };
         transfers()->showDownloadMenu(viewRowOf(transfers()->downloadList(),
                                                 transfers()->downloadModel()->index(downloadRowOf(n.id), 0)),
                                       QPoint(10, 10));
         QTest::qWait(20);
-        QAction *del = uib::menuAction(uib::openMenu(), QStringLiteral("Delete File"));
+        QAction *del = uib::menuAction(uib::openMenu(), QStringLiteral("Delete File..."));
         QVERIFY(del);
         del->trigger();
         uib::closeMenus();
-        QCOMPARE(m_asked.size(), 1);
-        QVERIFY(m_asked.first().contains(QStringLiteral("__INCOMPLETE___Velorine - Velvet Engine.mp3")));
-        QVERIFY(m_asked.first().contains(QStringLiteral("in place")));
+        RemoveDownloadDialog::s_execHook = nullptr;
+        QCOMPARE(asked.size(), 1);
+        QVERIFY(asked.first().contains(QStringLiteral("__INCOMPLETE___Velorine - Velvet Engine.mp3")));
+        QVERIFY(asked.first().contains(QStringLiteral("writes into it")));
         QVERIFY(downloadRowOf(n.id) >= 0);
-        m_answer = QMessageBox::Yes;
     }
 
     // ------------------------------------------------------------------ transfers
@@ -522,20 +527,25 @@ private slots:
         QCOMPARE(int(m_app.core->transfers()->downloads().size()), before + 1);
         QCOMPARE(m_app.core->transfers()->downloads().last().done, qint64(300000));
         QVERIFY(t->resumeFile().isEmpty());
-        // deleting its data deletes the file (after the warning)
+        // deleting its data deletes the file (after the warning): to the trash, here the test seam [ui-j]
+        QVERIFY(mx::trash::redirected());
         const QString id = m_app.core->transfers()->downloads().last().id;
-        m_answer = QMessageBox::Yes;
-        m_asked.clear();
+        QStringList asked;
+        RemoveDownloadDialog::s_execHook = [&asked](RemoveDownloadDialog *d) {
+            asked << d->texts().warning;
+            return int(RemoveDownloadDialog::Delete);
+        };
         m_app.mw->showPage(QStringLiteral("transfers"));
         transfers()->showDownloadMenu(viewRowOf(transfers()->downloadList(),
                                                 transfers()->downloadModel()->index(downloadRowOf(id), 0)),
                                       QPoint(5, 5));
         QTest::qWait(10);
-        uib::menuAction(uib::openMenu(), QStringLiteral("Delete File"))->trigger();
+        uib::menuAction(uib::openMenu(), QStringLiteral("Delete File..."))->trigger();
         uib::closeMenus();
-        QCOMPARE(m_asked.size(), 1);
-        QVERIFY(m_asked.first().contains(QDir::toNativeSeparators(file)));
-        QVERIFY(!QFileInfo::exists(file));
+        RemoveDownloadDialog::s_execHook = nullptr;
+        QCOMPARE(asked.size(), 1);
+        QVERIFY(asked.first().contains(QFileInfo(file).fileName()));
+        QVERIFY(QTest::qWaitFor([&] { return !QFileInfo::exists(file); }, 3000));
         QVERIFY(!st()->value(QStringLiteral("ui/resumedFiles")).toMap().contains(id));
     }
 

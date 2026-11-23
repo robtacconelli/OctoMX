@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ui/pages/shared_page.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QStandardPaths>
@@ -15,6 +16,8 @@
 #include <QtWidgets/QScrollBar>
 
 #include "mx/services.h"
+#include "mx/trash.h"
+#include "ui/dialogs/remove_dialogs.h"
 #include "ui/dialogs/share_dialogs.h"
 #include "ui/kit/tips.h"
 #include "ui/kit/format.h"
@@ -26,6 +29,8 @@
 #include "ui/main_window.h"
 #include "ui/models/roles.h"
 #include "ui/models/shared_model.h"
+#include "ui/models/transfer_model.h"
+#include "ui/pages/shared_delete.h"
 
 namespace mx::ui {
 
@@ -82,6 +87,7 @@ SharedPage::SharedPage(mx::Core *core, MainWindow *mw, QWidget *parent)
     m_list->setStateKey(core->settings(), QStringLiteral("shared"));
     connect(m_list, &MxListView::contextMenuAt, this, &SharedPage::showContextMenu);
     connect(m_list, &MxListView::rowActivated, this, &SharedPage::activate);
+    connect(m_list, &MxListView::deleteRequested, this, [this] { deleteSelected(); });   // [ui-j] Del
 
     m_reloadTimer = new QTimer(this);
     m_reloadTimer->setSingleShot(true);
@@ -291,6 +297,16 @@ void SharedPage::showContextMenu(const QModelIndex &vi, const QPoint &globalPos)
         menu->addAction(tr("Open Folder"), this, [this, key] { launch(false, key); });
         menu->addSeparator();
         menu->addAction(tr("Un-share Folder"), this, [this, key] { unshareFolderKey(key); });
+        // [ui-j] the folder (or the selection it belongs to) from the disk
+        QAction *del = menu->addAction(tr("Delete Folder..."), this, [this, key] {
+            bool inSel = false;
+            for (const QModelIndex &s : m_list->selectedSourceRows())
+                inSel = inSel || (m_model->isFolderRow(s) && m_model->folderKey(s) == key);
+            deleteSelected(inSel ? QStringList() : QStringList{key});
+        });
+        del->setObjectName(QStringLiteral("actDeleteFolder"));
+        del->setToolTip(tr("Delete this folder and everything in it from the disk (to the trash or Recycle Bin where there is "
+                           "one); it also leaves the share. You are asked first."));
     } else if (const SharedFile *f = m_model->fileAt(si)) {
         const SharedFile file = *f;
         // [ui-e] Open File / Open Containing Folder (the file selected in the file manager)
@@ -317,9 +333,106 @@ void SharedPage::showContextMenu(const QModelIndex &vi, const QPoint &globalPos)
             for (const QString &p : paths)
                 core()->library()->unshareFile(p);
         });
+        // [ui-j] the file (or the selection) from the disk
+        bool inSel = false;
+        for (const QModelIndex &s : m_list->selectedSourceRows())
+            if (const SharedFile *sf = m_model->fileAt(s))
+                inSel = inSel || sf->path == file.path;
+        const int selCount = int(m_list->selectedSourceRows().size());
+        QAction *del = menu->addAction(inSel && selCount > 1 ? tr("Delete %1 Items...").arg(selCount) : tr("Delete File..."), this,
+                                       [this, inSel, path = file.path] { deleteSelected(inSel ? QStringList() : QStringList{path}); });
+        del->setObjectName(QStringLiteral("actDeleteFile"));
+        del->setToolTip(tr("Delete the file from the disk (to the trash or Recycle Bin where there is one); it also leaves the "
+                           "share. You are asked first."));
     }
     tips::explainMenu(menu);   // [ui-g] tool tips + status bar text of the entries
     menu->popup(globalPos);
+}
+
+std::function<void(const QString &, const QString &)> SharedPage::s_messageHook;
+
+void SharedPage::message(const QString &title, const QString &text)
+{
+    if (s_messageHook) {
+        s_messageHook(title, text);
+        return;
+    }
+    QMessageBox box(QMessageBox::Warning, title, text, QMessageBox::Ok, this);
+    box.setObjectName(QStringLiteral("sharedDeleteProblem"));
+    box.exec();
+}
+
+void SharedPage::deleteSelected(const QStringList &only)
+{
+    // the rows: a folder row is its folder, a file row its file
+    QList<shdel::Item> items;
+    if (!only.isEmpty()) {
+        for (const QString &p : only)
+            items << shdel::Item{p, QFileInfo(p).isDir()};
+    } else {
+        for (const QModelIndex &s : m_list->selectedSourceRows()) {
+            if (m_model->isFolderRow(s))
+                items << shdel::Item{m_model->folderKey(s), true};
+            else if (const SharedFile *f = m_model->fileAt(s))
+                items << shdel::Item{f->path, false};
+        }
+    }
+    if (items.isEmpty())
+        return;
+    // what must never go, from the core
+    shdel::Context ctx;
+    LibraryService *lib = core()->library();
+    TransferService *ts = core()->transfers();
+    for (const SharedFolder &f : lib->folders())
+        ctx.roots << f.path;
+    ctx.incoming = ts->incomingDir();
+    ctx.incomplete = ts->incompleteDir();
+    ctx.profile = core()->profileDir();
+    ctx.program = QCoreApplication::applicationDirPath();
+    for (const TransferInfo &t : ts->downloads()) {
+        const bool seeding = t.state == TransferState::Seeding;
+        if (transfers::isFinished(t) && !seeding)
+            continue;
+        if (!t.savePath.isEmpty())
+            ctx.busy << shdel::Busy{t.savePath, t.name, -1, QString(), false};
+        for (const QString &p : ts->diskInfo(t.id).paths)
+            ctx.busy << shdel::Busy{p, t.name, -1, QString(), false};
+    }
+    for (const TransferInfo &u : ts->uploads()) {
+        const bool active = u.state == TransferState::Transferring || u.state == TransferState::Connecting;
+        if (!active)
+            continue;
+        shdel::Busy b{u.savePath, u.savePath.isEmpty() ? u.name : QFileInfo(u.savePath).fileName(), u.size, u.peer.name, true};
+        ctx.busy << b;
+    }
+    const shdel::Plan plan = shdel::plan(items, ctx);
+    if (!plan.refusal.isEmpty()) {
+        message(tr("Cannot Delete"), plan.refusal);
+        return;
+    }
+    if (plan.paths.isEmpty())
+        return;
+    DeleteFilesDialog dlg(shdel::texts(items, plan), this);
+    if (!dlg.ask())
+        return;
+    const trash::Result r = trash::dispose(plan.paths, !plan.trash);
+    // the library, the page and what others browse: at once
+    const QStringList gone = r.trashed + r.deleted;
+    if (!gone.isEmpty())
+        lib->forgetPaths(gone);
+    for (const QString &root : plan.roots)
+        if (gone.contains(root))
+            lib->removeFolder(QDir::toNativeSeparators(root));
+    reload();
+    if (!r.failed.isEmpty()) {
+        QStringList shown;
+        for (const QString &f : r.failed)
+            shown << QDir::toNativeSeparators(f);
+        message(tr("Delete"), tr("These could not be deleted and are still on the disk:\n\n%1\n\n%2").arg(shown.join(QLatin1Char('\n')), r.errors.value(0)));
+        return;
+    }
+    const QString what = gone.size() == 1 ? QStringLiteral("\"%1\"").arg(QFileInfo(gone.first()).fileName()) : tr("%1 items").arg(gone.size());
+    mainWindow()->showNotice(r.deleted.isEmpty() ? tr("Moved %1 to the %2.").arg(what, trash::placeName()) : tr("Deleted %1 for good.").arg(what));
 }
 
 bool SharedPage::scriptCommand(const QString &verb, const QStringList &args, QString *error)

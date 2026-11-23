@@ -89,6 +89,15 @@ public:
     QString resumeDownload(const DownloadRequest &req, const QString &existingFile) override;
     bool setDownloadTarget(const QString &id, const QString &dir, const QString &name = QString()) override;
     QList<PartialFile> partialFiles() const override;
+    // [ui-j] removing a download, keeping or deleting its file
+    DownloadDiskInfo diskInfo(const QString &id) const override;
+    void removeDownload(const QString &id, FileRemoval mode) override;
+    // downloads removed with "keep the file" whose partial data is still there (done = bytes held;
+    // the "matches incomplete local file" mark of Search)
+    QList<TransferInfo> keptDownloads() const;
+    // a search hit of a kept download (same hash, or same name and size as RealCore::flagHit matches
+    // the downloads in the list): downloading it continues the kept data
+    bool matchesKept(const SearchHit &h) const;
     // [engine-4]
     void setAutoFindSources(const QString &id, int minutes) override;
     void setAutoEnterQueue(const QString &id, int n) override;

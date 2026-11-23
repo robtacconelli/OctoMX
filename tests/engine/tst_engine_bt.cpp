@@ -8,6 +8,7 @@
 #include "engine_env.h"
 #include "mxhash/ed2k.h"
 #include "mx/download_order.h"
+#include "mx/trash.h"
 
 using namespace mx;
 using namespace mx::etest;
@@ -73,6 +74,7 @@ private slots:
     void moveTorrentStorage();   // [engine-3]
     void sequentialWithRealLibtorrent();   // [dl-1]
     void firstLastWithRealLibtorrent();    // [dl-1]
+    void removeKeepResumeAndDelete();      // [ui-j]
 
 private:
     void run(bool withPeer);
@@ -377,6 +379,94 @@ void TstEngineBt::order(bool sequential)
 
 void TstEngineBt::sequentialWithRealLibtorrent() { order(true); }
 void TstEngineBt::firstLastWithRealLibtorrent() { order(false); }
+
+// [ui-j] removing a torrent download with the real libtorrent: "keep the file" leaves the data in
+// the incoming folder and the same torrent continues from it (libtorrent checks what it finds);
+// "delete the file" moves the data to the trash seam once libtorrent let it go, and the resume data
+// in the profile goes too. The trash is the seam under MX_OS_ROOT of this test.
+void TstEngineBt::removeKeepResumeAndDelete()
+{
+    Env env(QStringLiteral("bt-remove"));
+    const QString osRoot = env.root + QStringLiteral("/os-root");
+    const QByteArray savedRoot = qgetenv("MX_OS_ROOT");
+    qputenv("MX_OS_ROOT", osRoot.toUtf8());
+    qunsetenv("MX_TRASH");
+    struct Restore { QByteArray v; ~Restore() { if (v.isNull()) qunsetenv("MX_OS_ROOT"); else qputenv("MX_OS_ROOT", v); } } restore{savedRoot};
+    QVERIFY(trash::redirected() && trash::seamDir().startsWith(env.root));
+    const QByteArray data = randomBytes(24 * 1024 * 1024 + 77, 61), data2 = randomBytes(6 * 1024 * 1024 + 5, 62);
+    writeFile(env.root + QStringLiteral("/seed/keep.bin"), data);
+    writeFile(env.root + QStringLiteral("/seed/gone.bin"), data2);
+    BtNode a(env.root + QStringLiteral("/nodeA"));
+    QVERIFY(a.start());
+    QSignalSpy ready(a.ev, &BitTorrentEvents::seedReady);
+    QString err;
+    QVERIFY2(a.be->seedLocalFile(env.root + QStringLiteral("/seed/keep.bin"), &err), qPrintable(err));
+    QVERIFY2(a.be->seedLocalFile(env.root + QStringLiteral("/seed/gone.bin"), &err), qPrintable(err));
+    QVERIFY(QTest::qWaitFor([&] { return ready.size() == 2; }, 60000));
+    QString tid, tid2;
+    for (const QList<QVariant> &r : ready)
+        (r.at(0).toString().endsWith(QStringLiteral("keep.bin")) ? tid : tid2) = r.at(1).toString();
+    auto torrentOf = [&](const QString &id) { return env.root + QStringLiteral("/nodeA/bt/torrents/") + id + QStringLiteral(".torrent"); };
+    QVERIFY(QTest::qWaitFor([&] { return QFileInfo(torrentOf(tid)).size() > 0 && QFileInfo(torrentOf(tid2)).size() > 0; }, 10000));
+
+    BtNode b(env.root + QStringLiteral("/nodeB"), /*limitLan*/ true);
+    QVERIFY(b.start());
+    b.ctl->setRateLimits(512 * 1024, 0);   // ~48 s for the first file: time to remove it in the middle
+    env.engineUp(b.be, b.plugin.get());
+    struct Down { Env &e; ~Down() { e.engineDown(true); } } down{env};
+    const QString in = env.engine->incomingDir();
+    const QString persisted = env.root + QStringLiteral("/nodeB/bt/torrents/");
+
+    // ---- keep, then the same torrent again
+    DownloadRequest r;
+    r.uri = torrentOf(tid);
+    const QString id = env.engine->download(r);
+    QVERIFY(QTest::qWaitFor([&] { return !b.be->snapshot(tid).id.isEmpty(); }, 10000));
+    b.ctl->addPeer(tid, a.endpoint());
+    QVERIFY(QTest::qWaitFor([&] { return b.be->snapshot(tid).totalDone > 2 * 1024 * 1024; }, 60000));
+    const DownloadDiskInfo di = env.engine->diskInfo(id);
+    QCOMPARE(di.paths, QStringList{in + QStringLiteral("/keep.bin")});
+    env.engine->removeDownload(id, FileRemoval::Keep);
+    QVERIFY(QTest::qWaitFor([&] { return !b.be->torrents().contains(tid); }, 15000));
+    QVERIFY(QFile::exists(in + QStringLiteral("/keep.bin")));
+    QCOMPARE(env.engine->keptDownloads().size(), 1);
+    const qint64 had = env.engine->keptDownloads().first().done;
+    qInfo("kept %lld of %lld bytes", had, qint64(data.size()));
+    QVERIFY(had >= 1024 * 1024 && had < data.size());
+    b.ctl->setRateLimits(0, 0);
+    const QString again = env.engine->download(r);
+    QCOMPARE(again, id);
+    QVERIFY(QTest::qWaitFor([&] { return b.be->snapshot(tid).hasMetadata; }, 20000));
+    // libtorrent checked the data it found: what was kept counts before any peer sent anything
+    QVERIFY(QTest::qWaitFor([&] { return b.be->snapshot(tid).totalDone >= had - 512 * 1024; }, 30000));
+    qInfo("after the check: %lld bytes", b.be->snapshot(tid).totalDone);
+    b.ctl->addPeer(tid, a.endpoint());
+    QVERIFY2(env.waitDone(again, 120000), qPrintable(env.info(again).statusText));
+    QCOMPARE(readFile(in + QStringLiteral("/keep.bin")), data);
+
+    // ---- delete: the data to the trash, the resume data out of the profile, nothing else touched
+    writeFile(in + QStringLiteral("/someone else.txt"), "not ours");
+    b.ctl->setRateLimits(512 * 1024, 0);
+    DownloadRequest r2;
+    r2.uri = torrentOf(tid2);
+    const QString id2 = env.engine->download(r2);
+    QVERIFY(QTest::qWaitFor([&] { return !b.be->snapshot(tid2).id.isEmpty(); }, 10000));
+    b.ctl->addPeer(tid2, a.endpoint());
+    QVERIFY(QTest::qWaitFor([&] { return b.be->snapshot(tid2).totalDone > 1024 * 1024; }, 60000));
+    QVERIFY(QTest::qWaitFor([&] { return QFile::exists(persisted + tid2 + QStringLiteral(".fastresume")); }, 15000));
+    QSignalSpy deleted(env.engine.get(), &TransferService::downloadFilesDeleted);
+    env.engine->removeDownload(id2, FileRemoval::Trash);
+    QVERIFY(QTest::qWaitFor([&] { return deleted.count() == 1; }, 20000));
+    QCOMPARE(deleted.first().at(2).toStringList(), QStringList{in + QStringLiteral("/gone.bin")});
+    QVERIFY(!QFile::exists(in + QStringLiteral("/gone.bin")));
+    QVERIFY(QFile::exists(osRoot + QStringLiteral("/trash/files/gone.bin")));
+    for (const char *ext : {".fastresume", ".torrent", ".json"})
+        QVERIFY2(!QFile::exists(persisted + tid2 + QLatin1String(ext)), ext);
+    QTest::qWait(1500);   // nothing comes back once libtorrent's disk thread is done
+    QVERIFY(!QFile::exists(in + QStringLiteral("/gone.bin")));
+    QCOMPARE(readFile(in + QStringLiteral("/someone else.txt")), QByteArray("not ours"));
+    QCOMPARE(readFile(in + QStringLiteral("/keep.bin")), data);
+}
 
 QTEST_GUILESS_MAIN(TstEngineBt)
 #include "tst_engine_bt.moc"

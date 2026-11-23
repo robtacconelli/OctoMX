@@ -222,7 +222,7 @@ inline const Proof kProofs[] = {
     {"transfers/startPaused", "reader", "src/core/engine/engine.cpp", "transfers::StartPaused", ""},
     {"transfers/sequentialDefault", "test", "tests/engine/tst_engine_bt.cpp", "moveTorrentStorage", ""},
     {"transfers/firstLastDefault", "test", "tests/engine/tst_engine_bt.cpp", "moveTorrentStorage", ""},
-    {"transfers/confirmCancel", "reader", "src/ui/pages/transfers_page.cpp", "transfers::ConfirmCancel", ""},
+    {"transfers/removeAction", "test", "tests/ui/tst_uij.cpp", "rememberedChoiceAndSetting", ""},   // [ui-j]
     {"transfers/minFreeSpaceMB", "reader", "src/core/engine/engine.cpp", "transfers::MinFreeSpaceMB", ""},
     {"transfers/verifyCompleted", "reader", "src/core/engine/download.cpp", "transfers::VerifyCompleted", ""},
     {"transfers/uploadsToHotlistOnly", "test", "tests/overlay/tst_overlay_net.cpp", "uploadsToHotlistOnly", ""},

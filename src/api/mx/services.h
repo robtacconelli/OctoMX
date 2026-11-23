@@ -229,6 +229,21 @@ public:
         if (error) *error = tr("Preview is not supported by this core.");
         return QString();
     }
+
+    // ---- [added by ui-j] removing a download from the list, keeping or deleting its file.
+    // What the download has on disk now (what FileRemoval::Trash would remove, what always stays).
+    // Default: nothing known (known = false), so an old core never deletes anything.
+    virtual DownloadDiskInfo diskInfo(const QString &id) const { Q_UNUSED(id) return {}; }
+    // Remove the download from the list; a running one is stopped first.
+    //   Keep: a finished file stays where it is; partial data stays on disk with what is known about
+    //     it, so Load Incomplete (partialFiles(): kept = true), the "matches incomplete local file"
+    //     mark of Search and downloading the same file again continue it.
+    //   Trash / TrashOrDelete: diskInfo(id).paths go to the trash / Recycle Bin (mx/trash.h), with
+    //     every trace in the profile (resume data, the kept record); what the download did not create
+    //     is never touched. TrashOrDelete deletes for good what cannot go to the trash.
+    // The outcome of a delete arrives in downloadFilesDeleted (after the files were closed).
+    // Default: cancel(id, mode != Keep).
+    virtual void removeDownload(const QString &id, FileRemoval mode) { cancel(id, mode != FileRemoval::Keep); }
 signals:
     void transferAdded(const mx::TransferInfo &t);
     void transferChanged(const mx::TransferInfo &t);          // throttled to ~1/s per transfer
@@ -239,6 +254,10 @@ signals:
     // name; `reason` is human-readable ("Nothing to download: the index gave no link or hash", ...).
     // Emitted before the call returns its empty id.
     void downloadNotStarted(const QString &what, const QString &reason);
+    // [added by ui-j] the files of a removeDownload(id, Trash / TrashOrDelete): moved to the trash,
+    // deleted for good, and the ones still there with one reason per failed path
+    void downloadFilesDeleted(const QString &id, const QString &name, const QStringList &trashed, const QStringList &deleted,
+                              const QStringList &failed, const QStringList &errors);
 };
 
 // ---------------------------------------------------------------- shared files page
@@ -269,6 +288,11 @@ public:
     virtual QStringList excludedFolders() const { return {}; }
     // [added by glue-3] standard Music / Videos / Pictures / Downloads folders that exist ("Scan For Media").
     virtual QStringList suggestMediaFolders() const { return {}; }
+    // [added by ui-j] these files / folders were deleted from the disk (Shared Files ▸ Delete File...):
+    // drop them (and everything below a folder) from the library now, so the page and what other
+    // users browse or find update at once. Not an exclusion: a new file at the same place is shared
+    // again. Default: rescan().
+    virtual void forgetPaths(const QStringList &paths) { Q_UNUSED(paths) rescan(); }
 signals:
     void foldersChanged();
     void filesChanged();

@@ -76,6 +76,7 @@ public:
     // nothing: fails if target exists.
     void moveExact(const QString &target, std::function<void(bool, const QString &)> done);
     void removeFile();                            // delete (cancel)
+    void close();                                 // [ui-j] drop pending writes and close the file (no delete)
     // SHA-1 of [s, e) as written so far (promotion check against a torrent piece hash).
     void sha1Range(qint64 s, qint64 e, std::function<void(const QByteArray &)> done);
     // [engine-3] SHA-1 of each range as it is on disk right now (queued behind earlier writes,

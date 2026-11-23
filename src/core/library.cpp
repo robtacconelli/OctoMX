@@ -341,6 +341,33 @@ void Library::unshareFile(const QString &path)
     scheduleUpdate();
 }
 
+// [ui-j] deleted from the disk (Shared Files ▸ Delete File...): gone from the index at once, no exclusion
+void Library::forgetPaths(const QStringList &paths)
+{
+    QStringList ps;
+    for (const QString &x : paths)
+        if (const QString p = normPath(x); !p.isEmpty()) ps << p;
+    if (ps.isEmpty()) return;
+    auto gone = [&ps](const QString &q) {
+        for (const QString &p : ps)
+            if (isUnder(q, p)) return true;
+        return false;
+    };
+    {
+        QWriteLocker l(&m_lock);
+        for (auto it = m_entries.begin(); it != m_entries.end();) {
+            if (it->shared && gone(it.key())) {
+                unindexLocked(*it);
+                it = m_entries.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    m_hashQueue.removeIf([&](const QString &q) { return gone(q); });
+    scheduleUpdate();
+}
+
 void Library::reshareFile(const QString &path)
 {
     const QString p = normPath(path);

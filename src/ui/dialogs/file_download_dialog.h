@@ -51,6 +51,7 @@ class LoadIncompleteDialog : public QDialog {
 public:
     LoadIncompleteDialog(const QList<mx::PartialFile> &partials, const QString &incompleteDir, QWidget *parent = nullptr);
     QString chosenFile() const;          // the selected incomplete file
+    QString chosenName() const;          // [ui-j] its name (a kept download: the download's name)
     QString link() const;                // optional magnet:/ed2k:// link of the same file
     int rowCount() const;
     void selectRow(int row);

@@ -129,7 +129,8 @@ crops and diff masks, `dark.py` text bounding boxes), measure, don't eyeball.
 
 Ctrl+1...7 pages in button order (7 = Hotlist pane), Ctrl+Tab next page, Ctrl+F Search, F1 Help, Ctrl+Shift+V add
 links; in lists: arrows/Home/End/PgUp/PgDn, `+`/`-` expand/collapse, Enter = activate
-(download / open), Menu key = context menu, Ctrl+V on the download list = paste links, Del = cancel.
+(download / open), Menu key = context menu, Ctrl+V on the download list = paste links, Del = Clear on the download
+list (the Remove Download question, [ui-j]), Cancel on the upload list, Delete File... / Delete Folder... on Shared Files.
 
 ## Shared Files, Chat, Bandwidth and the user windows ([ui-b])
 
@@ -286,3 +287,20 @@ Live check against the disk: `mxcli maplog <id|last> <file.jsonl>` then `tests/e
 [--torrent F.torrent | --ref-url URL]` (recomputes the map from the ranges the engine reported and reads the complete
 parts back from disk: SHA-1 against the .torrent's piece hashes, or bytes against the original URL).
 
+
+## ui-j additions (removing a download keeps or deletes its file, Shared Files delete)
+
+| what | where |
+|---|---|
+| the trash / Recycle Bin and its test seam (`$MX_OS_ROOT/trash`, `MX_TRASH=none` = a drive without one), used by the core and the UI | `src/api/mx/trash.h` (`trash::dispose`, `available`, `moveToTrash`, `removeForGood`, `sizeOnDisk`) |
+| what a download has on disk, removing it with Keep / Trash / TrashOrDelete, the outcome | `TransferService::diskInfo` / `removeDownload` / `downloadFilesDeleted`, `DownloadDiskInfo`, `FileRemoval` (`mx/types.h`); engine: `Download::diskInfo` / `stopForRemoval`, `DownloadEngine::Private::removeDownload` / `runDelete`; mock: profile files only |
+| kept partial downloads (resumed by Load Incomplete, Search, the same link) | `DownloadEngine::keptDownloads`, `<profile>/kept-downloads.json`, `PartialFile::kept` / `link` / `held` |
+| the Remove Download question, the Delete question | `dialogs/remove_dialogs.*` (`removeTexts`, `RemoveDownloadDialog`, `DeleteFilesDialog`) |
+| every way of removing a download | `TransfersPage::removeDownloads` (Cancel, Clear, Del, menu, `Delete File...`), setting `transfers/removeAction` (Settings ▸ File Transfers) |
+| Shared Files delete rules and texts | `pages/shared_delete.*` (`shdel::plan`, `shdel::texts`), `SharedPage::deleteSelected`, `LibraryService::forgetPaths` |
+
+Object names: `removeDownloadDialog` (`removeKeep`, `removeDelete`, `removeCancel`, `removeDontAsk`, labels `removeQuestion` ...),
+`deleteFilesDialog` (`deleteConfirm`, `deleteCancel`), `sharedDeleteProblem`, actions `actDeleteFile`, `actDeleteFolder`,
+Settings `set_transfers_removeAction`. Test hooks: `RemoveDownloadDialog::s_execHook`, `DeleteFilesDialog::s_execHook`,
+`SharedPage::s_messageHook`. Tests: `tests/ui/tst_uij.cpp`, `tests/engine/tst_engine_remove.cpp`,
+`tst_engine_bt` `removeKeepResumeAndDelete`. Screenshots: `tools/shots-ui-j.sh <out> [build]`.

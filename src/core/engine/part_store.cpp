@@ -396,6 +396,16 @@ void PartStore::moveExact(const QString &target, std::function<void(bool, const 
     });
 }
 
+void PartStore::close()
+{
+    m_closed = true;
+    m_io.discardPending();
+    auto sh = m_sh;
+    QMutexLocker l(&sh->mutex);
+    sh->file.reset();
+    sh->verified.clear();
+}
+
 void PartStore::removeFile()
 {
     m_closed = true;

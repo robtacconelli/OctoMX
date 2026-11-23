@@ -172,9 +172,16 @@ LoadIncompleteDialog::LoadIncompleteDialog(const QList<PartialFile> &partials, c
     for (const PartialFile &p : partials) {
         if (!p.downloadId.isEmpty())
             continue;   // already in the Transfers list
-        auto *it = new QListWidgetItem(QStringLiteral("%1   Incomplete file (%2)").arg(p.name, fmt::exactSizes() ? fmt::exactBytes(p.size) : fmt::size(p.size)), m_list);
+        // [ui-j] a download removed with "keep the file": its name, what it holds, and its link
+        const QString what = p.kept ? (p.total > 0 ? tr("Removed download, %1 kept").arg(fmt::sizeOf(qMax<qint64>(0, p.held), p.total))
+                                                   : tr("Removed download, %1 kept").arg(fmt::size(qMax<qint64>(0, p.held))))
+                                    : tr("Incomplete file (%1)").arg(fmt::exactSizes() ? fmt::exactBytes(p.size) : fmt::size(p.size));
+        auto *it = new QListWidgetItem(QStringLiteral("%1   %2").arg(p.name, what), m_list);
         it->setData(Qt::UserRole, p.path);
-        it->setToolTip(QDir::toNativeSeparators(p.path));
+        it->setData(Qt::UserRole + 1, p.link);
+        it->setData(Qt::UserRole + 2, p.name);
+        it->setToolTip(p.kept ? tr("%1\nResume continues this download from its data (its link is known).").arg(QDir::toNativeSeparators(p.path))
+                              : QDir::toNativeSeparators(p.path));
     }
     if (m_list->count() > 0)
         m_list->setCurrentRow(0);
@@ -200,7 +207,18 @@ QString LoadIncompleteDialog::chosenFile() const
 
 QString LoadIncompleteDialog::link() const
 {
-    return m_link->text().trimmed();
+    // [ui-j] nothing typed: the link of a kept download (its identity is known)
+    const QString typed = m_link->text().trimmed();
+    if (!typed.isEmpty())
+        return typed;
+    QListWidgetItem *it = m_list->currentItem();
+    return it ? it->data(Qt::UserRole + 1).toString() : QString();
+}
+
+QString LoadIncompleteDialog::chosenName() const
+{
+    QListWidgetItem *it = m_list->currentItem();
+    return it ? it->data(Qt::UserRole + 2).toString() : QString();
 }
 
 int LoadIncompleteDialog::rowCount() const

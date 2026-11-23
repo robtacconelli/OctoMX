@@ -21,6 +21,7 @@
 #include "mx/download_order.h"
 #include "mx/settings_keys.h"
 #include "mx/simple_settings.h"
+#include "mx/trash.h"
 
 namespace mx {
 
@@ -910,6 +911,72 @@ public:
                 return;
             }
     }
+    // ---- [ui-j] removing with or without the file. The demo's data: the placeholder files of the
+    // finished demo downloads in the profile's incoming folder, a file resumed in place; anything
+    // outside the profile is never touched (reported as not deleted).
+    QString dataPathOf(const TransferInfo &t) const
+    {
+        const bool finished = t.state == TransferState::Completed || t.state == TransferState::Seeding;
+        if (finished)
+            return t.savePath;
+        const QString own = m_resumedFrom.value(t.id);
+        return own.isEmpty() ? QDir(incompleteDir()).filePath(QStringLiteral("__INCOMPLETE___") + t.name) : own;
+    }
+    bool insideProfile(const QString &path) const
+    {
+        return !m_profile.isEmpty() && QFileInfo(path).absoluteFilePath().startsWith(QDir(m_profile).absolutePath() + QLatin1Char('/'));
+    }
+    DownloadDiskInfo diskInfo(const QString &id) const override
+    {
+        DownloadDiskInfo di;
+        const TransferInfo *t = nullptr;
+        for (const TransferInfo &x : m_downloads)
+            if (x.id == id)
+                t = &x;
+        if (!t)
+            return di;
+        di.known = true;
+        di.finished = t->state == TransferState::Completed || t->state == TransferState::Seeding;
+        di.torrent = t->networks.contains(Net::BitTorrent) && t->networks.size() == 1;
+        di.total = t->size;
+        const QString p = dataPathOf(*t);
+        if (!p.isEmpty() && (di.finished || t->done > 0 || QFileInfo::exists(p))) {
+            di.paths << p;
+            di.bytes = di.finished ? t->size : qMax<qint64>(t->done, QFileInfo(p).size());
+            di.folder = QFileInfo(p).absolutePath();
+        }
+        if (!di.finished && m_resumedFrom.contains(id))
+            di.inPlaceFile = m_resumedFrom.value(id);
+        di.trash = trash::availableForAll(di.paths);
+        return di;
+    }
+    void removeDownload(const QString &id, FileRemoval mode) override
+    {
+        const DownloadDiskInfo di = diskInfo(id);
+        QString name;
+        for (const TransferInfo &x : std::as_const(m_downloads))
+            if (x.id == id)
+                name = x.name;
+        for (int i = 0; i < m_downloads.size(); ++i)
+            if (m_downloads[i].id == id) {
+                m_downloads.removeAt(i);
+                m_resumedFrom.remove(id);
+                emit transferRemoved(id, false);
+                break;
+            }
+        if (mode == FileRemoval::Keep || !di.known)
+            return;
+        QStringList mine, outside;
+        for (const QString &p : di.paths)
+            (insideProfile(p) ? mine : outside) << p;
+        trash::Result r = trash::dispose(mine, mode == FileRemoval::TrashOrDelete);
+        for (const QString &p : std::as_const(outside))
+            if (QFileInfo::exists(p)) {
+                r.failed << p;
+                r.errors << QStringLiteral("the demo core does not touch files outside its profile");
+            }
+        QTimer::singleShot(0, this, [this, id, name, r] { emit downloadFilesDeleted(id, name, r.trashed, r.deleted, r.failed, r.errors); });
+    }
     // ---- glue-2 per-transfer actions
     void findMoreSources(const QString &id) override
     {
@@ -1003,13 +1070,23 @@ public:
             return s;
         return QDir(m_profile.isEmpty() ? QDir::tempPath() : m_profile).filePath(QStringLiteral("incomplete"));
     }
+    static PartialFile partial(const QString &path, const QString &name, qint64 size, const QDateTime &modified, const QString &owner)
+    {
+        PartialFile p;
+        p.path = path;
+        p.name = name;
+        p.size = size;
+        p.modified = modified;
+        p.downloadId = owner;
+        return p;
+    }
     QList<PartialFile> partialFiles() const override
     {
         QList<PartialFile> out;
         // real files in the incomplete folder (so a demo can resume a file of its own)
         const QFileInfoList real = QDir(incompleteDir()).entryInfoList(QDir::Files, QDir::Name);
         for (const QFileInfo &fi : real)
-            out << PartialFile{fi.absoluteFilePath(), fi.fileName(), fi.size(), fi.lastModified(), ownerOf(fi.absoluteFilePath())};
+            out << partial(fi.absoluteFilePath(), fi.fileName(), fi.size(), fi.lastModified(), ownerOf(fi.absoluteFilePath()));
         // the demo's own: two left over from an "earlier session" and the part file of download d2
         const QString dir = incompleteDir();
         const QDateTime t = QDateTime(QDate(2026, 11, 19), QTime(21, 14), QTimeZone::UTC);
@@ -1027,7 +1104,7 @@ public:
                 owner.clear();
             if (owner.isEmpty())
                 owner = ownerOf(path);
-            out << PartialFile{path, QString::fromLatin1(d.name), d.size, t, owner};
+            out << partial(path, QString::fromLatin1(d.name), d.size, t, owner);
         }
         return out;
     }
@@ -1554,6 +1631,25 @@ public:
         if (u > 0)
             return tr("Hashing %1 of %2").arg(int(m_files.size()) - u + 1).arg(m_files.size());
         return QString();
+    }
+    void forgetPaths(const QStringList &paths) override   // [ui-j] deleted from the disk
+    {
+        QList<SharedFile> keep;
+        for (const SharedFile &x : std::as_const(m_files)) {
+            const QString fp = QDir::cleanPath(QDir::fromNativeSeparators(x.path));
+            bool gone = false;
+            for (const QString &p : paths) {
+                const QString c = QDir::cleanPath(QDir::fromNativeSeparators(p));
+                gone = gone || fp == c || fp.startsWith(c + QLatin1Char('/'));
+            }
+            if (!gone)
+                keep << x;
+        }
+        if (keep.size() == m_files.size())
+            return;
+        m_files = keep;
+        emit filesChanged();
+        emit foldersChanged();
     }
     void unshareFile(const QString &path) override
     {

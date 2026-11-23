@@ -30,7 +30,7 @@ const Entry kEntries[] = {
     {"Enter Queue", QT_TRANSLATE_NOOP("MenuTips", "Wait in the users' queues for this download even when the place is beyond the Auto Enter Queue limit")},
     {"Bandwidth Priority", QT_TRANSLATE_NOOP("MenuTips", "Give this transfer a larger or smaller share of the bandwidth than the others")},
     {"Priority", QT_TRANSLATE_NOOP("MenuTips", "Which downloads get sources and bandwidth first when there is not enough for all")},
-    {"Delete File", QT_TRANSLATE_NOOP("MenuTips", "Cancel the download and delete its file (the partial or the finished file) from the disk; you are asked first")},
+    {"Delete File...", QT_TRANSLATE_NOOP("MenuTips", "Remove the download from the list and choose to delete its file (the partial or the finished file); you are always asked first")},
     {"Trim 10K from end of file", QT_TRANSLATE_NOOP("MenuTips", "In the original WinMX this cut the last 10 KB of a partial file that ended with damaged data, so a resume fetched them again. "
                                                                "Not needed here: every network checks the parts by their hashes. Not available.")},
     {"Find Sources Now", QT_TRANSLATE_NOOP("MenuTips", "Search all networks again for more users who have the selected downloads")},

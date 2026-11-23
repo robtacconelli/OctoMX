@@ -303,7 +303,7 @@ private slots:
         st()->setValue(keys::transfers::NewDownloadsExpanded, true);
         migrateLegacySettings(st());
         QCOMPARE(st()->b(keys::transfers::NewDownloadsExpanded), false);
-        QCOMPARE(st()->value(marker).toInt(), 2);
+        QVERIFY(st()->value(marker).toInt() >= 2);   // [ui-j] 3: a later step of the same migration
         st()->setValue(keys::transfers::NewDownloadsExpanded, true);   // the user ticks the box again
         migrateLegacySettings(st());
         QCOMPARE(st()->b(keys::transfers::NewDownloadsExpanded), true);

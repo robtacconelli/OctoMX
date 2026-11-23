@@ -269,6 +269,8 @@ void RealCore::flagHit(SearchHit &h) const
             h.canJoinRunningDownload = true;
         if (byHash && d.state == TransferState::Transferring) h.currentlyDownloading = true;
     }
+    // [ui-j] partial data of downloads removed with "keep the file": downloading the hit continues it
+    if (m_engine->matchesKept(h)) h.matchesIncompleteLocal = true;
 }
 
 } // namespace mx

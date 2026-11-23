@@ -5,6 +5,7 @@
 // everything came back.
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QLibraryInfo>
 #include <QtCore/QProcess>
 #include <QtTest/QtTest>
 
@@ -12,6 +13,28 @@ class TstRestart : public QObject {
     Q_OBJECT
 private:
     QString m_dir;
+
+#ifdef Q_OS_WIN
+    static QString winPath(QString p)
+    {
+        if (p.startsWith(QLatin1Char('/')))
+            p.prepend(QStringLiteral("Z:"));   // a path of the Linux build machine, under wine
+        return p;
+    }
+    // [ui-j] a plugin folder with platforms/qoffscreen.dll: this process's Qt, the test's own folder
+    // (a packaged test set), the Qt of the cross build
+    static QString childPluginPath()
+    {
+        QStringList candidates{QLibraryInfo::path(QLibraryInfo::PluginsPath), QCoreApplication::applicationDirPath()};
+#ifdef MX_QT_PLUGINS_DIR
+        candidates << winPath(QStringLiteral(MX_QT_PLUGINS_DIR));
+#endif
+        for (const QString &c : std::as_const(candidates))
+            if (!c.isEmpty() && QFileInfo::exists(c + QStringLiteral("/platforms/qoffscreen.dll")))
+                return c;
+        return QString();
+    }
+#endif
 
     // runs octomx with a script; returns the exit code (0 = every command passed)
     int run(const QStringList &script, QString *log, const QStringList &extraArgs = {})
@@ -41,6 +64,24 @@ private:
 #ifdef Q_OS_WIN
         if (exe.startsWith(QLatin1Char('/')))
             exe.prepend(QStringLiteral("Z:"));   // built on Linux, run under wine
+        // [ui-j] the unpackaged octomx.exe has no Qt next to it: it takes the Qt DLLs from PATH and must
+        // find the offscreen platform plugin, else Qt shows a hidden "no Qt platform plugin" box and the
+        // child hangs. Give it the folders that have them (this test's own Qt, a packaged test folder,
+        // the Qt of the cross build), or fail at once with the reason.
+        const QString plugins = childPluginPath();
+        if (plugins.isEmpty()) {
+            *log = QStringLiteral("no Qt with platforms/qoffscreen.dll found for the child (QT_PLUGIN_PATH)");
+            return -4;
+        }
+        env.insert(QStringLiteral("QT_PLUGIN_PATH"), QDir::toNativeSeparators(plugins));
+        QStringList path{QDir::toNativeSeparators(QLibraryInfo::path(QLibraryInfo::BinariesPath)),
+                         QDir::toNativeSeparators(QCoreApplication::applicationDirPath())};
+#ifdef MX_QT_BIN_DIR
+        path << QDir::toNativeSeparators(winPath(QStringLiteral(MX_QT_BIN_DIR)));
+#endif
+        path << env.value(QStringLiteral("PATH"));
+        env.insert(QStringLiteral("PATH"), path.join(QLatin1Char(';')));
+        p.setProcessEnvironment(env);
 #endif
         p.start(exe,
                 QStringList{QStringLiteral("--profile"), m_dir + QStringLiteral("/profile"), QStringLiteral("--demo"),

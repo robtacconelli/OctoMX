@@ -673,6 +673,9 @@ void buildTransferPages(SettingsDialog *d)
                              [c] { c->setChecked(Session::instance()->suppressDangerousWarning()); });
         }
         k.check(QObject::tr("Suppress dangerous filetype warning (permanent)"), transfers::SuppressDangerousWarning, 215, 186, 300);
+        // [ui-j] what happens to the file when a download leaves the list (the Remove question's "Do not ask again")
+        k.label(QObject::tr("Removing a download:"), 215, 214, 128);
+        k.combo(QString(transfers::RemoveAction), 345, 210, 175);
         resetButton(d, k, 215, 316, 305, "transfersResetDefaults");
     }
     // ---- Queuing [obs: settings_queuing.png]
@@ -721,11 +724,7 @@ void buildTransferPages(SettingsDialog *d)
         f.check(transfers::VerifyCompleted, QObject::tr("Verify completed files"));
         f.check(transfers::Preallocate);
         f.check(transfers::StartPaused);
-        f.y = y;
-        f.x0 = 215 + 165;
-        f.w = 140;
-        f.check(transfers::ConfirmCancel, QObject::tr("Confirm cancel"));
-        f.y = y + 3 * 17;   // [ui-h] below the longer left column (the right one has one box left)
+        f.y = y + 3 * 17;   // [ui-h] below the left column ([ui-j] "Confirm cancel" on the right went: the Remove question)
         // [dl-1] defaults of the two order flags for new downloads (qBittorrent: both off)
         f.x0 = 215;
         f.w = 305;

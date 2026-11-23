@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "core/search_merge.h"
 #include "mx/settings_keys.h"
+#include "mx/trash.h"
 #include "mxhash/ed2k.h"
 #include "mxhash/encoding.h"
 #include "mxhash/links.h"
@@ -13,6 +14,7 @@
 
 #include <QtCore/QCborValue>
 #include <QtCore/QDir>
+#include <QtCore/QDirIterator>
 #include <QtCore/QFileInfo>
 #include <QtCore/QMap>
 #include <QtCore/QRegularExpression>
@@ -198,6 +200,14 @@ void Download::restoreState(const QByteArray &blob)
     // [dl-1] download order
     m_seq = m.value(QStringLiteral("seq")).toBool();
     m_firstLast = m.value(QStringLiteral("fl")).toBool();
+    // [ui-j] ownership of the files on disk
+    if (m.contains(QStringLiteral("own"))) {
+        const QVariantMap own = m.value(QStringLiteral("own")).toMap();
+        m_ownKnown = true;
+        m_preexisting = own.value(QStringLiteral("pre")).toStringList();
+        m_topExisted = own.value(QStringLiteral("topExisted")).toBool();
+    }
+    m_notOwned = m.value(QStringLiteral("notOwned")).toBool();
     // [merge-1] networks matched by name and size: confirmed / dropped
     const QVariantMap cn = m.value(QStringLiteral("candNets")).toMap();
     for (auto it = cn.constBegin(); it != cn.constEnd(); ++it) {
@@ -284,6 +294,13 @@ QByteArray Download::saveState() const
     if (m_aeq >= 0) m.insert(QStringLiteral("aeq"), m_aeq);
     if (m_seq) m.insert(QStringLiteral("seq"), true);          // [dl-1]
     if (m_firstLast) m.insert(QStringLiteral("fl"), true);
+    if (m_ownKnown) {   // [ui-j]
+        QVariantMap own;
+        own.insert(QStringLiteral("pre"), m_preexisting);
+        own.insert(QStringLiteral("topExisted"), m_topExisted);
+        m.insert(QStringLiteral("own"), own);
+    }
+    if (m_notOwned) m.insert(QStringLiteral("notOwned"), true);
     if (!m_candNets.isEmpty()) {   // [merge-1]
         QVariantMap cn;
         for (auto it = m_candNets.constBegin(); it != m_candNets.constEnd(); ++it) {
@@ -642,6 +659,181 @@ void Download::cancel(bool deleteData)
         QFile::remove(partPath());
     }
     dropPreview();   // [dl-1] again: on Windows the link goes only once the part file is closed
+}
+
+// ============================================================================ [ui-j] removal
+
+namespace {
+bool onDisk(const QString &p)
+{
+    const QFileInfo fi(p);
+    return fi.exists() || fi.isSymLink();
+}
+bool padPath(const QString &p)
+{
+    return p.startsWith(QLatin1String(".pad/")) || p.contains(QLatin1String("/.pad/"));
+}
+// every file below `dir` is one of `own` (folders and nothing else)
+bool holdsOnly(const QString &dir, const QSet<QString> &own)
+{
+    QDirIterator it(dir, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QFileInfo f = it.nextFileInfo();
+        if (f.isDir() && !f.isSymLink()) continue;
+        if (!own.contains(QDir::cleanPath(f.absoluteFilePath()))) return false;
+    }
+    return true;
+}
+} // namespace
+
+void Download::noteOwnership(const TorrentSnapshot &sn)
+{
+    if (m_ownKnown || !sn.hasMetadata || sn.savePath.isEmpty()) return;
+    m_ownKnown = true;
+    const QDir dir(sn.savePath);
+    QString top;
+    for (int i = 0; i < sn.files.size(); ++i) {
+        const TorrentFile &f = sn.files.at(i);
+        if ((m_torrent && m_torrent->isPadFile(i)) || padPath(f.path)) continue;
+        if (top.isEmpty() && f.path.contains(QLatin1Char('/'))) top = f.path.section(QLatin1Char('/'), 0, 0);
+        if (onDisk(dir.filePath(f.path))) m_preexisting << f.path;
+    }
+    m_topExisted = !top.isEmpty() && onDisk(dir.filePath(top));
+    if (!m_preexisting.isEmpty() || m_topExisted)
+        qCInfo(lcEngine) << m_rec.id << "files on the disk before this download (kept on delete):" << m_preexisting.size()
+                         << (m_topExisted ? "and its folder" : "");
+    m_dirtyBlob = true;
+}
+
+DownloadDiskInfo Download::diskInfo(QStringList *pruneDirs) const
+{
+    DownloadDiskInfo di;
+    di.known = true;
+    di.finished = isFinished();
+    di.total = m_rec.size;
+    TorrentBackend *be = m_host->backend();
+    const bool hasPart = m_part || !m_partPath.isEmpty() || (!isFinished() && onDisk(partPath()));
+    const bool torrent = m_torrent || (!hasPart && !m_torrentId.isEmpty());
+    QStringList own, kept;
+    if (torrent) {
+        di.torrent = true;
+        TorrentSnapshot sn;
+        if (m_torrent) sn = m_torrent->snap();
+        else if (be && be->torrents().contains(m_torrentId)) sn = be->snapshot(m_torrentId);
+        QList<TorrentFile> files;
+        QString save = sn.savePath;
+        if (sn.hasMetadata) {
+            for (int i = 0; i < sn.files.size(); ++i)
+                if (!(m_torrent && m_torrent->isPadFile(i)) && !padPath(sn.files.at(i).path)) files << sn.files.at(i);
+        } else if (m_rec.isBundle && !m_rec.files.isEmpty()) {
+            for (const BundleFile &b : m_rec.files) {
+                TorrentFile f;
+                f.path = b.path;
+                f.size = b.size;
+                f.done = b.done;
+                files << f;
+            }
+        } else if (!m_rec.savePath.isEmpty()) {
+            TorrentFile f;
+            f.path = QFileInfo(m_rec.savePath).fileName();
+            f.size = m_rec.size;
+            f.done = isFinished() ? m_rec.size : m_rec.done;
+            files << f;
+            save = QFileInfo(m_rec.savePath).absolutePath();
+        }
+        if (save.isEmpty()) save = m_rec.saveDir.isEmpty() ? m_host->incomingDir() : m_rec.saveDir;
+        const QDir dir(save);
+        di.folder = dir.absolutePath();
+        QString top;
+        QSet<QString> ownSet;
+        QSet<QString> dirs;
+        for (const TorrentFile &f : std::as_const(files)) {
+            const QString p = QDir::cleanPath(dir.absoluteFilePath(f.path));
+            if (f.path.contains(QLatin1Char('/'))) {
+                if (top.isEmpty()) top = f.path.section(QLatin1Char('/'), 0, 0);
+                for (QString d = QFileInfo(f.path).path(); !d.isEmpty() && d != QLatin1String("."); d = QFileInfo(d).path())
+                    dirs.insert(QDir::cleanPath(dir.absoluteFilePath(d)));
+            }
+            if (!onDisk(p)) continue;
+            if (!m_ownKnown || m_preexisting.contains(f.path)) {
+                kept << p;
+                continue;
+            }
+            own << p;
+            ownSet.insert(p);
+            di.bytes += isFinished() ? QFileInfo(p).size() : qMax<qint64>(0, f.done);
+        }
+        const QString parts = dir.absoluteFilePath(QLatin1Char('.') + m_torrentId + QStringLiteral(".parts"));
+        if (!m_torrentId.isEmpty() && onDisk(parts)) own << parts;
+        if (!top.isEmpty() && m_ownKnown && !m_topExisted) {
+            const QString topPath = QDir::cleanPath(dir.absoluteFilePath(top));
+            if (kept.isEmpty() && QFileInfo(topPath).isDir() && !QFileInfo(topPath).isSymLink() && holdsOnly(topPath, ownSet)) {
+                // the folder this download created, holding nothing but its files: it goes as one
+                QStringList rest;
+                for (const QString &p : std::as_const(own))
+                    if (!p.startsWith(topPath + QLatin1Char('/'))) rest << p;
+                own = QStringList{topPath} + rest;
+            } else if (pruneDirs) {
+                // something else is in it: the files go one by one, then the folders they leave empty
+                QStringList ds = dirs.values();
+                std::sort(ds.begin(), ds.end(), [](const QString &a, const QString &b) { return a.size() > b.size(); });
+                *pruneDirs = ds;
+            }
+        }
+        if (!kept.isEmpty())
+            di.keptWhy = m_ownKnown ? QStringLiteral("it was on the disk before this download started")
+                                    : QStringLiteral("OctoMX cannot tell whether this download created it");
+    } else if (isFinished()) {
+        const QString p = m_rec.savePath;
+        if (!p.isEmpty() && onDisk(p)) {
+            di.folder = QFileInfo(p).absolutePath();
+            const bool adopted = m_notOwned || m_rec.statusText.contains(QLatin1String("already in your library"));
+            if (adopted) {
+                kept << p;
+                di.keptWhy = QStringLiteral("it was in your library before this download");
+            } else if (QFileInfo(p).isFile() && (m_rec.size <= 0 || QFileInfo(p).size() == m_rec.size)) {
+                own << p;
+                di.bytes = QFileInfo(p).size();
+            } else {
+                kept << p;
+                di.keptWhy = QStringLiteral("it is not the file this download finished (its size changed)");
+            }
+        }
+    } else {
+        const QString p = m_part ? m_part->path() : partPath();
+        if (onDisk(p)) {
+            di.folder = QFileInfo(p).absolutePath();
+            own << p;
+            const qint64 held = m_part ? m_part->persistable().total() : m_restoreHeld.total();
+            di.bytes = qMin(QFileInfo(p).size(), qMax(m_rec.done, held));
+            if (QFileInfo(p).fileName() != m_rec.id + QStringLiteral(".part")) di.inPlaceFile = p;
+        }
+    }
+    di.paths = own;
+    di.kept = kept;
+    di.trash = trash::availableForAll(own);
+    return di;
+}
+
+void Download::stopForRemoval(bool keepData)
+{
+    m_active = false;
+    dropPreview();
+    closeAllSources();
+    stopFindSources();
+    TorrentBackend *be = m_host->backend();
+    if (m_torrent) m_torrent->releaseAll();
+    if (be && !m_torrentId.isEmpty() && be->torrents().contains(m_torrentId)) be->removeTorrent(m_torrentId, false);
+    if (be && !m_promoteTorrent.isEmpty()) be->removeTorrent(m_promoteTorrent, false);
+    if (m_part) {
+        if (keepData) {
+            m_part->drain(1500);   // what is held reaches the disk and the kept record
+            m_restoreHeld = m_part->persistable();
+            m_restoreVerified = m_part->verified();
+        }
+        m_part->close();
+    }
+    dropPreview();   // again: on Windows the link goes only once the part file is closed
 }
 
 void Download::setPriority(int p)
@@ -2608,6 +2800,7 @@ void Download::onTorrentMetadata()
     m_torrent->refresh();
     const TorrentSnapshot &sn = m_torrent->snap();
     if (!sn.hasMetadata) return;
+    noteOwnership(sn);   // [ui-j] before libtorrent writes: which of its files were there already
     int real = 0;
     QList<BundleFile> files;
     for (int i = 0; i < sn.files.size(); ++i) {
@@ -2690,6 +2883,22 @@ void Download::onTorrentError(const QString &text)
 {
     qCWarning(lcEngine) << m_rec.id << "torrent error:" << text;
     m_rec.errorText = text.left(300);
+    markDirty(true);
+}
+
+// [ui-j] the torrent of a download removed earlier left the backend after this download took the same
+// torrent up again: add it anew (nothing is wrong with this download)
+void Download::torrentReAdd()
+{
+    if (m_torrent) {
+        disconnect(m_torrent.get(), nullptr, this, nullptr);
+        m_torrent.reset();
+    }
+    qCInfo(lcEngine) << m_rec.id << "the torrent of the earlier removal is gone: adding it again";
+    if (m_active) {
+        ensureStore();
+        emit needsSchedule();
+    }
     markDirty(true);
 }
 

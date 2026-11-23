@@ -49,13 +49,23 @@ void TextFilter::setQuery(const QString &query)
 
 bool TextFilter::matches(const QString &text) const
 {
+    return hasRequired(text) && !excludes(text);
+}
+
+bool TextFilter::hasRequired(const QString &text) const
+{
     for (const QString &t : m_need)
         if (!text.contains(t, Qt::CaseInsensitive))
             return false;
+    return true;
+}
+
+bool TextFilter::excludes(const QString &text) const
+{
     for (const QString &t : m_not)
         if (text.contains(t, Qt::CaseInsensitive))
-            return false;
-    return true;
+            return true;
+    return false;
 }
 
 // ------------------------------------------------------------------------------------- FilterRow

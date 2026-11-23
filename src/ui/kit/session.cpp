@@ -182,6 +182,13 @@ void migrateLegacySettings(Settings *s)
             s->setValue(keys::transfers::NewDownloadsExpanded, QVariant());
         s->setValue(marker, 2);
     }
+    // [ui-j] "Confirm cancel" turned off (no question wanted, the partial file was kept): the Remove
+    // Download question that replaced it starts as "Keep the file", which does exactly that
+    if (s->value(marker).toInt() < 3) {
+        if (!firstRun && !s->b(keys::transfers::ConfirmCancel))
+            s->setValue(keys::transfers::RemoveAction, QStringLiteral("keep"));
+        s->setValue(marker, 3);
+    }
 }
 
 // ------------------------------------------------------------------------------------ [ui-e]

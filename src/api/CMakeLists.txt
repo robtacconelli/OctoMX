@@ -31,6 +31,9 @@ add_library(mxapi STATIC
     # [ren-1] copies installed before 5.0: legacy profile folder, database, download folder, settings
     mx/legacy_names.h
     legacy_names.cpp
+    # [ui-j] the trash / Recycle Bin (test seam under MX_OS_ROOT)
+    mx/trash.h
+    trash.cpp
 )
 target_include_directories(mxapi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mxapi PUBLIC Qt6::Core Qt6::Network)

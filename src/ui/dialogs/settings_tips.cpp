@@ -209,6 +209,7 @@ const QHash<QString, const char *> &tipTable()
         {"transfers/preallocate", QT_TR_NOOP("Reserve the whole size of a download on disk when it starts.")},
         {"transfers/startPaused", QT_TR_NOOP("New downloads wait paused until you resume them.")},
         {"transfers/confirmCancel", QT_TR_NOOP("Ask before a download is cancelled and its partial file deleted.")},
+        {"transfers/removeAction", QT_TR_NOOP("What happens to the file when you remove a download from the Transfers list (Cancel, Clear, Del). Ask: a question each time. Keep the file: a finished file stays, a partial one can be continued later. Delete the file too: it goes to the trash or Recycle Bin; where there is none you are still asked. Default: Ask.")},
         {"transfers/shareCompleted", QT_TR_NOOP("Share finished downloads (the Incoming Files Folder) with other users.")},
         {"transfers/uploadsToHotlistOnly", nullptr},
         {"queue/changeSpeedWhenBusy", QT_TR_NOOP("While this many uploads run on the OctoMX Peer Network, other users see the connection type on the right instead of yours, so fewer of them queue.")},

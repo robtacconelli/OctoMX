@@ -1237,14 +1237,12 @@ void MxListView::applyFilter()
     if (look.isEmpty())
         for (int c = 0; c < cols; ++c)
             look << c;
-    auto matches = [&](const QModelIndex &idx) {
-        if (filter.isEmpty())
-            return true;
+    auto rowText = [&](const QModelIndex &idx) {
         QString text;
         for (int c : std::as_const(look))
             if (c < cols)
                 text += idx.sibling(idx.row(), c).data(Qt::DisplayRole).toString() + QLatin1Char('\t');
-        return filter.matches(text);
+        return text;
     };
     int shown = 0, total = 0;
     // returns true when the row (or one of its children) is visible
@@ -1253,11 +1251,16 @@ void MxListView::applyFilter()
         const int n = m->rowCount(parent);
         for (int r = 0; r < n; ++r) {
             const QModelIndex idx = m->index(r, 0, parent);
-            const bool self = parentMatched || matches(idx);
+            // [ui-j] an excluded word hides the row and what is under it: a child row without the
+            // word (a source of an excluded file) no longer keeps its parent visible, so a filter of
+            // exclusions only ("-word -other") works. The required words: the row, its parent or a child.
+            const QString text = filter.isEmpty() ? QString() : rowText(idx);
+            const bool excluded = !filter.isEmpty() && filter.excludes(text);
+            const bool self = !excluded && (parentMatched || filter.isEmpty() || filter.hasRequired(text));
             bool kid = false;
-            if (m->hasChildren(idx))
+            if (!excluded && m->hasChildren(idx))
                 kid = walk(idx, self);
-            const bool vis = self || kid;
+            const bool vis = !excluded && (self || kid);
             if (!parent.isValid()) {
                 ++total;
                 if (vis)

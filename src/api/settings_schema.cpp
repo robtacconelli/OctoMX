@@ -499,7 +499,9 @@ QList<SettingDef> buildSchema()
     B.b(transfers::StartPaused, false, "Add new downloads paused");
     B.b(transfers::SequentialDefault, false, "Download new files in sequential order");   // [dl-1] qBittorrent: off
     B.b(transfers::FirstLastDefault, false, "Download first and last pieces of new files first");
-    B.b(transfers::ConfirmCancel, true, "Confirm before cancelling a download");
+    B.b(transfers::ConfirmCancel, true, "Confirm before cancelling a download"); B.hide();   // [ui-j] the Remove question took its place
+    B.e(transfers::RemoveAction, QStringLiteral("ask"), L({"ask", "keep", "delete"}), "When a download is removed from the list",   // [ui-j]
+        L({"Ask what to do with the file", "Keep the file", "Delete the file too"}));
     B.b(transfers::BundleSubfolders, true, "Create a folder for multi-file downloads"); B.hide();   // [ui-h] nothing reads it: off the UI
     B.i(transfers::MinFreeSpaceMB, 500, 0, 1048576, "Pause downloads when free space is below (MB)");
     B.b(transfers::VerifyCompleted, true, "Verify completed files");

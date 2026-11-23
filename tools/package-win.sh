@@ -106,6 +106,8 @@ uses() { grep -qx "$1" <<<"$ALL_IMPORTS"; }
 
 if uses qt6gui.dll; then
   add_plugin platforms qwindows.dll
+  # [ui-j] a packaged test set runs its tests (and tst_restart's octomx.exe) on the offscreen platform
+  [ $WITH_TESTS = 1 ] && add_plugin platforms qoffscreen.dll
   for f in qgif.dll qico.dll qjpeg.dll qsvg.dll; do add_plugin imageformats $f; done
   add_plugin iconengines qsvgicon.dll
 fi

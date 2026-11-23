@@ -136,8 +136,9 @@ private slots:
         QStringList texts;
         for (QAction *a : m->actions())
             texts << (a->isSeparator() ? QStringLiteral("-") : a->text());
+        // the 3.53 entries, then [ui-j] Delete Folder... (UI_SPEC 8.11)
         QCOMPARE(texts, (QStringList{QStringLiteral("Expand"), QStringLiteral("-"), QStringLiteral("Open Folder"), QStringLiteral("-"),
-                                     QStringLiteral("Un-share Folder")}));
+                                     QStringLiteral("Un-share Folder"), QStringLiteral("Delete Folder...")}));
         QCOMPARE(m->defaultAction()->text(), QStringLiteral("Expand"));
         uib::menuAction(m, QStringLiteral("Expand"))->trigger();
         uib::closeMenus();
