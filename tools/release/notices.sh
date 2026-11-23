@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 source "$ROOT/toolchain/env.sh"
 PLAT=$1; DEST=$(realpath "$2")
-V=${OCTOMX_RELEASE_VERSION:-5.2}
+V=${OCTOMX_RELEASE_VERSION:-5.3}
 SOURCE_URL=${OCTOMX_SOURCE_URL:-https://github.com/robtacconelli/OctoMX}
 SOURCE_TAG=${OCTOMX_SOURCE_TAG:-v$V}
 F=$ROOT/tools/release/files

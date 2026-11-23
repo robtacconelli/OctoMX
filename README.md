@@ -36,7 +36,7 @@ responsibility; the authors are not responsible for the content exchanged with i
 start the program asks you to accept these terms before it connects to any network. See
 [Legal](#legal).
 
-Version 5.2 for Windows 10/11 (64-bit) and Linux (x86_64). Project page:
+Version 5.3 for Windows 10/11 (64-bit) and Linux (x86_64). Project page:
 https://github.com/robtacconelli/OctoMX
 
 > **Licence:** OctoMX is free software under the **GNU General Public License v3.0 or later**
@@ -55,24 +55,23 @@ The Networks page, the first page you see, with the networks connected:
 
 ![Networks page: Ready, 8 networks online](docs/screenshots/networks.png)
 
-A search for Big Buck Bunny, answered by BitTorrent, eD2k, Kad, Gnutella and the Internet Archive.
-The same file found on several networks is one row (here `BT+eD2k`, opened to show where it was
+A search for Big Buck Bunny, answered by BitTorrent, eD2k, Kad and the Internet Archive. The same
+file found on several networks is one row (here `BT+eD2k+Kad`, opened to show where it was
 found); the "Filter results" field narrows the list:
 
 ![Search results for Big Buck Bunny from several networks, one merged row opened, filtered](docs/screenshots/search.png)
 
-That row downloading: one download fed by BitTorrent peers and by the Internet Archive's HTTP
-mirror at the same time (the eD2k source of the row could not be reached in this session), with
-one line per source and per network. The bar in the Status column is a map of the file: blue
-parts are on disk and verified, green ones are arriving right now. In the classic dark colours
-and in the light theme:
+That row downloading: one download fed by a BitTorrent swarm and a Kad source at the same time,
+with one line per source and per network. The bar in the Status column is a map of the file: blue
+parts are on disk and verified, green ones are arriving right now. A download limit of 450 KB/s
+is set (title bar). In the classic dark colours and in the light theme:
 
 ![Transfers page: one download with a line per network and the map of its parts, dark theme](docs/screenshots/transfers.png)
 
 ![The same Transfers page in the light theme](docs/screenshots/transfers-light.png)
 
-The Bandwidth page after that download, with a download and an upload limit set near the end
-(the dashed lines):
+The Bandwidth page during that download. After the first seconds a download limit and then an
+upload limit were set (the dashed lines): the rate runs along them:
 
 ![Bandwidth page: incoming and outgoing graphs with the limit lines](docs/screenshots/bandwidth.png)
 
@@ -89,8 +88,8 @@ built-in demo data:
 
 | | |
 |---|---|
-| **Windows** | Unzip `OctoMX-5.2-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
-| **Linux** | `tar xf OctoMX-5.2-linux-x86_64.tar.xz` and run `OctoMX-5.2-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
+| **Windows** | Unzip `OctoMX-5.3-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
+| **Linux** | `tar xf OctoMX-5.3-linux-x86_64.tar.xz` and run `OctoMX-5.3-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
 
 `SHA256SUMS` next to the archives has their checksums.
 

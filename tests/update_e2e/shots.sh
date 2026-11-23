@@ -10,12 +10,12 @@ source "$ROOT/toolchain/env.sh" >/dev/null
 EXE=$(realpath "$1"); OUT=$(realpath -m "$2"); W=$(realpath -m "$3")
 mkdir -p "$OUT" "$W"
 cat > "$W/release.json" <<'EOF'
-{"tag_name":"v5.3.0","name":"OctoMX 5.3","draft":false,"prerelease":false,
- "html_url":"https://github.com/robtacconelli/OctoMX/releases/tag/v5.3.0",
+{"tag_name":"v5.4.0","name":"OctoMX 5.4","draft":false,"prerelease":false,
+ "html_url":"https://github.com/robtacconelli/OctoMX/releases/tag/v5.4.0",
  "body":"## What's new\n\n* Updates that install themselves, checked against the release signature\n* Columns that always fill the list\n* A filter in the search results",
- "assets":[{"name":"OctoMX-5.3-linux-x86_64.tar.xz","browser_download_url":"https://github.com/robtacconelli/OctoMX/releases/download/v5.3.0/OctoMX-5.3-linux-x86_64.tar.xz","size":30000000},
-           {"name":"SHA256SUMS","browser_download_url":"https://github.com/robtacconelli/OctoMX/releases/download/v5.3.0/SHA256SUMS","size":200},
-           {"name":"SHA256SUMS.sig","browser_download_url":"https://github.com/robtacconelli/OctoMX/releases/download/v5.3.0/SHA256SUMS.sig","size":140}]}
+ "assets":[{"name":"OctoMX-5.4-linux-x86_64.tar.xz","browser_download_url":"https://github.com/robtacconelli/OctoMX/releases/download/v5.4.0/OctoMX-5.4-linux-x86_64.tar.xz","size":30000000},
+           {"name":"SHA256SUMS","browser_download_url":"https://github.com/robtacconelli/OctoMX/releases/download/v5.4.0/SHA256SUMS","size":200},
+           {"name":"SHA256SUMS.sig","browser_download_url":"https://github.com/robtacconelli/OctoMX/releases/download/v5.4.0/SHA256SUMS.sig","size":140}]}
 EOF
 # a screen large enough for 200 % (the default offscreen screen is 800x800)
 cat > "$W/offscreen.json" <<'JSON'
