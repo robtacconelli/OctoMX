@@ -217,6 +217,16 @@ private slots:
         QList<QByteArray> parts;
         for (int i = 0; i < n; ++i) parts << QCryptographicHash::hash(QByteArray::number(i), QCryptographicHash::Md5);
         B->library.partSets.insert(big.hashes.sha1, parts);
+        // [up-1] a server offers only a set that reduces to the file's ed2k hash: make the stand-in
+        // ed2k hash of the generated file the root of this set
+        {
+            QCryptographicHash md4(QCryptographicHash::Md4);
+            for (const QByteArray &p : std::as_const(parts)) md4.addData(p);
+            for (mx::SharedFile &f : B->library.files)
+                if (f.hashes.sha1 == big.hashes.sha1) f.hashes.ed2k = md4.result();
+            big.hashes.ed2k = md4.result();
+            B->setShared();
+        }
         mx::FileHashes h;
         h.sha1 = big.hashes.sha1;
         auto *src = A->plugin->openSource(QStringLiteral("dl-hs"), h, big.size, sourceFor(*B));

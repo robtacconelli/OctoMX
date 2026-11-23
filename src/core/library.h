@@ -73,6 +73,7 @@ public:
     bool findByHash(const FileHashes &h, SharedFile *out) const override;
     QByteArray read(const FileHashes &h, qint64 offset, qint64 length) override;
     QList<QByteArray> ed2kPartHashes(const FileHashes &h) const override;
+    bool partialRanges(const FileHashes &h, QList<QPair<qint64, qint64>> *have) const override;   // [up-1]
 
     // ---- extras for the core / engine
     QList<QByteArray> aichPartHashes(const FileHashes &h) const;
@@ -94,6 +95,18 @@ public:
     using PartialFinder = std::function<bool(const FileHashes &, SharedFile *)>;
     using PartialReader = std::function<QByteArray(const FileHashes &, qint64, qint64)>;
     void setPartialProvider(PartialFinder finder, PartialReader reader);
+    // [up-1] for a running download: the byte ranges verified against its trusted hashes, and the
+    // trusted eD2k part hash set its own parts are checked against (empty when it has none, or only a
+    // provisional one). false = not a running download.
+    using PartialDetails = std::function<bool(const FileHashes &, QList<QPair<qint64, qint64>> *, QList<QByteArray> *)>;
+    void setPartialDetails(PartialDetails details);
+    // [up-1] Files a running download is still writing (a torrent's payload in the shared incoming
+    // folder, a part file in a shared folder). They are never hashed by the scan and never offered as
+    // complete files (hashes over a half-written file, holes included, are wrong); the engine serves
+    // their verified part through the partial provider instead. A directory covers everything under
+    // it (a torrent's folder). Set by the engine whenever its downloads change.
+    void setBusyPaths(const QSet<QString> &paths);
+    bool isBusy(const QString &path) const;
 
 signals:
     void sharedFilesUpdated(const QList<mx::SharedFile> &files);
@@ -124,6 +137,7 @@ private:
     void emitProgress(const QString &current);
     void updateWatcher(const QStringList &dirs);
     QString findPathLocked(const FileHashes &h) const;
+    bool busyLocked(const QString &path) const;
 
     Settings *m_settings;
     Database *m_db;
@@ -134,6 +148,8 @@ private:
     QHash<QByteArray, QString> m_index;// kind byte + hash -> path
     PartialFinder m_partialFinder;
     PartialReader m_partialReader;
+    PartialDetails m_partialDetails;   // [up-1]
+    QSet<QString> m_busy;              // [up-1] normalised paths written by running downloads
 
     QList<SharedFolder> m_folders;     // user folders (main thread)
     QSet<QString> m_excluded;

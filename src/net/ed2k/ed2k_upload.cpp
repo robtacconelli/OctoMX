@@ -80,7 +80,11 @@ UploadManager::Client *UploadManager::clientFor(PeerConnection *pc, bool create)
         it = m_clients.insert(key, c);
     }
     Client &c = *it;
-    c.pc = pc;
+    // [up-1] an upload session belongs to the connection it runs on: a second connection of the same
+    // client (two downloads of one file, a reconnect while the old socket lingers) must not take it
+    // over here, or the requests of one were answered on the other and the bytes went uncounted
+    // (the row said "0 B sent" while the data flowed). onStartUpload() decides about moving it.
+    if (!(c.uploading && c.pc && c.pc != pc && c.pc->isOpen())) c.pc = pc;
     c.userHash = pc->info().userHash;
     c.ip = pc->ip();
     c.port = pc->listenPort();
@@ -292,6 +296,24 @@ void UploadManager::onStartUpload(PeerConnection *pc, const QByteArray &hash)
     Client *c = clientFor(pc, true);
     const qint64 now = m_clock.elapsed();
     c->lastAskMs = now;
+    if (c->uploading && c->pc != pc) {
+        // [up-1] the session runs on another connection of this client: move it here when that one
+        // is gone (a reconnect), else this connection waits its turn like a queued request (one
+        // upload slot per client, as in eMule)
+        const bool gone = !c->pc || !c->pc->isOpen();
+        if (gone && c->fileHash == hash) {
+            m_core->log(QStringLiteral("upload to %1 moves to its new connection").arg(pc->describe()));
+            c->pc = pc;
+            c->pc->uploadRole = true;
+            countSentOn(*c);
+            pc->send(PROT_EDONKEY, OP_ACCEPTUPLOADREQ);
+            return;
+        }
+        Writer w;
+        w.u32(1);
+        pc->send(PROT_EDONKEY, OP_QUEUERANK, w.data());
+        return;
+    }
     if (c->uploading) {
         if (c->fileHash == hash) { pc->send(PROT_EDONKEY, OP_ACCEPTUPLOADREQ); return; }
         endSession(*c, QStringLiteral("peer switched file"), true);
@@ -434,19 +456,26 @@ void UploadManager::startSession(Client &c)
                  && m_core->cfg().b(QStringLiteral("ed2k/compressUploads"), true);
     c.pc->uploadRole = true;
     c.pc->setIdleTimeoutMs(120000);
-    const QString key = c.key;
-    disconnect(c.pc.data(), &PeerConnection::dataSent, this, nullptr);
-    connect(c.pc.data(), &PeerConnection::dataSent, this, [this, key](qint64 n) {
-        auto it = m_clients.find(key);
-        if (it == m_clients.end() || !it->uploading) return;
-        it->sessionBytes += n;
-        it->rateWindowBytes += n;
-        m_totalUploaded += n;
-        pumpClient(*it);
-    });
+    countSentOn(c);
     c.pc->send(PROT_EDONKEY, OP_ACCEPTUPLOADREQ);
     m_core->log(QStringLiteral("upload slot to %1 for \"%2\"").arg(c.pc->describe(), c.file.name));
     report(c);
+}
+
+void UploadManager::countSentOn(Client &c)
+{
+    if (!c.pc) return;
+    const QString key = c.key;
+    PeerConnection *pc = c.pc;
+    disconnect(pc, &PeerConnection::dataSent, this, nullptr);
+    connect(pc, &PeerConnection::dataSent, this, [this, key, pc](qint64 n) {
+        auto it = m_clients.find(key);
+        if (it == m_clients.end() || !it->uploading) return;
+        it->sessionBytes += n;   // what was written to the socket for this session
+        it->rateWindowBytes += n;
+        m_totalUploaded += n;
+        if (it->pc == pc) pumpClient(*it);
+    });
 }
 
 void UploadManager::endSession(Client &c, const QString &why, bool requeue)

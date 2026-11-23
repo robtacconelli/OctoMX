@@ -271,6 +271,20 @@ void UploadSession::serveFile(const HeaderBlock &req, const mx::SharedFile &f, b
         end = spans.first().second;
         partial = !(first == 0 && end == size);
     }
+    // [up-1] a file we are still downloading (PFSP): only its verified ranges, and the requester is
+    // told which they are (X-Available-Ranges); any other range is 416, never bytes we do not hold
+    QList<QPair<qint64, qint64>> have;
+    const bool fileIsPartial = m_host->library() && m_host->library()->partialRanges(f.hashes, &have);
+    if (fileIsPartial) {
+        bool inside = false;
+        for (const auto &r : std::as_const(have)) inside = inside || (r.first <= first && end <= r.second);
+        if (!inside) {
+            sendSimple(416, QString(), {qMakePair(QStringLiteral("Content-Range"), QStringLiteral("bytes */%1").arg(size)),
+                                        qMakePair(QStringLiteral("X-Available-Ranges"), formatAvailableRanges(have))},
+                       QByteArray(), m_closeAfter);
+            return;
+        }
+    }
     // a new file on this connection = a new upload entry
     if (m_uploadSha1 != f.hashes.sha1 || m_uploadId.isEmpty()) {
         if (!m_uploadId.isEmpty() && !m_queued) endUpload(mx::TransferState::Completed, QStringLiteral("Finished"));
@@ -358,6 +372,7 @@ void UploadSession::serveFile(const HeaderBlock &req, const mx::SharedFile &f, b
         const QList<HostPort> alts = m_host->altLocsFor(f.hashes.sha1, m_peer);
         if (!alts.isEmpty()) h.add(QStringLiteral("X-Alt"), formatAltLocs(alts.mid(0, 10)));
     }
+    if (fileIsPartial) h.add(QStringLiteral("X-Available-Ranges"), formatAvailableRanges(have));   // [up-1]
     h.add(QStringLiteral("X-Features"), QStringLiteral("browse/1.0, queue/0.1"));
     h.add(QStringLiteral("Connection"), m_closeAfter ? QStringLiteral("close") : QStringLiteral("Keep-Alive"));
     writeMeta(h.serialize());
@@ -423,7 +438,10 @@ void UploadSession::report(bool force)
     }
     if (!force) return;
     m_info.done = m_sentTotal;
-    m_info.rateUpBps = m_remaining > 0 ? m_rateBps : 0;
+    // [up-1] the rate of the last second, also between two requests of the same downloader (a
+    // multi-source download asks range after range: tying it to "a request is running" showed 0 B/s
+    // while 700 KB/s went out, under wine nearly always); it falls to 0 within a second of silence
+    m_info.rateUpBps = m_rateBps;
     if (!m_info.sources.isEmpty()) {
         m_info.sources[0].bytes = m_sentTotal;
         m_info.sources[0].rateBps = m_info.rateUpBps;
@@ -439,7 +457,13 @@ void UploadSession::endUpload(mx::TransferState st, const QString &text)
     m_info.state = st;
     m_info.statusText = text;
     m_info.rateUpBps = 0;
-    m_info.done = m_sentTotal;
+    // [up-1] bytes really sent: what is still in the socket's buffer when the connection ends never left
+    m_info.done = qMax<qint64>(0, m_sentTotal - (m_sock && m_sock->state() != QAbstractSocket::ConnectedState ? m_sock->bytesToWrite() : 0));
+    if (!m_info.sources.isEmpty()) {
+        m_info.sources[0].bytes = m_info.done;
+        m_info.sources[0].rateBps = 0;
+        m_info.sources[0].statusText = text;
+    }
     m_info.completed = QDateTime::currentDateTime();
     m_host->reportUpload(m_info);
     m_host->reportUploadFinished(m_uploadId);

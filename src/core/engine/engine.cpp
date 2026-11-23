@@ -189,7 +189,19 @@ struct DownloadEngine::Private : public engine::EngineHost {
         qint64 size = 0;
         QString name, path;
         std::function<QByteArray(qint64, qint64)> reader;
+        QList<QPair<qint64, qint64>> have;   // [up-1] verified against trusted hashes
+        QList<QByteArray> ed2kParts;          // [up-1] the trusted set (empty: none)
+        int btFile = -1;                      // [up-1] a single-file torrent: the index of its file
+        // [up-1] the same file: by any hash; a single-file torrent also by its info-hash with the
+        // file's index or without one (the whole torrent is that file)
+        bool same(const FileHashes &h) const
+        {
+            if (hashes.conflicts(h) && !(btFile >= 0 && h.btih == hashes.btih)) return false;
+            if (btFile >= 0 && !h.btih.isEmpty() && h.btih == hashes.btih) return h.btFileIndex < 0 || h.btFileIndex == btFile;
+            return hashes.matches(h);
+        }
     };
+    QSet<QString> lastBusy;                    // [up-1] what the library was told last
     std::shared_ptr<QMutex> partialMutex = std::make_shared<QMutex>();
     std::shared_ptr<QList<PartialEntry>> partials = std::make_shared<QList<PartialEntry>>();
 
@@ -254,7 +266,11 @@ struct DownloadEngine::Private : public engine::EngineHost {
             if (now - lastEmit.value(d->id()) >= 1000) emitNow(d);
         }
     }
-    void finished(Download *) override { requestRebalance(); }
+    void finished(Download *) override
+    {
+        requestRebalance();
+        updatePartials();   // [up-1] the finished file is no longer busy: the library may share it now
+    }
     void completedFile(Download *d) override
     {
         const TransferInfo t = d->info();
@@ -627,22 +643,35 @@ struct DownloadEngine::Private : public engine::EngineHost {
     void updatePartials()
     {
         QList<PartialEntry> l;
+        QSet<QString> busy;
         const bool on = !ctx.settings || ctx.settings->b(keys::library::ShareIncomplete);
-        if (on) {
-            for (Download *d : std::as_const(list)) {
-                engine::PartStore *ps = d->partStore();
-                if (!ps || d->isFinished() || ps->verifiedBytes() <= 0 || d->hashes().isEmpty() || ps->extent() <= 0) continue;
-                PartialEntry e;
-                e.hashes = d->hashes();
-                e.size = ps->extent();
-                e.name = d->record().name;
-                e.path = ps->path();
-                e.reader = ps->verifiedReader();
-                l << e;
-            }
+        for (Download *d : std::as_const(list)) {
+            // [up-1] files a running download writes are never hashed or shared as complete files
+            for (const QString &p : d->busyPaths()) busy.insert(p);
+            if (!on) continue;
+            // [up-1] part files and single-file torrents: only what trusted hashes verified
+            engine::Download::ServeView v = d->serveView();
+            if (!v.ok) continue;
+            PartialEntry e;
+            e.hashes = v.hashes;
+            e.size = v.size;
+            e.name = v.name;
+            e.path = v.path;
+            e.reader = std::move(v.reader);
+            for (const engine::Range &r : v.verified.ranges()) e.have << qMakePair(r.first, r.second);
+            e.ed2kParts = v.ed2kParts;
+            e.btFile = v.btFile;
+            if (e.btFile >= 0) e.hashes.btFileIndex = -1;   // the torrent is this one file
+            l << e;
         }
-        QMutexLocker lock(partialMutex.get());
-        *partials = l;
+        {
+            QMutexLocker lock(partialMutex.get());
+            *partials = l;
+        }
+        if (ctx.library && busy != lastBusy) {
+            lastBusy = busy;
+            ctx.library->setBusyPaths(busy);
+        }
     }
     void installPartialProvider()
     {
@@ -653,7 +682,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
             [mtx, parts](const FileHashes &h, SharedFile *out) {
                 QMutexLocker l(mtx.get());
                 for (const PartialEntry &e : std::as_const(*parts)) {
-                    if (!e.hashes.matches(h)) continue;
+                    if (!e.same(h)) continue;
                     if (out) {
                         out->path = e.path;
                         out->name = e.name;
@@ -671,9 +700,20 @@ struct DownloadEngine::Private : public engine::EngineHost {
                 {
                     QMutexLocker l(mtx.get());
                     for (const PartialEntry &e : std::as_const(*parts))
-                        if (e.hashes.matches(h)) { reader = e.reader; break; }
+                        if (e.same(h)) { reader = e.reader; break; }
                 }
                 return reader ? reader(off, len) : QByteArray();
+            });
+        ctx.library->setPartialDetails(   // [up-1]
+            [mtx, parts](const FileHashes &h, QList<QPair<qint64, qint64>> *have, QList<QByteArray> *ed2kParts) {
+                QMutexLocker l(mtx.get());
+                for (const PartialEntry &e : std::as_const(*parts)) {
+                    if (!e.same(h)) continue;
+                    if (have) *have = e.have;
+                    if (ed2kParts) *ed2kParts = e.ed2kParts;
+                    return true;
+                }
+                return false;
             });
     }
     void connectPlugins()
@@ -793,7 +833,10 @@ DownloadEngine::~DownloadEngine()
 {
     d->stopped = true;
     d->tickTimer.stop();
-    if (d->ctx.library) d->ctx.library->setPartialProvider({}, {});
+    if (d->ctx.library) {
+        d->ctx.library->setPartialProvider({}, {});
+        d->ctx.library->setPartialDetails({});
+    }
     // kill-style teardown when shutdown() was not called: no persisting here (state written
     // incrementally is what survives, exactly as after a crash)
     for (Download *x : std::as_const(d->list)) delete x;
@@ -848,7 +891,10 @@ void DownloadEngine::shutdown()
     // ≤ ~1.5 s for draining pending writes in total, then persist what is durable
     for (Download *x : std::as_const(d->list)) x->shutdown(int(qMax<qint64>(0, 1500 - t.elapsed())));
     d->stopped = true;
-    if (d->ctx.library) d->ctx.library->setPartialProvider({}, {});
+    if (d->ctx.library) {
+        d->ctx.library->setPartialProvider({}, {});
+        d->ctx.library->setPartialDetails({});
+    }
     if (d->ctx.db) d->ctx.db->flush();
     qCInfo(lcEngine) << "engine shut down in" << t.elapsed() << "ms";
 }

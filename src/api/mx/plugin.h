@@ -33,7 +33,15 @@ public:
     // download). Returns the bytes read (may be short / empty if the range is not available).
     virtual QByteArray read(const FileHashes &h, qint64 offset, qint64 length) = 0;
     // Hash sets for serving (eD2k part hashes, AICH, TTH leaves), computed by the library hasher.
+    // [up-1] Only sets that are known to be right: the library's (hashed over the complete file) or,
+    // for a running download, the trusted set its own parts are checked against. Never a set
+    // computed over a partial file, never a provisional one.
     virtual QList<QByteArray> ed2kPartHashes(const FileHashes &h) const = 0;
+    // [added by up-1] true when h names a file that is still downloading and is served from its
+    // verified part: *have = the byte ranges [first, second) that read() delivers now. false = a
+    // complete shared file (every range) or not known. Thread-safe like read().
+    virtual bool partialRanges(const FileHashes &h, QList<QPair<qint64, qint64>> *have) const
+    { Q_UNUSED(h) Q_UNUSED(have) return false; }
 };
 
 struct PluginContext {
@@ -159,6 +167,9 @@ public:
     virtual QString clientName() const { return QString(); }
     // Ranges [first, second) the remote has. Empty list while unknown; a single {0,size} = complete.
     virtual QList<QPair<qint64, qint64>> available() const = 0;
+    // [up-1] A request that fails with this error asked for a range the remote does not hold (any
+    // more): not a fault of the source; the engine asks again where available() says it can.
+    static QString rangeNotAvailableError() { return QStringLiteral("Range not available"); }
     virtual qint64 preferredRequestSize() const { return 256 * 1024; }   // eD2k: multiples of 180 kB
     virtual int maxPendingRequests() const { return 1; }
     virtual void open() = 0;                        // connect / handshake / get into the queue
@@ -166,6 +177,11 @@ public:
     virtual void request(qint64 offset, qint64 length) = 0;
     virtual void cancelRequests() = 0;
     virtual void close() = 0;                       // then deleteLater() by the engine
+    // [added by up-1] Why the engine stops using this source, said just before close() so a network
+    // that can tell the uploader does (the OctoMX overlay's get_close reason). code: "done" (the
+    // download is complete), "paused", "cancelled", "quit", "banned" (text = the reason shown to the
+    // user), "dropped" (any other: slow, failing, not needed now).
+    virtual void setCloseReason(const QString &code, const QString &text) { Q_UNUSED(code) Q_UNUSED(text) }
 signals:
     void stateChanged();
     void availabilityChanged();

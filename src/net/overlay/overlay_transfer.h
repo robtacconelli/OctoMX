@@ -6,6 +6,7 @@
 
 #include "mx/plugin.h"
 
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
@@ -42,11 +43,14 @@ public:
     void request(qint64 offset, qint64 length) override;
     void cancelRequests() override;
     void close() override;
+    void setCloseReason(const QString &code, const QString &text) override;   // [up-1] sent with get_close
 
     // from the plugin
     quint32 sid() const { return m_sid; }
     QString nodeId() const { return m_nodeId; }
-    void onSlot(const QString &st, int pos, const QString &reason, const QStringList &hashSets = {});
+    void onSlot(const QString &st, int pos, const QString &reason, const QStringList &hashSets = {},
+                const QJsonObject &msg = {});
+    void onHave(const QJsonObject &o);       // [up-1] the uploader's verified ranges grew
     void onHashSet(const QJsonObject &o);   // [engine-3] answer to hs_req
     void onData(quint32 rq, qint64 off, const char *bytes, int len);
     void onGot(quint32 rq, bool ok, const QString &err);
@@ -75,6 +79,12 @@ private:
     qint64 m_lastOpenMs = 0;
     bool m_closed = false;
     bool m_hsAsked = false;                       // [engine-3] hs_req sent (once per session)
+    // [up-1] a source that is still downloading the file itself: the ranges it holds (verified on
+    // its side against trusted hashes); requests go only there
+    bool m_partial = false;
+    QList<QPair<qint64, qint64>> m_have;
+    bool readHave(const QJsonObject &o);          // true when the message carried a map
+    QString m_closeCode, m_closeText;
     // [bw-1] download limit: "get" messages wait until the shared budget has their bytes
     void sendPaced();
     std::deque<QJsonObject> m_unsent;
@@ -107,7 +117,20 @@ struct UploadSession {
     int lastQueuePos = -1;
     QStringList hashSets;    // [engine-3] kinds we can answer hs_req with ("ed2k-parts")
     int hashSetsServed = 0;
+    // [up-1] a file we are still downloading: only its verified ranges are served, and the
+    // downloader is told which ones they are (slot "have", later "have" messages)
+    bool partial = false;
+    QList<QPair<qint64, qint64>> have;
+    qint64 lastHaveMs = 0;
+    qint64 haveSentTotal = -1;   // bytes covered by the map the downloader got last
+    QString path;                // where it lies: the complete file is found by it when the download ends
 };
+
+// [up-1] partial-file maps on the wire: at most this many ranges ([start, end) pairs)
+inline constexpr int kMaxHaveRanges = 4096;
+QJsonArray haveToJson(const QList<QPair<qint64, qint64>> &have);
+bool haveFromJson(const QJsonArray &a, qint64 size, QList<QPair<qint64, qint64>> *out);
+bool haveContains(const QList<QPair<qint64, qint64>> &have, qint64 off, qint64 len);
 
 // [engine-3] hash-set exchange limits
 inline constexpr qint64 kEd2kPart = 9728000;

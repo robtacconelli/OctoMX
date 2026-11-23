@@ -483,6 +483,11 @@ void Library::startScan()
     const bool unlisted = m_settings->b(keys::library::ShareUnlistedTypes);
     const QString dbPath = m_db->path();
     std::atomic<bool> *cancel = &m_cancel;
+    QSet<QString> busy;   // [up-1] files running downloads still write: not hashed, not shared
+    {
+        QReadLocker l(&m_lock);
+        busy = m_busy;
+    }
     m_db->flush(); // make our deferred hash results visible to the scanner's connection
 
     m_scanWatcher.setFuture(QtConcurrent::run(&m_scanPool, [=]() -> ScanResult * {
@@ -530,6 +535,10 @@ void Library::startScan()
                         if (re.match(fi.fileName()).hasMatch()) { skip = true; break; }
                     }
                     if (skip || seen.contains(path)) continue;
+                    bool inUse = false;
+                    for (const QString &b : busy)
+                        if (isUnder(path, b)) { inUse = true; break; }
+                    if (inUse) continue;   // [up-1] its hashes would be computed over a half-written file
                     seen.insert(path);
                     ScanItem item;
                     item.path = path;
@@ -791,7 +800,10 @@ void Library::onHashed(const HashResult &r)
     --m_inFlight;
     ++m_hashDone;
     const bool priority = m_priority.remove(r.path);
-    if (r.ok) {   // also while stopping: finished work is still worth caching
+    if (r.ok && !priority && isBusy(r.path)) {
+        // [up-1] queued before a download started writing it: hashes of a changing file are worthless
+        qCInfo(lcLibrary) << "not sharing" << r.path << ": a download is still writing it";
+    } else if (r.ok) {   // also while stopping: finished work is still worth caching
         SharedFile file;
         bool keep = false;
         {
@@ -923,9 +935,41 @@ QString Library::findPathLocked(const FileHashes &h) const
         const auto it = m_index.constFind(k.first + *k.second);
         if (it == m_index.constEnd()) continue;
         const auto e = m_entries.constFind(it.value());
-        if (e != m_entries.constEnd() && e->shared && e->file.hashes.matches(h)) return it.value();
+        if (e != m_entries.constEnd() && e->shared && e->file.hashes.matches(h) && !busyLocked(it.value())) return it.value();
     }
     return QString();
+}
+
+bool Library::busyLocked(const QString &path) const
+{
+    for (const QString &b : m_busy)
+        if (isUnder(path, b)) return true;
+    return false;
+}
+
+bool Library::isBusy(const QString &path) const
+{
+    QReadLocker l(&m_lock);
+    return busyLocked(normPath(path));
+}
+
+void Library::setBusyPaths(const QSet<QString> &paths)
+{
+    QSet<QString> norm;
+    for (const QString &p : paths)
+        if (!p.isEmpty()) norm.insert(normPath(p));
+    bool released = false;
+    {
+        QWriteLocker l(&m_lock);
+        if (norm == m_busy) return;
+        for (const QString &p : std::as_const(m_busy))
+            if (!norm.contains(p)) released = true;
+        m_busy = norm;
+    }
+    scheduleUpdate();   // the lists the networks see change at once (busy entries are left out)
+    // a download that finished (or was removed and left its file): look at the folder again soon,
+    // so the file is hashed as a whole and shared (the engine also asks for the hash on completion)
+    if (released && m_started && !m_stopped) m_watchDebounce.start();
 }
 
 // ---------------------------------------------------------------- LibraryService lists
@@ -936,7 +980,7 @@ QList<SharedFile> Library::files(const QString &folder) const
     QReadLocker l(&m_lock);
     out.reserve(m_entries.size());
     for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it) {
-        if (!it->shared) continue;
+        if (!it->shared || busyLocked(it.key())) continue;
         if (!f.isEmpty() && !isUnder(it.key(), f)) continue;
         out << it->file;
     }
@@ -949,7 +993,7 @@ int Library::fileCount() const
     QReadLocker l(&m_lock);
     int n = 0;
     for (const Entry &e : m_entries)
-        if (e.shared) ++n;
+        if (e.shared && !busyLocked(e.file.path)) ++n;
     return n;
 }
 
@@ -958,7 +1002,7 @@ qint64 Library::totalBytes() const
     QReadLocker l(&m_lock);
     qint64 n = 0;
     for (const Entry &e : m_entries)
-        if (e.shared) n += e.file.size;
+        if (e.shared && !busyLocked(e.file.path)) n += e.file.size;
     return n;
 }
 
@@ -968,7 +1012,7 @@ QList<SharedFile> Library::sharedFiles() const
     QList<SharedFile> out;
     QReadLocker l(&m_lock);
     for (const Entry &e : m_entries)
-        if (e.shared && e.file.hashed) out << e.file;
+        if (e.shared && e.file.hashed && !busyLocked(e.file.path)) out << e.file;
     return out;
 }
 
@@ -1007,9 +1051,34 @@ QByteArray Library::read(const FileHashes &h, qint64 offset, qint64 length)
 
 QList<QByteArray> Library::ed2kPartHashes(const FileHashes &h) const
 {
-    QReadLocker l(&m_lock);
-    const QString p = findPathLocked(h);
-    return p.isEmpty() ? QList<QByteArray>() : m_entries.value(p).ed2kParts;
+    PartialDetails details;
+    {
+        QReadLocker l(&m_lock);
+        const QString p = findPathLocked(h);
+        if (!p.isEmpty()) return m_entries.value(p).ed2kParts;
+        details = m_partialDetails;
+    }
+    // [up-1] a running download: only the trusted set its own parts are checked against
+    QList<QByteArray> parts;
+    if (details && details(h, nullptr, &parts)) return parts;
+    return {};
+}
+
+bool Library::partialRanges(const FileHashes &h, QList<QPair<qint64, qint64>> *have) const
+{
+    PartialDetails details;
+    {
+        QReadLocker l(&m_lock);
+        if (!findPathLocked(h).isEmpty()) return false;   // a complete shared file
+        details = m_partialDetails;
+    }
+    return details && details(h, have, nullptr);
+}
+
+void Library::setPartialDetails(PartialDetails details)
+{
+    QWriteLocker l(&m_lock);
+    m_partialDetails = std::move(details);
 }
 
 QList<QByteArray> Library::aichPartHashes(const FileHashes &h) const

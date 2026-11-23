@@ -75,7 +75,7 @@ private slots:
     void sourceHashSetTrustedBlackBox();
     void sourceHashSetProvisionalCorrupt();
     void sourceHashSetProvisionalRefuted();
-    void sourceHashSetWrongRootBanned();
+    void sourceHashSetWrongRootIgnored();
 };
 
 namespace {
@@ -837,9 +837,10 @@ void TstEngine::sourceHashSetProvisionalRefuted()
     QVERIFY(!dbg.value(QStringLiteral("hashSetProvisional")).toBool());
 }
 
-// A trusted ed2k identity; liar sends a set that does not reduce to it → banned at once, its
-// bytes never used; the honest source completes.
-void TstEngine::sourceHashSetWrongRootBanned()
+// A trusted ed2k identity; "liar" sends a set that does not reduce to it, but right bytes (a 5.2
+// node sharing a file it is still downloading did exactly that). [up-1] The set is dropped and never
+// asked for again, the source is NOT banned for it and its bytes are used (they verify).
+void TstEngine::sourceHashSetWrongRootIgnored()
 {
     Env env(QStringLiteral("src-hs-wrong"));
     auto *ov = env.addPlugin(Net::Overlay, NetworkPlugin::CanFetchRanges);
@@ -847,7 +848,9 @@ void TstEngine::sourceHashSetWrongRootBanned()
     SourceConfig l, g;
     l.data = g.data = data;
     l.hashSet = ed2kParts(randomBytes(data.size(), 46));
-    g.bytesPerSec = 4 << 20;
+    l.bytesPerSec = g.bytesPerSec = 4 << 20;
+    g.hashSet = ed2kParts(data);
+    g.queuedMs = 1500;   // the liar's set comes first
     const SearchSource sl = ov->addSource(QStringLiteral("ovl://liar"), l, QStringLiteral("liar"));
     const SearchSource sg = ov->addSource(QStringLiteral("ovl://good"), g, QStringLiteral("good"));
     env.engineUp();
@@ -855,7 +858,13 @@ void TstEngine::sourceHashSetWrongRootBanned()
     QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
     QCOMPARE(readFile(env.info(id).savePath), data);
     const QVariantMap dbg = env.engine->debugInfo(id);
-    QVERIFY(srcInfo(dbg, QStringLiteral("liar")).banned);
+    const SrcInfo li = srcInfo(dbg, QStringLiteral("liar"));
+    qInfo("wrong set: liar banned %d strikes %d served %lld; unit failures %d", li.banned, li.strikes,
+          ov->served(QStringLiteral("ovl://liar")), dbg.value(QStringLiteral("unitFailures")).toInt());
+    QVERIFY(!li.banned);
+    QCOMPARE(li.strikes, 0);
     QVERIFY(!srcInfo(dbg, QStringLiteral("good")).banned);
-    QVERIFY(dbg.value(QStringLiteral("hashSetProvider")).toString().isEmpty() || dbg.value(QStringLiteral("hashSetProvider")).toString().contains(QLatin1String("good")));
+    QVERIFY(ov->served(QStringLiteral("ovl://liar")) > 0);   // still used
+    QCOMPARE(dbg.value(QStringLiteral("unitFailures")).toInt(), 0);
+    QVERIFY(!dbg.value(QStringLiteral("hashSetProvider")).toString().contains(QLatin1String("liar")));
 }

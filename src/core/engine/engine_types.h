@@ -123,6 +123,7 @@ struct SourceSlot {
     bool         aeqParked = false;        // left a remote queue longer than the AEQ limit
     bool         candidateFromName = false; // found by the background size+name search
     bool         wasCandidate = false;      // [merge-1] matched only by name and size (shown until confirmed)
+    bool         ignoreHashSets = false;    // [up-1] it sent a hash set that proved wrong: never use its sets again
     int          orderedPicks = 0;         // [dl-1] requests chosen by the download order (rare-part protection)
     bool         sequentialOnly() const;
     bool         isOpen() const { return !rs.isNull(); }

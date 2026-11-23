@@ -105,6 +105,7 @@ private:
     void sendNoFile(PeerConnection *pc, const QByteArray &hash);
     void process();
     void startSession(Client &c);
+    void countSentOn(Client &c);   // [up-1] the session's byte counter follows its connection
     void endSession(Client &c, const QString &why, bool requeue);
     void pumpClient(Client &c);
     void sendRanks();

@@ -210,6 +210,7 @@ private:
     void flushPending(const QString &nodeId, const QString &key = QString());   // key: "u:<user id>" queue
     void expirePending();
     void sendRaw(const QString &nodeId, const QJsonObject &msg);
+    void sendUrgent(const QString &nodeId, const QJsonObject &msg);   // [up-1] a live copy, ahead of queued data
     QJsonObject newBody(const char *type) const;
     QByteArray makeEnvelope(const QString &topic, const QJsonObject &body) const;
     void publishSigned(const QString &topic, const QJsonObject &body);
@@ -350,15 +351,22 @@ private:
     void onHashSetRequest(const QString &nodeId, const QJsonObject &o);   // [engine-3]
     void onHashSetAnswer(const QString &nodeId, const QJsonObject &o);
     void onSlot(const QString &nodeId, const QJsonObject &o);
+    void onHave(const QString &nodeId, const QJsonObject &o);   // [up-1]
     void onGot(const QString &nodeId, const QJsonObject &o);
     void onDataFrame(const QString &nodeId, const QByteArray &frame);
     void pumpUpload(UploadSession *s);
     void promoteQueue();
     void sendQueuePositions();
-    void closeUpload(UploadSession *s, const QString &reason, bool notifyPeer);
+    // [up-1] endState / endText: what the upload row says at the end (the row is "Complete" only
+    // when the whole file was sent; the core's upload tracker enforces that)
+    void closeUpload(UploadSession *s, const QString &reason, bool notifyPeer,
+                     TransferState endState = TransferState::Completed, const QString &endText = QString());
+    void refreshPartial(UploadSession *s, bool force);                // [up-1] tell the downloader what grew
+    QList<QByteArray> servableEd2kSet(const FileHashes &h, qint64 size) const;   // [up-1] verified sets only
     void uploadsTick();
     void dropPeerUploads(const QString &nodeId);
     void reportUpload(UploadSession *s, bool force);
+    void reportFinal(UploadSession *s, TransferState endState, const QString &endText);   // [up-1]
 
     friend class OverlaySource;
 

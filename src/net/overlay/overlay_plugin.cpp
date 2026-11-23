@@ -432,6 +432,12 @@ void OverlayPlugin::sendRaw(const QString &nodeId, const QJsonObject &msg)
     m_node->sendBytes(nodeId, QString::fromLatin1(kCtlChannel), encodeControl(msg));
 }
 
+void OverlayPlugin::sendUrgent(const QString &nodeId, const QJsonObject &msg)
+{
+    if (!m_node) return;
+    m_node->sendBytesUrgent(nodeId, QString::fromLatin1(kCtlChannel), encodeControl(msg));
+}
+
 void OverlayPlugin::sendHello(const QString &nodeId)
 {
     if (!m_node) return;
@@ -717,6 +723,7 @@ void OverlayPlugin::handleControl(const QString &nodeId, const QJsonObject &o)
     if (t == QLatin1String("get_cancel")) return onGetClose(nodeId, o, true);
     if (t == QLatin1String("get_close")) return onGetClose(nodeId, o, false);
     if (t == QLatin1String("slot")) return onSlot(nodeId, o);
+    if (t == QLatin1String("have")) return onHave(nodeId, o);   // [up-1]
     if (t == QLatin1String("got")) return onGot(nodeId, o);
     if (t == QLatin1String("hs_req")) return onHashSetRequest(nodeId, o);   // [engine-3]
     if (t == QLatin1String("hs")) return onHashSetAnswer(nodeId, o);
@@ -939,7 +946,9 @@ qint64 OverlayPlugin::presenceTimeoutFor(const UserInfo &u) const
 
 QJsonArray OverlayPlugin::ourCaps() const
 {
-    return QJsonArray{QStringLiteral("pm_ack"), QStringLiteral("reach"), QStringLiteral("ping")};
+    // [up-1] "part": serves files it is still downloading (slot "have" maps) and fetches from such
+    // sources; get_close carries a reason
+    return QJsonArray{QStringLiteral("pm_ack"), QStringLiteral("reach"), QStringLiteral("ping"), QStringLiteral("part")};
 }
 
 // [ovl-2] liveness of verified links: a quiet link gets a "ping" (every node, 4.2 too, answers "pong");

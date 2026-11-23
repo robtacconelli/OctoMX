@@ -4,6 +4,8 @@
 // Ids are made globally unique: "up:<net short name>:<plugin upload id>".
 // Updates are coalesced to ≤ 2 per second per upload. Finished uploads become Completed (or keep
 // Error/Cancelled) and are removed after transfers/clearCompleteUploadsSec when transfers/autoClearUploads is on.
+// [up-1] Their text is "Complete" only when the whole file was sent; any other normal end reads
+// "Finished" or the plugin's own last word ("Cancelled by remote ...", "Stopped by the other side: ...").
 #pragma once
 
 #include <QtCore/QHash>
@@ -35,6 +37,8 @@ public:
     bool setPriority(const QString &id, int priority);   // [glue-2] NetworkPlugin::setUploadPriority
     void clearFinished();
     int activeCount() const;
+    // [up-1] the status of an upload that ended normally without sending the whole file
+    static QString finishedUploadText() { return QStringLiteral("Finished"); }
 
 signals:
     void uploadAdded(const mx::TransferInfo &t);

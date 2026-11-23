@@ -170,6 +170,24 @@ public:
     bool setDiagnosis(const QString &text, int level);   // true = changed
     // partial sharing (thread-safe parts are inside PartStore)
     PartStore *partStore() const { return m_part.get(); }
+    // [up-1] What others may be served of this running download: the identity, the byte ranges
+    // verified against TRUSTED hashes (never against a provisional set), a reader limited to them,
+    // and the trusted eD2k part set its parts are checked against (empty if none). ok = false when
+    // nothing can be served (no verified bytes, a folder torrent, no metadata).
+    struct ServeView {
+        bool ok = false;
+        FileHashes hashes;
+        qint64 size = 0;
+        QString name, path;
+        RangeSet verified;
+        QList<QByteArray> ed2kParts;
+        std::function<QByteArray(qint64, qint64)> reader;
+        int btFile = -1;   // a single-file torrent: its file's index
+    };
+    ServeView serveView() const;
+    // [up-1] Files (or a torrent's folder) this unfinished download writes into: the library must
+    // not hash or share them as complete files.
+    QStringList busyPaths() const;
 
 signals:
     void needsSchedule();
@@ -188,7 +206,7 @@ private:
     void openMoreSources();
     void openSlot(SourceSlot *s);
     void closeSlot(SourceSlot *s, bool failed, const QString &why);
-    void closeAllSources();
+    void closeAllSources(const QString &code = QStringLiteral("dropped"));   // [up-1] code: RangeSource::setCloseReason
     void connectSource(SourceSlot *s);
     void onSourceState(SourceSlot *s);
     void onSourceData(SourceSlot *s, qint64 off, const QByteArray &bytes);
@@ -255,6 +273,11 @@ private:
     QList<QByteArray> m_ed2kParts;             // validated part hashes
     bool m_ed2kProvisional = false;            // [engine-3] m_ed2kParts reduce to no trusted ed2k hash (yet)
     QByteArray m_provisionalRoot;              // the ed2k root the provisional set reduces to
+    int m_provisionalFailures = 0;             // [up-1] units that failed against the provisional set
+    bool m_provisionalCorroborated = false;    // [up-1] a unit with data of OTHER sources than its sender matched it
+    QList<qint64> m_deferredBlackBox;          // [up-1] units verified only by the set's sender's data: judged once corroborated
+    QSet<QString> m_badSetFrom;                // [up-1] source keys whose hash sets proved wrong (persisted with the slots' strikes)
+    void rejectHashSetOf(const QString &key, const QString &why);
     QString m_ed2kSetProvider;                 // source key that sent m_ed2kParts ("" = plugin-level / restored)
     struct BlackBoxEntry { QString key; QList<Range> ranges; QList<QByteArray> sha1; };
     QHash<qint64, QList<BlackBoxEntry>> m_blackBox;   // failed unit start → what each contributor had sent

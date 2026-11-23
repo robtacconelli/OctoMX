@@ -106,6 +106,7 @@ public:
     // raw bytes on a named channel. Returns false when the peer's send queue is past its low-water
     // mark ("stop": wait for peerWritable) or the peer is not connected.
     bool sendBytes(const QString &peerId, const QString &channel, const QByteArray &bytes);
+    bool sendBytesUrgent(const QString &peerId, const QString &channel, const QByteArray &bytes);   // [up-1] ahead of queued data
     bool broadcastBytes(const QString &channel, const QByteArray &bytes);
     bool isWritable(const QString &peerId) const;
     // [glue-3] account every message (JSON, channel bytes, pubsub) for the bandwidth graph as

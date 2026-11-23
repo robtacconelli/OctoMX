@@ -31,6 +31,7 @@ mx_overlay_test(tst_overlay_transfer)
 mx_overlay_test(tst_overlay_misc)
 mx_overlay_test(tst_overlay_probe)   # [diag-1] "probe my ports", two nodes
 mx_overlay_test(tst_overlay_net)     # [ovl-2] multi-node: receipts, presence, connect-back, relay, Hotlist rules, 4.2 node
+mx_overlay_test(tst_overlay_upload)  # [up-1] partial files (have maps), verified hash sets, close reasons, upload row texts
 
 # console tools (not run by ctest)
 add_executable(rats_probe rats_probe.cpp)

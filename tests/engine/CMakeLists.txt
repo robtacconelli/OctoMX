@@ -28,6 +28,7 @@ mx_engine_test(tst_engine_merge)     # [merge-1] copies matched by name and size
 mx_engine_test(tst_engine_map)       # [ui-i] the map of the file for the Transfers bar
 mx_engine_test(tst_engine_join)      # [eng-1] torrents that hold the same file: ranking, no file list, restart, row
 mx_engine_test(tst_engine_remove)    # [ui-j] removing a download: keep the file (and resume it) or delete it
+mx_engine_test(tst_engine_serve)     # [up-1] serving files still downloading, hash-set rules, close reasons
 if(TARGET mxnet_bt)
     mx_engine_test(tst_engine_bt)
     target_link_libraries(tst_engine_bt PRIVATE mxnet_bt)

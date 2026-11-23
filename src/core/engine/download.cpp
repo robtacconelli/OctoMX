@@ -182,6 +182,7 @@ void Download::restoreState(const QByteArray &blob)
     const QVariantMap strikes = m.value(QStringLiteral("strikes")).toMap();
     for (auto it = strikes.constBegin(); it != strikes.constEnd(); ++it) m_strikes.insert(it.key(), it.value().toInt());
     for (const QVariant &v : m.value(QStringLiteral("banned")).toList()) m_banned.insert(v.toString());
+    for (const QVariant &v : m.value(QStringLiteral("badSets")).toList()) m_badSetFrom.insert(v.toString());   // [up-1]
     for (const QVariant &v : m.value(QStringLiteral("removed")).toList()) {
         m_userRemoved.insert(v.toString());
         m_banned.insert(v.toString());
@@ -277,6 +278,9 @@ QByteArray Download::saveState() const
     QVariantList banned;
     for (const QString &k : m_banned) banned << k;
     if (!banned.isEmpty()) m.insert(QStringLiteral("banned"), banned);
+    QVariantList badSets;   // [up-1]
+    for (const QString &k : m_badSetFrom) badSets << k;
+    if (!badSets.isEmpty()) m.insert(QStringLiteral("badSets"), badSets);
     QVariantList removed;
     for (const QString &k : m_userRemoved) removed << k;
     if (!removed.isEmpty()) m.insert(QStringLiteral("removed"), removed);
@@ -574,7 +578,7 @@ void Download::deactivate()
         return;
     }
     m_active = false;
-    closeAllSources();
+    closeAllSources(m_userPaused ? QStringLiteral("paused") : QStringLiteral("dropped"));
     stopFindSources();
     if (m_torrent) {
         m_torrent->releaseAll();
@@ -645,7 +649,7 @@ void Download::cancel(bool deleteData)
 {
     m_active = false;
     dropPreview();   // [dl-1]
-    closeAllSources();
+    closeAllSources(QStringLiteral("cancelled"));
     stopFindSources();
     if (m_torrent) {
         m_torrent->releaseAll();
@@ -857,6 +861,7 @@ void Download::shutdown(int drainMs)
     for (auto &s : m_slots) {
         if (s->rs) {
             QObject::disconnect(s->rs, nullptr, this, nullptr);
+            s->rs->setCloseReason(QStringLiteral("quit"), QString());   // [up-1]
             s->rs->close();
             s->rs->deleteLater();
             s->rs = nullptr;
@@ -1029,6 +1034,8 @@ bool Download::adoptEd2kSet(const QList<QByteArray> &data, const QString &provid
     const bool wasProvisional = m_ed2kProvisional;
     m_ed2kParts = data;
     m_ed2kProvisional = !trusted;
+    m_provisionalFailures = 0;           // [up-1]
+    m_provisionalCorroborated = false;
     m_provisionalRoot.clear();   // set by the caller for a provisional set
     if (!providerKey.isEmpty() || !trusted) m_ed2kSetProvider = providerKey;
     if (trusted)
@@ -1050,11 +1057,28 @@ void Download::banKey(const QString &key, const QString &why)
     m_dirtyBlob = true;
 }
 
+// [up-1] A hash set that proved wrong is dropped, and the source that sent it is never asked to
+// judge again, but it is NOT banned for the set: a set is only a claim about the file, the data a
+// source sends is checked on its own (a 5.2 node that shared a file it was still downloading sent
+// a set computed over the holes of its copy while its bytes were right). Bad data still costs
+// strikes and bans as before.
+void Download::rejectHashSetOf(const QString &key, const QString &why)
+{
+    if (key.isEmpty()) return;
+    m_badSetFrom.insert(key);
+    if (SourceSlot *s = slotFor(key)) s->ignoreHashSets = true;
+    qCInfo(lcEngine).noquote() << m_rec.id << "hash sets of" << key << "are not used any more:" << why << "(the source itself is still used, its data is checked)";
+    m_dirtyBlob = true;
+}
+
 void Download::dropProvisionalSet(const QString &why)
 {
     if (!m_ed2kProvisional) return;
     qCWarning(lcEngine) << m_rec.id << "dropping the provisional ed2k hash set from" << m_ed2kSetProvider << ":" << why;
-    if (!m_ed2kSetProvider.isEmpty()) banKey(m_ed2kSetProvider, QStringLiteral("sent a wrong part hash set (%1)").arg(why));
+    rejectHashSetOf(m_ed2kSetProvider, why);
+    m_provisionalFailures = 0;
+    m_provisionalCorroborated = false;
+    m_deferredBlackBox.clear();
     m_rejected << FileHashes();
     m_rejected.last().ed2k = m_provisionalRoot;
     m_ed2kParts.clear();
@@ -1078,22 +1102,31 @@ void Download::onSourceHashSet(SourceSlot *s, const QString &kind, qint64 unit, 
         return;
     }
     if (kind != QLatin1String("ed2k-parts") || m_rec.size < PartStore::Ed2kPart || m_rec.isBundle) return;
+    // [up-1] a source whose set proved wrong once is not asked to judge again
+    if (s->ignoreHashSets || m_badSetFrom.contains(s->key)) return;
+    // [up-1] a torrent download is judged by its piece hashes: an eD2k part set adds nothing, and an
+    // unconfirmed one could only do harm later (5.2 banned the sender when it was refuted)
+    if (m_torrent && !m_part) {
+        qCDebug(lcEngine) << m_rec.id << "ed2k part hash set from" << s->key << "not needed: BitTorrent piece hashes judge this download";
+        return;
+    }
     for (const QByteArray &h : hashes)
-        if (h.size() != 16) { strike(s, QStringLiteral("malformed part hash set")); return; }
+        if (h.size() != 16) { rejectHashSetOf(s->key, QStringLiteral("malformed part hash set")); return; }
     const int full = hash::Ed2kHasher::partCount(m_rec.size), dataParts = hash::Ed2kHasher::dataPartCount(m_rec.size);
-    if (hashes.size() != full && hashes.size() != dataParts) { strike(s, QStringLiteral("part hash set of the wrong length")); return; }
+    if (hashes.size() != full && hashes.size() != dataParts) { rejectHashSetOf(s->key, QStringLiteral("part hash set of the wrong length")); return; }
     const QByteArray root = hash::Ed2kHasher::fileHashFromParts(hashes);
     const QList<QByteArray> data = hashes.mid(0, dataParts);
     if (!m_rec.hashes.ed2k.isEmpty()) {
         if (root != m_rec.hashes.ed2k) {
-            ban(s, QStringLiteral("sent a part hash set that does not match the file's ed2k hash"));
+            // [up-1] provably wrong and from this source: dropped, never asked again, no ban
+            rejectHashSetOf(s->key, QStringLiteral("its part hash set does not match the file's ed2k hash"));
             return;
         }
         if (!m_ed2kParts.isEmpty() && !m_ed2kProvisional) return;   // already have it
         if (!adoptEd2kSet(data, s->key, true)) return;
     } else {
         for (const FileHashes &r : std::as_const(m_rejected))
-            if (!r.ed2k.isEmpty() && r.ed2k == root) { ban(s, QStringLiteral("sent a part hash set proven wrong before")); return; }
+            if (!r.ed2k.isEmpty() && r.ed2k == root) { rejectHashSetOf(s->key, QStringLiteral("it sent a part hash set proven wrong before")); return; }
         if (!m_ed2kParts.isEmpty()) {
             if (data != m_ed2kParts)
                 qCWarning(lcEngine) << m_rec.id << s->key << "sent a part hash set that differs from the provisional one of" << m_ed2kSetProvider;
@@ -1327,6 +1360,7 @@ void Download::addSources(const QList<SearchSource> &sources, NetworkPlugin *fro
             if (!m_candidateHints.isEmpty() && netUsesHashOf(src.net, m_candidateHints)) slot->wasCandidate = true;
         }
         slot->strikes = m_strikes.value(key);
+        slot->ignoreHashSets = m_badSetFrom.contains(key);   // [up-1]
         slot->priority = m_srcPriority.value(key, 0);
         m_byKey.insert(key, slot.get());
         if (const QString ak = addressKey(src); !ak.isEmpty() && !m_byAddr.contains(ak)) m_byAddr.insert(ak, slot.get());
@@ -1539,6 +1573,7 @@ void Download::closeSlot(SourceSlot *s, bool failed, const QString &why)
         RangeSource *rs = s->rs;
         QObject::disconnect(rs, nullptr, this, nullptr);
         s->rs = nullptr;
+        rs->setCloseReason(s->banned ? QStringLiteral("banned") : QStringLiteral("dropped"), why);   // [up-1] told to the uploader
         rs->close();
         rs->deleteLater();
     }
@@ -1555,13 +1590,14 @@ void Download::closeSlot(SourceSlot *s, bool failed, const QString &why)
     QTimer::singleShot(0, this, [this] { openMoreSources(); });
 }
 
-void Download::closeAllSources()
+void Download::closeAllSources(const QString &code)
 {
     for (auto &s : m_slots) {
         if (!s->rs) continue;
         RangeSource *rs = s->rs;
         QObject::disconnect(rs, nullptr, this, nullptr);
         s->rs = nullptr;
+        rs->setCloseReason(code, QString());   // [up-1] the uploader learns why we stopped
         rs->close();
         rs->deleteLater();
         s->reqs.clear();
@@ -1740,6 +1776,10 @@ void Download::onSourceFinished(SourceSlot *s, qint64 fileOff, qint64 len, bool 
                 ++s->failures;
             }
         }
+    } else if (err == RangeSource::rangeNotAvailableError()) {
+        // [up-1] a partial source does not hold that range (any more): not its fault; its
+        // available() map no longer offers it, the scheduler asks elsewhere
+        qCDebug(lcEngine) << m_rec.id << "range not available on" << s->key;
     } else if (err.startsWith(QLatin1String("HTTP server does not support byte ranges"))) {
         // mx::kHttpErrorNoRanges: not a failure, this source only serves from offset 0
         s->desc.extra.insert(QStringLiteral("supportsRanges"), false);
@@ -2039,8 +2079,28 @@ void Download::onUnitVerified(qint64 s, qint64 e)
     const QSet<QString> struck = m_failedBy.take(s);
     m_isolated.remove(s);
     m_unitOwner.remove(s);
+    // [up-1] judged by a provisional set: data of sources other than the set's sender that matches it
+    // corroborates the set; data of its sender alone proves nothing about the others
+    bool providerOnly = m_ed2kProvisional && m_part && m_part->scheme() == PartStore::Ed2kParts;
+    if (providerOnly) {
+        bool any = false;
+        for (auto &sp : m_slots)
+            if (sp->contributed.coveredIn(s, e) > 0) {
+                any = true;
+                if (sp->key != m_ed2kSetProvider) providerOnly = false;
+            }
+        if (!any) providerOnly = false;
+        if (!providerOnly && !m_provisionalCorroborated) {
+            m_provisionalCorroborated = true;
+            qCInfo(lcEngine) << m_rec.id << "the provisional hash set is corroborated: data of other sources matches it";
+            const QList<qint64> deferred = m_deferredBlackBox;   // their good data is on disk: judge them now
+            m_deferredBlackBox.clear();
+            for (qint64 u : deferred) checkBlackBox(u, {});
+        }
+    }
     const bool blackBox = m_blackBox.contains(s);   // it decides about the earlier contributors
-    if (blackBox) checkBlackBox(s, struck);
+    if (blackBox && providerOnly && !m_provisionalCorroborated) m_deferredBlackBox << s;
+    else if (blackBox) checkBlackBox(s, struck);
     for (auto &sp : m_slots) {
         SourceSlot *src = sp.get();
         const qint64 n = src->contributed.coveredIn(s, e);
@@ -2073,6 +2133,19 @@ void Download::onUnitFailed(qint64 s, qint64 e)
     if (m_part && !m_torrent && !contributors.isEmpty() && untrusted.isEmpty()) recordBlackBox(s, e, contributors);
     for (SourceSlot *c : std::as_const(contributors)) c->contributed.remove(s, e);
     qCInfo(lcEngine) << m_rec.id << "unit" << s << "-" << e << "failed verification;" << contributors.size() << "contributors";
+    if (m_ed2kProvisional && !m_provisionalCorroborated && m_part && m_part->scheme() == PartStore::Ed2kParts) {
+        // [up-1] judged by a set nobody vouches for: the set may be the liar, not the senders. No
+        // strikes; the second failure drops the set (its sender's sets are not used again) and the
+        // data is checked at the next level (trusted hashes, the whole file)
+        ++m_provisionalFailures;
+        qCInfo(lcEngine) << m_rec.id << "unit failed against the provisional hash set (" << m_provisionalFailures << "): no strikes";
+        if (m_provisionalFailures >= 2) dropProvisionalSet(QStringLiteral("parts of other sources do not match it"));
+        m_unitOwner.remove(s);
+        m_dirtyBlob = true;
+        markDirty();
+        emit needsSchedule();
+        return;
+    }
     if (!untrusted.isEmpty()) {
         // [merge-1] the judge said no: that source is banned; its network is dropped after a few
         for (SourceSlot *c : untrusted) candidateFailed(c, QStringLiteral("Did not match: a block failed the check"));
@@ -2227,7 +2300,7 @@ void Download::maybeComplete()
 void Download::finalizePart()
 {
     m_completing = true;
-    closeAllSources();
+    closeAllSources(QStringLiteral("done"));
     stopFindSources();
     setState(TransferState::Verifying, transferStateText(TransferState::Verifying));
     const bool verify = !m_host->settings() || m_host->settings()->b(keys::transfers::VerifyCompleted);
@@ -2269,6 +2342,9 @@ void Download::finalizePart()
             if (fine && m_ed2kProvisional) {
                 // every part matched a set that reduces to no trusted hash, the file does not: the set lied
                 qCWarning(lcEngine) << m_rec.id << "all parts matched the provisional hash set but the file hashes differ:" << mismatch;
+                // [up-1] its own data matched its own set and makes another file: that is the data's fault
+                if (SourceSlot *p = slotFor(m_ed2kSetProvider); p && p->verifiedBytes > 0)
+                    ban(p, QStringLiteral("File Mismatch: the parts it sent and its part hash set describe another file"));
                 dropProvisionalSet(QStringLiteral("its part hash set does not describe the wanted file"));
                 wholeFileFailed(mismatch);
                 return;
@@ -2403,7 +2479,7 @@ void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kPa
 void Download::completeTorrent()
 {
     m_completing = true;
-    closeAllSources();
+    closeAllSources(QStringLiteral("done"));
     stopFindSources();
     m_torrent->releaseAll();
     const TorrentSnapshot &sn = m_torrent->snap();
@@ -5022,6 +5098,88 @@ QString Download::discoveryText(qint64 now) const
         }
     }
     return QStringLiteral("- ") + out;
+}
+
+
+// ============================================================================ [up-1] serving a running download
+
+Download::ServeView Download::serveView() const
+{
+    ServeView v;
+    if (isFinished() || m_completing || m_promoting || m_rec.isBundle || m_rec.size <= 0 || m_rec.hashes.isEmpty()) return v;
+    if (m_part) {
+        // only units checked against trusted hashes: a provisional eD2k set (from a source nobody
+        // vouches for) does not make data servable
+        if (m_part->scheme() == PartStore::NoUnits) return v;
+        if (m_part->scheme() == PartStore::Ed2kParts && m_ed2kProvisional) return v;
+        v.verified = m_part->verified();
+        if (v.verified.isEmpty() || m_part->extent() != m_rec.size) return v;
+        v.hashes = m_rec.hashes;
+        v.size = m_rec.size;
+        v.name = m_rec.name;
+        v.path = m_part->path();
+        v.reader = m_part->verifiedReader();
+        if (!m_ed2kProvisional && !m_ed2kParts.isEmpty() && !m_rec.hashes.ed2k.isEmpty()
+            && m_ed2kParts.size() == hash::Ed2kHasher::dataPartCount(m_rec.size)) {
+            QList<QByteArray> full = m_ed2kParts;
+            if (full.size() != hash::Ed2kHasher::partCount(m_rec.size)) full << hash::Ed2kHasher::fileHashFromParts({});   // MD4 of nothing
+            if (hash::Ed2kHasher::fileHashFromParts(full) == m_rec.hashes.ed2k) v.ed2kParts = full;
+        }
+        v.ok = true;
+        return v;
+    }
+    if (m_torrent && m_torrent->hasMetadata()) {
+        // libtorrent checked every piece it has against the torrent's piece hashes
+        const TorrentSnapshot &sn = m_torrent->snap();
+        int idx = m_rec.hashes.btFileIndex;
+        if (idx < 0) {
+            int real = 0;
+            for (int i = 0; i < sn.files.size(); ++i)
+                if (!m_torrent->isPadFile(i)) { idx = i; ++real; }
+            if (real != 1) return v;
+        }
+        if (idx < 0 || idx >= sn.files.size() || sn.pieceLength <= 0) return v;
+        const TorrentFile &f = sn.files.at(idx);
+        if (f.size != m_rec.size || f.priority <= 0) return v;
+        const qint64 pl = sn.pieceLength;
+        const int p0 = int(f.offset / pl), p1 = int((f.offset + f.size - 1) / pl);
+        for (int p = p0; p <= p1 && p < sn.have.size(); ++p) {
+            if (!sn.have.testBit(p)) continue;
+            const qint64 a = qMax<qint64>(0, qint64(p) * pl - f.offset), b = qMin<qint64>(f.size, qint64(p + 1) * pl - f.offset);
+            if (b > a) v.verified.add(a, b);
+        }
+        if (v.verified.isEmpty()) return v;
+        v.hashes = m_rec.hashes;
+        v.size = f.size;
+        v.name = m_rec.name;
+        v.path = QDir(sn.savePath).filePath(f.path);
+        v.btFile = idx;
+        const QString path = v.path;
+        const RangeSet ok = v.verified;   // a snapshot: pieces never stop being verified
+        v.reader = [path, ok](qint64 off, qint64 len) -> QByteArray {
+            if (len <= 0 || off < 0 || !ok.contains(off, off + len)) return {};
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly) || !file.seek(off)) return {};
+            return file.read(qMin<qint64>(len, 16 << 20));
+        };
+        v.ok = true;
+    }
+    return v;
+}
+
+QStringList Download::busyPaths() const
+{
+    if (isFinished()) return {};
+    QStringList out;
+    if (m_part) out << m_part->path();
+    if (m_torrent || !m_torrentId.isEmpty() || !m_promoteTorrent.isEmpty()) {
+        if (!m_rec.savePath.isEmpty()) out << m_rec.savePath;
+        if (m_torrent && m_torrent->hasMetadata()) {
+            const TorrentSnapshot &sn = m_torrent->snap();
+            for (const TorrentFile &f : sn.files) out << QDir(sn.savePath).filePath(f.path);
+        }
+    }
+    return out;
 }
 
 } // namespace mx::engine

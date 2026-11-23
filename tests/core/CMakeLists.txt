@@ -31,6 +31,7 @@ mx_core_test(tst_ratelimiter)
 mx_core_test(tst_chat)
 mx_core_test(tst_realcore)
 mx_core_test(tst_legacy_names)   # [ren-1] legacy profiles, database, download folder, settings
+mx_core_test(tst_upload_rows)    # [up-1] how an upload row ends: Complete only for the whole file
 # glue-2: schema batch + added service API + search hygiene
 mx_core_test(tst_glue2)
 if(TARGET tst_glue2)

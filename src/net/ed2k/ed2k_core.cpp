@@ -682,6 +682,12 @@ bool Ed2kCore::isPartialFile(const QByteArray &ed2k) const
 {
     if (m_shared.contains(ed2k)) return false;
     for (const DownloadCtx &d : m_downloads) if (d.hashes.ed2k == ed2k) return true;
+    // [up-1] any running download the engine serves (a torrent with a known ed2k hash, too)
+    if (m_ctx.library) {
+        mx::FileHashes h;
+        h.ed2k = ed2k;
+        if (m_ctx.library->partialRanges(h, nullptr)) return true;
+    }
     return false;
 }
 

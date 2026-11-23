@@ -559,6 +559,25 @@ bool RatsNode::sendBytes(const QString &peerId, const QString &channel, const QB
     return ok;
 }
 
+// [up-1] a "live" message: it leaves ahead of the data already queued for the peer (librats sends
+// live messages first and drops them only when their lifetime runs out). For small control
+// messages that must not wait behind megabytes of file data (get_close); callers send the reliable
+// copy as well.
+bool RatsNode::sendBytesUrgent(const QString &peerId, const QString &channel, const QByteArray &bytes)
+{
+    if (!d || !d->node) return false;
+    auto id = toId(peerId);
+    if (!id) return false;
+    librats::SendOptions o;
+    o.lifetime = std::chrono::milliseconds(10000);
+    o.rank = 0;
+    const bool ok = d->node->send(*id, channel.toStdString(),
+                                  librats::ByteView(reinterpret_cast<const uint8_t *>(bytes.constData()),
+                                                    static_cast<size_t>(bytes.size())), o);
+    meter(true, bytes.size());
+    return ok;
+}
+
 bool RatsNode::broadcastBytes(const QString &channel, const QByteArray &bytes)
 {
     if (!d || !d->node) return false;

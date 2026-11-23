@@ -4,6 +4,7 @@
 
 #include "overlay_plugin_impl.h"
 
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QRandomGenerator>
 #include <QtCore/QThreadPool>
@@ -39,6 +40,54 @@ bool parseDataFrame(const QByteArray &f, quint32 *sid, quint32 *rq, qint64 *off,
     *payloadPos = kDataHeader;
     return true;
 }
+
+// [up-1] partial-file maps: [[start, end], ...], sorted, not overlapping, inside the file
+QJsonArray haveToJson(const QList<QPair<qint64, qint64>> &have)
+{
+    QJsonArray a;
+    for (const auto &r : have) {
+        if (a.size() >= kMaxHaveRanges) break;
+        a.append(QJsonArray{static_cast<double>(r.first), static_cast<double>(r.second)});
+    }
+    return a;
+}
+
+bool haveFromJson(const QJsonArray &a, qint64 size, QList<QPair<qint64, qint64>> *out)
+{
+    out->clear();
+    if (a.size() > kMaxHaveRanges) return false;
+    qint64 last = 0;
+    for (const QJsonValue &v : a) {
+        if (!v.isArray() || v.toArray().size() != 2) return false;
+        const double ds = v.toArray().at(0).toDouble(-1), de = v.toArray().at(1).toDouble(-1);
+        const qint64 b = static_cast<qint64>(ds), e = static_cast<qint64>(de);
+        if (double(b) != ds || double(e) != de || b < last || e <= b || e > size) return false;
+        if (!out->isEmpty() && out->last().second == b) out->last().second = e;
+        else out->append(qMakePair(b, e));
+        last = e;
+    }
+    return true;
+}
+
+bool haveContains(const QList<QPair<qint64, qint64>> &have, qint64 off, qint64 len)
+{
+    for (const auto &r : have)
+        if (r.first <= off && off + len <= r.second) return true;
+    return false;
+}
+
+namespace {
+void haveRemove(QList<QPair<qint64, qint64>> *have, qint64 a, qint64 b)
+{
+    QList<QPair<qint64, qint64>> out;
+    for (const auto &r : std::as_const(*have)) {
+        if (r.second <= a || r.first >= b) { out << r; continue; }
+        if (r.first < a) out << qMakePair(r.first, a);
+        if (r.second > b) out << qMakePair(b, r.second);
+    }
+    *have = out;
+}
+} // namespace
 
 // =============================================================================== download side
 OverlaySource::OverlaySource(OverlayPlugin *plugin, const QString &downloadId, const FileHashes &h, qint64 size,
@@ -133,9 +182,34 @@ QString OverlaySource::stateText() const
 
 QList<QPair<qint64, qint64>> OverlaySource::available() const
 {
-    // complete files only for now (partial-file sharing is a later protocol extension)
-    if (m_state == Ready || m_state == Busy) return {qMakePair(qint64(0), m_size)};
+    // [up-1] a source still downloading the file offers what its slot / "have" said it holds
+    if (m_state == Ready || m_state == Busy) return m_partial ? m_have : QList<QPair<qint64, qint64>>{qMakePair(qint64(0), m_size)};
     return {};
+}
+
+bool OverlaySource::readHave(const QJsonObject &o)
+{
+    if (!o.contains(QStringLiteral("have"))) return false;
+    QList<QPair<qint64, qint64>> have;
+    if (!haveFromJson(o.value(QStringLiteral("have")).toArray(), m_size, &have)) have.clear();   // malformed: nothing
+    const bool changed = !m_partial || have != m_have;
+    m_partial = true;
+    m_have = have;
+    if (changed && (m_state == Ready || m_state == Busy)) Q_EMIT availabilityChanged();
+    return true;
+}
+
+void OverlaySource::onHave(const QJsonObject &o)
+{
+    if (m_closed) return;
+    if (jBool(o, "full", false)) {   // the uploader's copy is complete now
+        const bool changed = m_partial;
+        m_partial = false;
+        m_have.clear();
+        if (changed && (m_state == Ready || m_state == Busy)) Q_EMIT availabilityChanged();
+        return;
+    }
+    readHave(o);
 }
 
 void OverlaySource::setState(State s)
@@ -157,6 +231,7 @@ void OverlaySource::sendOpen()
     o[QStringLiteral("sid")] = static_cast<double>(m_sid);
     o[QStringLiteral("h")] = hashesToJson(m_h);
     o[QStringLiteral("size")] = static_cast<double>(m_size);
+    o[QStringLiteral("part")] = true;   // [up-1] we understand "have" maps (partial files)
     const auto *u = m_plugin->user(m_userId);
     const QStringList addrs = u ? u->addrs : QStringList();
     QPointer<OverlaySource> self(this);
@@ -187,6 +262,10 @@ void OverlaySource::request(qint64 offset, qint64 length)
     }
     if (offset < 0 || length <= 0 || offset + length > m_size || length > kMaxRequest) {
         QTimer::singleShot(0, this, [this, offset, length] { Q_EMIT requestFinished(offset, length, false, tr("Bad range")); });
+        return;
+    }
+    if (m_partial && !haveContains(m_have, offset, length)) {   // [up-1] never ask for what it does not hold
+        QTimer::singleShot(0, this, [this, offset, length] { Q_EMIT requestFinished(offset, length, false, rangeNotAvailableError()); });
         return;
     }
     Req r{++m_rqSeq, offset, length, 0, nowMs()};
@@ -233,15 +312,36 @@ void OverlaySource::close()
         o[QStringLiteral("t")] = QStringLiteral("get_close");
         o[QStringLiteral("v")] = kWireVersion;
         o[QStringLiteral("sid")] = static_cast<double>(m_sid);
-        if (m_plugin->m_peers.contains(m_nodeId)) m_plugin->sendToNode(m_nodeId, o);
+        // [up-1] why: the uploader's row says so ("Finished", "Cancelled by remote", "Stopped by the
+        // other side: ..."); older uploaders ignore the fields
+        o[QStringLiteral("reason")] = m_closeCode.isEmpty() ? QStringLiteral("dropped") : m_closeCode;
+        if (!m_closeText.isEmpty()) o[QStringLiteral("why")] = m_closeText.left(160);
+        if (m_plugin->m_peers.contains(m_nodeId)) {
+            m_plugin->sendUrgent(m_nodeId, o);   // [up-1] does not wait behind data we send them
+            m_plugin->sendToNode(m_nodeId, o);   // the reliable copy (a second one finds no session)
+        }
         m_plugin->unregisterSource(m_sid);
     }
     setState(Closed);
 }
 
-void OverlaySource::onSlot(const QString &st, int pos, const QString &reason, const QStringList &hashSets)
+void OverlaySource::setCloseReason(const QString &code, const QString &text)
+{
+    m_closeCode = code.left(16);
+    m_closeText = text;
+}
+
+void OverlaySource::onSlot(const QString &st, int pos, const QString &reason, const QStringList &hashSets, const QJsonObject &msg)
 {
     if (m_closed) return;
+    // [up-1] a slot of a file the uploader is still downloading carries its map; none = complete
+    if (st == QLatin1String("ready") || st == QLatin1String("queued")) {
+        if (!readHave(msg) && m_partial) {
+            m_partial = false;
+            m_have.clear();
+            if (m_state == Ready || m_state == Busy) Q_EMIT availabilityChanged();
+        }
+    }
     // [engine-3] the uploader offers verification data: fetch the part hash set once (also while queued)
     if (!m_hsAsked && m_plugin && m_size >= kEd2kPart && hashSets.contains(QStringLiteral("ed2k-parts"))
         && (st == QLatin1String("ready") || st == QLatin1String("queued"))) {
@@ -333,6 +433,14 @@ void OverlaySource::onGot(quint32 rq, bool ok, const QString &err)
         const Req r = *it;
         m_reqs.erase(it);
         if (m_reqs.empty() && m_state == Busy) setState(Ready);
+        if (err == QLatin1String("not available")) {
+            // [up-1] the uploader does not hold that range: forget it, ask elsewhere; no fault
+            haveRemove(&m_have, r.off, r.off + r.len);
+            m_partial = true;
+            Q_EMIT availabilityChanged();
+            Q_EMIT requestFinished(r.off, r.len, false, rangeNotAvailableError());
+            return;
+        }
         Q_EMIT requestFinished(r.off, r.len, false, err);
         if (err == QLatin1String("no slot")) {
             setState(Connecting);
@@ -423,7 +531,15 @@ void OverlayPlugin::onSlot(const QString &nodeId, const QJsonObject &o)
     for (const QJsonValue &v : jArr(o, "hs", 8))
         if (v.isString() && v.toString().size() <= 32) hs << v.toString();
     src->onSlot(jStr(o, "st", 16), static_cast<int>(qBound(qint64(0), jInt(o, "pos", 0), qint64(100000))),
-                jStr(o, "reason", 32), hs);
+                jStr(o, "reason", 32), hs, o);
+}
+
+void OverlayPlugin::onHave(const QString &nodeId, const QJsonObject &o)
+{
+    const quint32 sid = static_cast<quint32>(jInt(o, "sid", 0));
+    auto src = m_sources.value(sid);
+    if (!src || src->nodeId() != nodeId) return;
+    src->onHave(o);
 }
 
 void OverlayPlugin::onHashSetAnswer(const QString &nodeId, const QJsonObject &o)
@@ -482,7 +598,21 @@ void sendSlot(OverlayPlugin *p, const QString &node, quint32 sid, const QString 
 }
 void sendSlot(OverlayPlugin *p, const UploadSession *s, const QString &st, int pos = 0)
 {
-    sendSlot(p, s->nodeId, s->sid, st, pos, QString(), s->hashSets);
+    QJsonObject o;
+    o[QStringLiteral("t")] = QStringLiteral("slot");
+    o[QStringLiteral("v")] = kWireVersion;
+    o[QStringLiteral("sid")] = static_cast<double>(s->sid);
+    o[QStringLiteral("st")] = st;
+    if (pos > 0) o[QStringLiteral("pos")] = pos;
+    if (!s->hashSets.isEmpty()) o[QStringLiteral("hs")] = QJsonArray::fromStringList(s->hashSets);   // [engine-3]
+    if (s->partial) o[QStringLiteral("have")] = haveToJson(s->have);   // [up-1] what a running download holds
+    p->sendToNode(s->nodeId, o);
+}
+qint64 haveTotal(const QList<QPair<qint64, qint64>> &have)
+{
+    qint64 n = 0;
+    for (const auto &r : have) n += r.second - r.first;
+    return n;
 }
 void sendGot(OverlayPlugin *p, const QString &node, quint32 sid, quint32 rq, bool ok, const QString &err)
 {
@@ -515,6 +645,16 @@ void OverlayPlugin::onGetOpen(const QString &nodeId, const QJsonObject &o)
     bool found = false;
     for (const SharedFile &f : m_shared)
         if (f.hashes.matches(h) && (size <= 0 || f.size == size)) { file = f; found = true; break; }
+    // [up-1] a file we are still downloading: its verified ranges, by its trusted identity. Only to
+    // clients that understand "have" maps (older ones would ask for ranges we do not hold)
+    QList<QPair<qint64, qint64>> have;
+    bool partial = false;
+    if (!found && m_ctx.library && setting(QString(keys::library::ShareIncomplete), true).toBool()
+        && m_ctx.library->partialRanges(h, &have) && m_ctx.library->findByHash(h, &file)
+        && (size <= 0 || file.size == size) && !file.hashes.conflicts(h)) {   // the library matched it
+        if (!jBool(o, "part", false)) return sendSlot(this, nodeId, sid, QStringLiteral("missing"));
+        found = partial = true;
+    }
     if (!found && !m_haveSharedList && m_ctx.library && m_ctx.library->findByHash(h, &file))
         found = (size <= 0 || file.size == size) && !file.hashes.conflicts(h);
     if (!found || !m_ctx.library) return sendSlot(this, nodeId, sid, QStringLiteral("missing"));
@@ -541,8 +681,14 @@ void OverlayPlugin::onGetOpen(const QString &nodeId, const QJsonObject &o)
     s->size = file.size;
     s->name = file.name;
     s->hotlist = hot;
-    if (file.size >= kEd2kPart && !m_ctx.library->ed2kPartHashes(file.hashes).isEmpty())
-        s->hashSets << QStringLiteral("ed2k-parts");   // [engine-3] offered in every slot answer
+    s->partial = partial;
+    s->path = file.path;
+    s->have = have;
+    s->haveSentTotal = haveTotal(have);   // the slot answers carry it
+    s->lastHaveMs = nowMs();
+    // [engine-3] offered in every slot answer; [up-1] only a set that reduces to the file's ed2k hash
+    if (file.size >= kEd2kPart && !servableEd2kSet(file.hashes, file.size).isEmpty())
+        s->hashSets << QStringLiteral("ed2k-parts");
     s->queuedMs = s->lastActivityMs = nowMs();
     s->serial = ++m_uploadSerial;
     const bool small = bypass > 0 && file.size <= bypass;
@@ -617,6 +763,11 @@ void OverlayPlugin::onGet(const QString &nodeId, const QJsonObject &o)
     const qint64 off = jInt(o, "off", -1), len = jInt(o, "len", 0);
     if (off < 0 || len <= 0 || len > kMaxRequest || off + len > s->size || s->reqs.size() >= 8)
         return sendGot(this, nodeId, sid, rq, false, QStringLiteral("bad range"));
+    if (s->partial) {
+        refreshPartial(s, !haveContains(s->have, off, len));   // what it holds now (grown, or less after a dropped set)
+        if (s->partial && !haveContains(s->have, off, len))
+            return sendGot(this, nodeId, sid, rq, false, QStringLiteral("not available"));   // [up-1]
+    }
     s->reqs.push_back(UploadSession::Req{rq, off, len, 0});
     s->lastActivityMs = nowMs();
     pumpUpload(s);
@@ -635,7 +786,7 @@ void OverlayPlugin::onHashSetRequest(const QString &nodeId, const QJsonObject &o
     a[QStringLiteral("kind")] = kind;
     QList<QByteArray> parts;
     if (s && kind == QLatin1String("ed2k-parts") && s->hashSets.contains(kind) && s->hashSetsServed < 3 && m_ctx.library)
-        parts = m_ctx.library->ed2kPartHashes(s->hashes);
+        parts = servableEd2kSet(s->hashes, s->size);   // [up-1] verified against the file's ed2k hash
     if (s) ++s->hashSetsServed;
     bool ok = !parts.isEmpty() && parts.size() <= kMaxHashSetParts;
     QByteArray hex;
@@ -666,9 +817,98 @@ void OverlayPlugin::onGetClose(const QString &nodeId, const QJsonObject &o, bool
         s->bufPos = 0;
         ++s->serial;   // drop a read in flight
         s->reading = false;
+        s->rateWindowBytes = 0;   // [up-1] nothing more is sent: the row's rate says so at once
+        s->rateBps = 0;
+        reportUpload(s, true);
         return;
     }
-    closeUpload(s, QStringLiteral("closed by peer"), false);
+    // [up-1] the downloader says why it stopped (5.2 and older send no reason)
+    const QString code = jStr(o, "reason", 16);
+    const QString why = cleanText(jStr(o, "why", 160), 160);
+    TransferState st = TransferState::Completed;
+    QString text = tr("Finished");
+    if (code == QLatin1String("banned")) {
+        st = TransferState::Error;
+        text = why.isEmpty() ? tr("Stopped by the other side: it refused our data") : tr("Stopped by the other side: %1").arg(why);
+    } else if (code == QLatin1String("paused")) {
+        st = TransferState::Cancelled;
+        text = tr("Cancelled by remote (download paused)");
+    } else if (code == QLatin1String("cancelled")) {
+        st = TransferState::Cancelled;
+        text = tr("Cancelled by remote (download cancelled)");
+    } else if (code == QLatin1String("quit")) {
+        st = TransferState::Cancelled;
+        text = tr("Cancelled by remote (program closed)");
+    } else if (code == QLatin1String("dropped")) {
+        st = TransferState::Cancelled;
+        text = tr("Cancelled by remote");
+    }
+    closeUpload(s, code.isEmpty() ? QStringLiteral("closed by peer") : QStringLiteral("closed by peer: ") + code
+                       + (why.isEmpty() ? QString() : QStringLiteral(" (") + why + QLatin1Char(')')),
+                false, st, text);
+}
+
+// [up-1] A hash set is offered and served only when it is known to be right: it must reduce to the
+// file's ed2k hash (eD2k rule: one part = the hash itself, else MD4 over the part hashes, with the
+// empty part of an exact multiple). The library hands out only complete files' sets and the trusted
+// set of a running download; this checks it once more, so a node never serves a set it cannot vouch for.
+QList<QByteArray> OverlayPlugin::servableEd2kSet(const FileHashes &h, qint64 size) const
+{
+    if (!m_ctx.library || h.ed2k.size() != 16 || size < kEd2kPart) return {};
+    QList<QByteArray> parts = m_ctx.library->ed2kPartHashes(h);
+    const qint64 data = (size + kEd2kPart - 1) / kEd2kPart, full = size / kEd2kPart + 1;
+    if (parts.size() == data && full != data) parts << QCryptographicHash::hash(QByteArray(), QCryptographicHash::Md4);
+    if (parts.size() != full || parts.size() > kMaxHashSetParts) return {};
+    QCryptographicHash md4(QCryptographicHash::Md4);
+    for (const QByteArray &p : std::as_const(parts)) {
+        if (p.size() != 16) return {};
+        md4.addData(p);
+    }
+    const QByteArray root = parts.size() == 1 ? parts.first() : md4.result();
+    if (root != h.ed2k) {
+        qCWarning(lcOverlay) << "not offering an ed2k part hash set that does not reduce to the file's ed2k hash";
+        return {};
+    }
+    return parts;
+}
+
+// [up-1] a session of a file we are still downloading: look at the verified ranges again and tell
+// the downloader when they grew (at most every 5 s unless forced), or that the file is complete now
+void OverlayPlugin::refreshPartial(UploadSession *s, bool force)
+{
+    if (!s || !s->partial || !m_ctx.library) return;
+    QList<QPair<qint64, qint64>> have;
+    const qint64 now = nowMs();
+    QJsonObject o;
+    o[QStringLiteral("t")] = QStringLiteral("have");
+    o[QStringLiteral("v")] = kWireVersion;
+    o[QStringLiteral("sid")] = static_cast<double>(s->sid);
+    if (!m_ctx.library->partialRanges(s->hashes, &have)) {
+        // complete now: a library file, found by its hashes or, for a torrent (the library knows a
+        // file by its own hashes, not by the torrent's), by the place it was downloaded to
+        SharedFile f;
+        bool found = m_ctx.library->findByHash(s->hashes, &f) && f.size == s->size && !f.hashes.conflicts(s->hashes);
+        for (int i = 0; !found && !s->path.isEmpty() && i < m_shared.size(); ++i)
+            if (m_shared.at(i).path == s->path && m_shared.at(i).size == s->size) { f = m_shared.at(i); found = true; }
+        if (found) {
+            FileHashes all = f.hashes;
+            if (!all.conflicts(s->hashes)) all.mergeFrom(s->hashes);
+            s->hashes = all;      // reads go to the library file from now on
+            s->partial = false;
+            s->have.clear();
+            o[QStringLiteral("full")] = true;
+            sendToNode(s->nodeId, o);
+        }
+        return;   // not shared yet (being hashed) or gone (cancelled): requests are "not available"
+    }
+    s->have = have;   // what onGet() serves from now on
+    const qint64 total = haveTotal(have);
+    if (total == s->haveSentTotal) return;
+    if (!force && now - s->lastHaveMs < 5000) return;
+    s->lastHaveMs = now;
+    s->haveSentTotal = total;
+    o[QStringLiteral("have")] = haveToJson(have);
+    sendToNode(s->nodeId, o);
 }
 
 void OverlayPlugin::pumpUpload(UploadSession *s)
@@ -738,7 +978,8 @@ void OverlayPlugin::pumpUpload(UploadSession *s)
                 if (d.size() != n) {
                     const quint32 bad = u->reqs.front().rq;
                     u->reqs.pop_front();
-                    sendGot(p, u->nodeId, u->sid, bad, false, QStringLiteral("read error"));
+                    // [up-1] a file still downloading may hold less than a moment ago: not a fault
+                    sendGot(p, u->nodeId, u->sid, bad, false, u->partial ? QStringLiteral("not available") : QStringLiteral("read error"));
                     return p->pumpUpload(u);
                 }
                 u->buf = d;
@@ -771,6 +1012,12 @@ void OverlayPlugin::reportUpload(UploadSession *s, bool force)
     const qint64 now = nowMs();
     if (!force && now - s->lastReportMs < 1000) return;
     s->lastReportMs = now;
+    reportFinal(s, TransferState::Transferring, QString());
+}
+
+// endText empty: the running state (slot / queue); else the final state and text of a closed upload
+void OverlayPlugin::reportFinal(UploadSession *s, TransferState endState, const QString &endText)
+{
     TransferInfo t;
     t.id = s->uploadId;
     t.isUpload = true;
@@ -785,6 +1032,11 @@ void OverlayPlugin::reportUpload(UploadSession *s, bool force)
     const int pos = m_uploadQueue.indexOf(s) + 1;
     t.state = s->active ? TransferState::Transferring : TransferState::Queued;
     t.statusText = s->active ? (s->reqs.empty() ? tr("Waiting") : tr("Uploading")) : tr("Queued (%1)").arg(pos);
+    if (!endText.isEmpty()) {
+        t.state = endState;
+        t.statusText = endText;
+        t.rateUpBps = 0;
+    }
     TransferSource ts;
     ts.net = Net::Overlay;
     ts.user = t.peer;
@@ -801,13 +1053,24 @@ void OverlayPlugin::reportUpload(UploadSession *s, bool force)
     Q_EMIT uploadChanged(t);
 }
 
-void OverlayPlugin::closeUpload(UploadSession *s, const QString &reason, bool notifyPeer)
+void OverlayPlugin::closeUpload(UploadSession *s, const QString &reason, bool notifyPeer, TransferState endState,
+                                const QString &endText)
 {
     if (!s) return;
     m_uploads.remove(s->key);
     m_uploadQueue.removeAll(s);
     if (notifyPeer) sendSlot(this, s->nodeId, s->sid, QStringLiteral("closed"), 0, reason);
     qCInfo(lcOverlay) << "upload" << s->name << "to" << s->userName << "closed:" << reason << s->bytesSent << "bytes";
+    // [up-1] the row's last word: how it ended, no rate any more, the bytes really handed to the link
+    // (the core's tracker says "Complete" only when that is the whole file)
+    if (s->active || s->bytesSent > 0) {
+        s->active = false;
+        s->reqs.clear();
+        s->rateBps = 0;
+        s->rateWindowBytes = 0;
+        m_uploadQueue.removeAll(s);
+        reportFinal(s, endState, endText.isEmpty() ? tr("Finished") : endText);
+    }
     const QString id = s->uploadId;
     delete s;
     Q_EMIT uploadFinished(id);
@@ -820,7 +1083,7 @@ void OverlayPlugin::closeUpload(UploadSession *s, const QString &reason, bool no
 void OverlayPlugin::cancelUpload(const QString &uploadId)
 {
     for (UploadSession *s : m_uploads)
-        if (s->uploadId == uploadId) return closeUpload(s, QStringLiteral("cancelled"), true);
+        if (s->uploadId == uploadId) return closeUpload(s, QStringLiteral("cancelled"), true, TransferState::Cancelled, tr("Cancelled"));
 }
 
 // [glue-2] "Start Transfer" on a queued upload: give it a slot now (beyond the slot limit).
@@ -861,7 +1124,7 @@ void OverlayPlugin::dropPeerUploads(const QString &nodeId)
 {
     const QList<UploadSession *> all = m_uploads.values();
     for (UploadSession *s : all)
-        if (s->nodeId == nodeId) closeUpload(s, QStringLiteral("disconnected"), false);
+        if (s->nodeId == nodeId) closeUpload(s, QStringLiteral("disconnected"), false, TransferState::Error, tr("Disconnected"));
 }
 
 void OverlayPlugin::uploadsTick()
@@ -877,9 +1140,10 @@ void OverlayPlugin::uploadsTick()
             s->rateWindowStart = now;
         }
         if (s->active && s->reqs.empty() && !s->reading && now - s->lastActivityMs > m_t.uploadIdleMs) {
-            closeUpload(s, QStringLiteral("idle"), true);
+            closeUpload(s, QStringLiteral("idle"), true);   // the downloader stopped asking: "Finished"
             continue;
         }
+        if (s->partial) refreshPartial(s, false);   // [up-1]
         if (!s->active && now - s->lastActivityMs > qMin<qint64>(queueTimeout, 5 * 60000)) {
             // queued clients re-open every 60 s; silence means they are gone
             closeUpload(s, QStringLiteral("queue timeout"), true);

@@ -59,6 +59,9 @@ struct SourceConfig {
     QList<QByteArray> hashSet;               // [engine-3] sent once via hashSetReceived when first Ready
     QString hashSetKind = QStringLiteral("ed2k-parts");
     qint64 hashSetUnit = 9728000;
+    // [up-1] claims the whole file but does not hold these ranges: a request touching one fails with
+    // RangeSource::rangeNotAvailableError() and available() shrinks (a partial source's map catching up)
+    QList<QPair<qint64, qint64>> missing;
 };
 
 struct SourceStats {                         // outlives the source (the engine deletes closed ones)
@@ -67,6 +70,8 @@ struct SourceStats {                         // outlives the source (the engine 
     QList<QPair<qint64, qint64>> requests;   // as received
     int cancelCount = 0;
     qint64 served = 0;
+    QString closeCode, closeText;            // [up-1] RangeSource::setCloseReason before close()
+    int notAvailable = 0;                    // [up-1] requests answered "Range not available"
 };
 
 class TestSource : public RangeSource {
@@ -142,6 +147,23 @@ public:
             QTimer::singleShot(0, this, [this, offset, length] { emit requestFinished(offset, length, false, QStringLiteral("no ranges")); });
             return;
         }
+        for (const auto &m : std::as_const(cfg.missing)) {
+            if (offset >= m.second || offset + length <= m.first) continue;
+            ++stats->notAvailable;
+            QList<QPair<qint64, qint64>> av;
+            qint64 at = 0;
+            for (const auto &x : std::as_const(cfg.missing)) {
+                if (x.first > at) av << qMakePair(at, x.first);
+                at = qMax(at, x.second);
+            }
+            if (at < cfg.data.size()) av << qMakePair(at, qint64(cfg.data.size()));
+            cfg.avail = av;
+            QTimer::singleShot(0, this, [this, offset, length] {
+                emit availabilityChanged();
+                emit requestFinished(offset, length, false, rangeNotAvailableError());
+            });
+            return;
+        }
         if (offset < 0 || offset >= cfg.data.size()) {
             QTimer::singleShot(0, this, [this, offset, length] { emit requestFinished(offset, length, false, QStringLiteral("range not available")); });
             return;
@@ -162,6 +184,11 @@ public:
         m_jobs.clear();
         m_tick.stop();
         setState(Closed);
+    }
+    void setCloseReason(const QString &code, const QString &text) override
+    {
+        stats->closeCode = code;
+        stats->closeText = text;
     }
 
 private:

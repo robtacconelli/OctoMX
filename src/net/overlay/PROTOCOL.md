@@ -67,13 +67,14 @@ On every new connection each side sends:
 ```
 {t:"hello", v:1, user:<ed25519 pub hex>, node:<sender node id>, x:<x25519 pub hex>, name, ts,
  client:"OctoMX", ver, files:<shared count>, conn:<connection label>, since:<online since ms>,
- addrs:["ip:port",...], caps:["pm_ack","reach","ping"], sig}
+ addrs:["ip:port",...], caps:["pm_ack","reach","ping","part"], sig}
 sig = Ed25519("hello\n" + node + "\n" + x + "\n" + name + "\n" + ts)
 ```
 `caps` (4.3, not signed, at most 16 strings of at most 16 characters) says which optional parts of
 this document the sender implements: `pm_ack` (it answers private messages with receipts and wants
 receipts for its own, section 5.2), `reach` (it honours connect-back requests, section 6.1), `ping` (it
-answers liveness pings through the mesh, section 4). A node without `caps` is treated as a 4.2 node.
+answers liveness pings through the mesh, section 4), `part` (5.3: it serves and fetches files that
+are still downloading, section 7). A node without `caps` is treated as a 4.2 node.
 Messages queued for a node that is being dialled are sent once its hello has been verified (before
 4.3: as soon as the link came up, so a link that dropped at once lost them).
 The receiver checks that `node` equals the authenticated librats sender id and verifies `sig`
@@ -283,7 +284,16 @@ connected (private messages and chat still work through the mesh).
   * `get {sid, rq:u32, off, len ≤ 4 MiB}`. The server allows at most 8 outstanding requests per
     session and serves them in order. Answers: data frames, or
     `got {sid, rq, ok:false, err}` (`no slot` | `bad range` | `read error`).
-  * `get_cancel {sid}` drops the outstanding requests. `get_close {sid}` ends the session.
+  * `get_cancel {sid}` drops the outstanding requests. `get_close {sid, reason?, why?}` ends the
+    session. (5.3) `reason` says why the downloader stopped: `done` (its download is complete),
+    `paused`, `cancelled`, `quit` (program closed), `banned` (`why` = the reason it shows, at most 160
+    characters, e.g. "File Mismatch: a block failed the check"), `dropped` (any other: slow, failing,
+    not needed now). The uploader's row ends with "Finished", "Cancelled by remote (download paused)",
+    "Cancelled by remote (download cancelled)", "Cancelled by remote (program closed)", "Stopped by the
+    other side: <why>" or "Cancelled by remote"; a get_close without `reason` (5.2 and older) reads
+    "Finished". (5.3) get_close is sent twice: once as a librats *live* message, which leaves ahead of
+    the file data already queued toward that peer, and once as an ordinary reliable message (the second
+    copy finds no session and is ignored), so it does not wait behind megabytes of queued data.
   * **Data frame** (`mxd` channel):
     `'D' | 0x01 | sid:u32 BE | rq:u32 BE | off:u64 BE | payload (≤ 64 KiB)`. The frames of one
     request are contiguous and in order. The client checks `off` and drops data for cancelled
@@ -302,6 +312,10 @@ connected (private messages and chat still work through the mesh).
     `ready` or `queued`. It does so when its library holds the eD2k part hashes of the file (the
     library hasher computes and stores them for every shared file ≥ 9 728 000 bytes; smaller files
     are one part whose hash is the ed2k hash itself, so nothing is offered).
+  * (5.3) Only a set the server can vouch for: it must reduce to the file's ed2k hash (checked before
+    it is offered and again before it is sent). For a file that is still downloading that is the
+    trusted set its own parts are checked against, never a provisional one; with none, nothing is
+    offered. 5.2 could offer a set computed over a half-downloaded file (holes included), see below.
   * The client asks once per session: `hs_req {sid, kind:"ed2k-parts"}` (allowed while queued).
   * Answer: `hs {sid, kind, ok:true, unit:9728000, n, hashes:<n × 32 hex chars, MD4 per part>}` or
     `hs {sid, kind, ok:false}` (no session, not offered, or asked more than 3 times). `n` is the
@@ -309,15 +323,43 @@ connected (private messages and chat still work through the mesh).
     size; at most 120 000 parts (≈ 1.1 TB). The answer is compressed like any control message.
   * The client checks `unit`, `n` against the size and the hex, and hands the set to the engine
     attributed to this source (`RangeSource::hashSetReceived`). The engine trusts it only when it
-    reduces to the trusted ed2k hash (eD2k rule: MD4 of the concatenated part hashes); a set
-    that reduces to another trusted value bans the sender; without a trusted ed2k hash it is used
-    provisionally and confirmed or refuted by the final whole-file check (a refuted set bans its
-    sender for that download).
+    reduces to the trusted ed2k hash (eD2k rule: MD4 of the concatenated part hashes); without a
+    trusted ed2k hash it is used provisionally and confirmed or refuted later. (5.3) A set never bans
+    its sender: one that reduces to another value, or that is refuted later (by a trusted ed2k hash
+    learned afterwards, or because parts of other sources do not match it), is dropped and that
+    source's sets are not used again for the download, while its data keeps being used and is checked
+    like anyone's. Parts that fail against a provisional set give no strikes until data of a source
+    other than the set's sender has matched it; two such failures drop the set. A torrent download
+    does not take eD2k sets at all (piece hashes judge it). 5.2 banned the sender in these cases.
   * Old peers: a v1 server without the extension sends no `hs`, so the client never asks; a v1
     client ignores the unknown `hs` field and never sends `hs_req`; an `hs_req` that reaches an old
     server is an unknown type and dropped. Nothing else changes.
-* `RangeSource::available()` reports the whole file (`{0,size}`) once the slot is ready.
-  Partial-file sharing would be a later extension, for example a `have` map in `slot`.
+* **Files that are still downloading** (5.3, `caps` `part`). A node serves a running download by
+  the download's trusted identity, and only the byte ranges verified against trusted hashes (pieces
+  libtorrent checked; units checked against a trusted eD2k set or TTH tree, never against a
+  provisional set). A file a download is still writing is never offered as a complete file (5.2's
+  library hashed a torrent's half-downloaded file in the shared incoming folder and shared it with
+  hashes computed over its holes).
+  * The client says it understands partial sources: `get_open {..., part:true}`,
+    `src_q {..., part:true}`. A server answers `src_q` for a partial file, and opens a slot for it,
+    only when `part` is set; a `get_open` without it (5.2 and older) gets `slot {st:"missing"}` for a
+    partial file.
+  * `slot` (`ready` / `queued`) of a partial file carries `have:[[start, end], ...]` (byte ranges,
+    sorted, at most 4096). A slot without `have` is a complete file.
+  * When the verified part grows, the server sends `have {sid, have:[...]}` (at most every 5 s, at
+    once when a request asks for a range it holds by then), and `have {sid, full:true}` when the file
+    is complete. A shrunk map (a provisional set the uploader itself dropped) is sent the same way.
+  * `get` for a range outside the map is answered `got {sid, rq, ok:false, err:"not available"}`;
+    the client removes the range from its map and reports `RangeSource::rangeNotAvailableError()`,
+    which the engine does not count as a failure.
+* `RangeSource::available()` reports the whole file (`{0,size}`) once the slot of a complete file is
+  ready, the `have` map for a partial one.
+* Compatibility of the 5.3 additions with 5.2 nodes: a 5.2 downloader never sends `part`, so a 5.3
+  node does not offer it files it is still downloading (it gets complete files as before, and the row
+  of such an upload ends with "Finished" when it closes). A 5.2 uploader never sends `have`: its files
+  are complete (or, the 5.2 defect, a half-downloaded torrent file with wrong hashes; a 5.3 downloader
+  then drops the set quietly, and only bad data costs the source strikes or a ban). Unknown fields
+  and the unknown `have` message are ignored by 5.2 nodes.
 
 ## 8. Hash-link registry
 

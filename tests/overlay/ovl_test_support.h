@@ -51,6 +51,14 @@ public:
     {
         mx::SharedFile f;
         if (!findByHash(h, &f)) return {};
+        {   // [up-1] a file still downloading: only its verified ranges can be read
+            QMutexLocker l(&partialMutex);
+            if (partial.contains(f.hashes.sha1)) {
+                bool inside = false;
+                for (const auto &r : partial.value(f.hashes.sha1)) inside = inside || (r.first <= offset && offset + length <= r.second);
+                if (!inside) return {};
+            }
+        }
         QFile file(f.path);
         if (!file.open(QIODevice::ReadOnly) || !file.seek(offset)) return {};
         ++reads;
@@ -64,6 +72,37 @@ public:
         return findByHash(h, &f) ? partSets.value(f.hashes.sha1) : QList<QByteArray>();
     }
     std::atomic<int> reads{0};
+    // [up-1] files that are still downloading (keyed by SHA-1): the verified ranges; they are left out
+    // of sharedFiles(), like the core's Library does with running downloads
+    mutable QMutex partialMutex;
+    QHash<QByteArray, QList<QPair<qint64, qint64>>> partial;
+    void setPartial(const QByteArray &sha1, const QList<QPair<qint64, qint64>> &have)
+    {
+        QMutexLocker l(&partialMutex);
+        partial.insert(sha1, have);
+    }
+    void setComplete(const QByteArray &sha1)
+    {
+        QMutexLocker l(&partialMutex);
+        partial.remove(sha1);
+    }
+    bool partialRanges(const mx::FileHashes &h, QList<QPair<qint64, qint64>> *have) const override
+    {
+        mx::SharedFile f;
+        if (!findByHash(h, &f)) return false;
+        QMutexLocker l(&partialMutex);
+        if (!partial.contains(f.hashes.sha1)) return false;
+        if (have) *have = partial.value(f.hashes.sha1);
+        return true;
+    }
+    QList<mx::SharedFile> completeFiles() const
+    {
+        QMutexLocker l(&partialMutex);
+        QList<mx::SharedFile> out;
+        for (const auto &f : files)
+            if (!partial.contains(f.hashes.sha1)) out << f;
+        return out;
+    }
 
     // Create a file of `size` pseudo-random bytes (seeded) and add it with sha1 + sha256 + md5.
     mx::SharedFile addGenerated(const QString &dir, const QString &name, qint64 size, quint32 seed)

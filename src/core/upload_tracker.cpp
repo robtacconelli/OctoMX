@@ -84,8 +84,16 @@ void UploadTracker::onFinished(NetworkPlugin *p, const QString &pluginId)
     info.etaSec = -1;
     if (info.state != TransferState::Error && info.state != TransferState::Cancelled
         && info.state != TransferState::TimedOut) {
+        // [up-1] "Complete" only for an upload that sent the whole file. Any other end is the
+        // classic "Finished" (the downloader got what it asked for: one range of a multi-source
+        // download, a request of a Gnutella / eD2k client), or the plugin's own last word when its
+        // final report already said how it ended ("Finished", "Cancelled by remote ...").
+        const bool whole = info.size > 0 && info.done >= info.size;
+        const bool pluginFinal = info.state == TransferState::Completed && !info.statusText.isEmpty()
+                                 && info.statusText != transferStateText(TransferState::Completed);
         info.state = TransferState::Completed;
-        info.statusText = transferStateText(TransferState::Completed);
+        if (whole) info.statusText = transferStateText(TransferState::Completed);
+        else if (!pluginFinal) info.statusText = finishedUploadText();
     }
     info.completed = QDateTime::currentDateTime();
     if (m_library && info.done > 0) m_library->recordUpload(info.hashes, info.done);

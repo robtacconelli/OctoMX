@@ -30,6 +30,7 @@
 
 #include <cstdio>
 #include <functional>
+#include <memory>
 
 #include "core/engine/engine.h"
 #include "core/log.h"
@@ -412,8 +413,16 @@ int Cli::get(QStringList a)
     QList<SearchSource> extra;
     for (const QString &u : extraSources) {
         SearchSource s;
-        s.net = u.startsWith(QLatin1String("ed2k:")) ? Net::ED2K : Net::Http;
+        s.net = u.startsWith(QLatin1String("ed2k:")) || u.startsWith(QLatin1String("ed2k-peer://")) ? Net::ED2K : Net::Http;
         s.uri = u;
+        if (u.startsWith(QLatin1String("gnut://"))) {   // [up-1] a Gnutella servent: N2R by the SHA-1
+            s.net = Net::Gnutella;
+            s.uri.clear();
+            s.user.net = Net::Gnutella;
+            s.user.address = u.mid(7);
+            s.user.id = s.user.address;
+            s.user.name = s.user.address;
+        }
         extra << s;
     }
     const QString from = opt(a, QStringLiteral("--from"));   // [engine-4] hits saved by an earlier search
@@ -634,6 +643,45 @@ int Cli::run(QStringList a)
         return 0;
     }
     if (cmd == QLatin1String("echo")) { say(a.join(QLatin1Char(' '))); return 0; }
+    if (cmd == QLatin1String("stats")) {   // [up-1] stats <id|last>: one JSON line of the engine's counters
+        QString id = a.value(0);
+        if (id == QLatin1String("last"))
+            for (const TransferInfo &t : core->transfers()->downloads()) id = t.id;
+        const TransferInfo t = core->transfers()->transfer(id);
+        QVariantMap m = engine ? engine->debugInfo(id) : QVariantMap();
+        QVariantMap o;
+        for (const char *k : {"store", "verifiedByNet", "receivedByNet", "unitFailures", "wholeFileFailures", "failedUnitBytes",
+                              "piecePreverifyFailures", "injectedBytes", "banned", "hashSetProvider", "hashSetProvisional",
+                              "heldRanges", "verifiedRanges", "partPath"})
+            if (m.contains(QLatin1String(k))) o.insert(QLatin1String(k), m.value(QLatin1String(k)));
+        QVariantList srcs;
+        for (const QVariant &v : m.value(QStringLiteral("sources")).toList()) {
+            const QVariantMap sm = v.toMap();
+            QVariantMap x;
+            for (const char *k : {"key", "net", "bytes", "verified", "strikes", "banned", "why"})
+                if (sm.contains(QLatin1String(k))) x.insert(QLatin1String(k), sm.value(QLatin1String(k)));
+            srcs << x;
+        }
+        o.insert(QStringLiteral("sources"), srcs);
+        o.insert(QStringLiteral("state"), int(t.state));
+        o.insert(QStringLiteral("status"), t.statusText);
+        o.insert(QStringLiteral("done"), t.done);
+        o.insert(QStringLiteral("size"), t.size);
+        o.insert(QStringLiteral("path"), t.savePath);
+        say(QStringLiteral("stats: ") + QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(o)).toJson(QJsonDocument::Compact)));
+        return 0;
+    }
+    if (cmd == QLatin1String("touch")) {   // [up-1] touch <path>: a marker for scripts that wait-file
+        QFile f(a.value(0));
+        return f.open(QIODevice::WriteOnly | QIODevice::Append) ? 0 : 1;
+    }
+    if (cmd == QLatin1String("uploads")) {   // [up-1] the upload rows as the Transfers page has them
+        for (const TransferInfo &t : core->transfers()->uploads())
+            say(QStringLiteral("upload-row: %1 net=%2 to=%3 done=%4 size=%5 rate=%6 state=%7 status=\"%8\"")
+                    .arg(t.name, netShortName(t.networks.value(0)), t.peer.name).arg(t.done).arg(t.size).arg(t.rateUpBps)
+                    .arg(int(t.state)).arg(t.statusText));
+        return 0;
+    }
     if (cmd == QLatin1String("cancel")) {   // cancel <id|last> [--keep]
         QString id = a.value(0);
         if (id == QLatin1String("last") && !core->transfers()->downloads().isEmpty()) id = core->transfers()->downloads().last().id;
@@ -791,6 +839,45 @@ int main(int argc, char **argv)
     const QString envDisable = qEnvironmentVariable("MXCLI_DISABLE");   // e.g. "Gnutella,OctoMX"
     for (const QString &n : envDisable.split(QLatin1Char(','), Qt::SkipEmptyParts))
         core->network()->setEnabled(netFromName(n.trimmed()), false);
+    // [up-1] MXCLI_UPLOG=<file>: one line per visible change of an upload row (and at most one per 2 s
+    // while it runs); MXCLI_SRCLOG=<file>: the same for the source rows of every download. Evidence for
+    // the instance tests (what the user would read in the Transfers page).
+    struct RowLog {
+        QFile file;
+        QHash<QString, QString> last;
+        QHash<QString, qint64> lastMs;
+        void write(const QString &key, const QString &state, const QString &line)
+        {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (last.value(key) == state && now - lastMs.value(key) < 2000) return;
+            last.insert(key, state);
+            lastMs.insert(key, now);
+            file.write(QStringLiteral("%1 %2\n").arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")), line).toUtf8());
+            file.flush();
+        }
+    };
+    auto upLog = std::make_shared<RowLog>(), srcLog = std::make_shared<RowLog>();
+    upLog->file.setFileName(qEnvironmentVariable("MXCLI_UPLOG"));
+    srcLog->file.setFileName(qEnvironmentVariable("MXCLI_SRCLOG"));
+    if (!upLog->file.fileName().isEmpty() && !upLog->file.open(QIODevice::WriteOnly | QIODevice::Append)) say(QStringLiteral("cannot write the upload log"));
+    if (!srcLog->file.fileName().isEmpty() && !srcLog->file.open(QIODevice::WriteOnly | QIODevice::Append)) say(QStringLiteral("cannot write the source log"));
+    auto logRow = [upLog, srcLog](const TransferInfo &t) {
+        if (t.isUpload && upLog->file.isOpen()) {
+            const QString state = t.statusText + QLatin1Char('|') + QString::number(t.done == t.size);
+            upLog->write(t.id, state, QStringLiteral("upload %1 net=%2 to=%3 done=%4 size=%5 rate=%6 state=%7 id=%9 status=\"%8\"")
+                                          .arg(t.name, netShortName(t.networks.value(0)), t.peer.name).arg(t.done).arg(t.size)
+                                          .arg(t.rateUpBps).arg(int(t.state)).arg(t.statusText, t.id));
+        }
+        if (!t.isUpload && srcLog->file.isOpen()) {
+            for (const TransferSource &s : t.sources) {
+                const QString key = t.id + QLatin1Char('/') + netShortName(s.net) + QLatin1Char('/') + s.user.name + QLatin1Char('/') + s.id;
+                srcLog->write(key, s.statusText, QStringLiteral("source %1 net=%2 user=%3 bytes=%4 rate=%5 status=\"%6\"")
+                                                    .arg(t.name, netShortName(s.net), s.user.name).arg(s.bytes).arg(s.rateBps).arg(s.statusText));
+            }
+        }
+    };
+    QObject::connect(core->transfers(), &TransferService::transferAdded, &app, logRow);
+    QObject::connect(core->transfers(), &TransferService::transferChanged, &app, logRow);
     core->start();
     say(QStringLiteral("mxcli: profile %1, %2 plugins, log %3").arg(profile).arg(plugins.size()).arg(logFilePath()));
     Cli cli(core, profile, plugins);

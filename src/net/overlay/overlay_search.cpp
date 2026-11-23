@@ -181,8 +181,18 @@ void OverlayPlugin::onSearchEnvelope(const QString &uid, const QJsonObject &b)
         const qint64 size = jInt(b, "size", 0);
         if (h.isEmpty()) return;
         if (t == QLatin1String("src_q")) {
-            for (const SharedFile &f : m_shared) {
-                if (!f.hashes.matches(h) || (size > 0 && f.size != size)) continue;
+            QList<SharedFile> files = m_shared;
+            // [up-1] a file we are still downloading answers too, by its trusted identity, but only
+            // askers that understand partial sources ("part") hear about it
+            SharedFile pf;
+            QList<QPair<qint64, qint64>> have;
+            if (jBool(b, "part", false) && m_ctx.library && setting(QString(keys::library::ShareIncomplete), true).toBool()
+                && m_ctx.library->partialRanges(h, &have) && !have.isEmpty() && m_ctx.library->findByHash(h, &pf)
+                && !pf.hashes.conflicts(h))
+                files.prepend(pf);
+            for (const SharedFile &f : std::as_const(files)) {
+                const bool partialMatch = !pf.path.isEmpty() && f.path == pf.path;   // matched by the library
+                if ((!partialMatch && !f.hashes.matches(h)) || f.hashes.conflicts(h) || (size > 0 && f.size != size)) continue;
                 QJsonObject a;
                 a[QStringLiteral("t")] = QStringLiteral("src");
                 a[QStringLiteral("v")] = kWireVersion;
@@ -300,6 +310,7 @@ void OverlayPlugin::askSources()
         b[QStringLiteral("qid")] = r.qid;
         b[QStringLiteral("h")] = hashesToJson(r.h);
         b[QStringLiteral("size")] = static_cast<double>(r.size);
+        b[QStringLiteral("part")] = true;   // [up-1] partial sources welcome (we read "have" maps)
         b[QStringLiteral("node")] = m_node->nodeId();
         QJsonArray addrs;
         for (const QString &a : ourAddresses()) addrs << a;
