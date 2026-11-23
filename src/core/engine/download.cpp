@@ -823,7 +823,7 @@ void Download::stopForRemoval(bool keepData)
 {
     m_active = false;
     dropPreview();
-    closeAllSources();
+    closeAllSources(QStringLiteral("cancelled"));   // the uploaders learn that the user removed the download
     stopFindSources();
     TorrentBackend *be = m_host->backend();
     if (m_torrent) m_torrent->releaseAll();
