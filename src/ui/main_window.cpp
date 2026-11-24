@@ -174,7 +174,15 @@ MainWindow::MainWindow(mx::Core *core, QWidget *parent) : QWidget(parent), m_cor
         if (t.state == TransferState::Completed || t.state == TransferState::Seeding)
             m_completedIds.insert(t.id);
     auto onTransfer = [this](const TransferInfo &t) {
-        if (t.isUpload || (t.state != TransferState::Completed && t.state != TransferState::Seeding) || m_completedIds.contains(t.id))
+        if (t.isUpload)
+            return;
+        // [ver-1] a finished download that is unfinished again (Verify File found damage, Restart
+        // Download): its next completion is announced again
+        if (t.state != TransferState::Completed && t.state != TransferState::Seeding && t.state != TransferState::Verifying) {
+            m_completedIds.remove(t.id);
+            return;
+        }
+        if (t.state == TransferState::Verifying || m_completedIds.contains(t.id))
             return;
         m_completedIds.insert(t.id);
         notifyDownloadDone(t);

@@ -977,6 +977,84 @@ public:
             }
         QTimer::singleShot(0, this, [this, id, name, r] { emit downloadFilesDeleted(id, name, r.trashed, r.deleted, r.failed, r.errors); });
     }
+    // ---- [ver-1] Verify File / Restart Download: the demo checks for a moment and finds every demo
+    // file intact; a restart disposes of the demo data inside the profile and starts from zero
+    bool canVerifyDownload(const QString &id, QString *why) const override
+    {
+        const TransferInfo t = transfer(id);
+        auto no = [why](const QString &text) {
+            if (why)
+                *why = text;
+            return false;
+        };
+        if (t.id.isEmpty() || t.isUpload)
+            return no(QStringLiteral("The download is gone."));
+        if (t.state == TransferState::Verifying)
+            return no(QStringLiteral("It is being verified now."));
+        if (t.state == TransferState::Cancelled)
+            return no(QStringLiteral("It was cancelled."));
+        const bool finished = t.state == TransferState::Completed || t.state == TransferState::Seeding;
+        if (!finished && t.done <= 0)
+            return no(QStringLiteral("Nothing of it has been received yet."));
+        return true;
+    }
+    bool verifyDownload(const QString &id) override
+    {
+        if (!canVerifyDownload(id, nullptr))
+            return false;
+        TransferInfo *t = find(id);
+        const TransferState was = t->state;
+        const QString wasText = t->statusText;
+        const bool finished = was == TransferState::Completed || was == TransferState::Seeding;
+        setState(id, TransferState::Verifying, QStringLiteral("Verifying 0%..."));
+        QTimer::singleShot(m_frozen ? 300 : 1200, this, [this, id, was, wasText, finished] {
+            TransferInfo *x = find(id);
+            if (!x || x->state != TransferState::Verifying)
+                return;   // paused or removed meanwhile
+            const QString name = x->name;
+            setState(id, was, finished ? QStringLiteral("Complete, verified intact") : wasText);
+            emit downloadNotice(id, finished ? QStringLiteral("Verified: '%1' is intact.").arg(name)
+                                             : QStringLiteral("Verified: the %1 of '%2' received so far are intact.")
+                                                   .arg(QLocale::c().formattedDataSize(x->done), name));
+        });
+        return true;
+    }
+    bool canRestartDownload(const QString &id, QString *why) const override
+    {
+        const TransferInfo t = transfer(id);
+        if (t.id.isEmpty() || t.isUpload || t.state == TransferState::Cancelled) {
+            if (why)
+                *why = QStringLiteral("The download is gone.");
+            return false;
+        }
+        return true;
+    }
+    bool restartDownload(const QString &id) override
+    {
+        if (!canRestartDownload(id, nullptr))
+            return false;
+        const DownloadDiskInfo di = diskInfo(id);
+        QStringList mine;
+        for (const QString &p : di.paths)
+            if (insideProfile(p))
+                mine << p;
+        const trash::Result r = trash::dispose(mine, true);
+        TransferInfo *t = find(id);
+        t->done = 0;
+        t->completed = QDateTime();
+        t->state = TransferState::Transferring;
+        t->statusText.clear();
+        t->rateDownBps = m_frozen ? 0 : 30000;
+        m_resumedFrom.remove(id);
+        emit transferChanged(*t);
+        QString text = QStringLiteral("'%1' starts again from zero").arg(t->name);
+        if (!r.trashed.isEmpty())
+            text += QStringLiteral(": its old data went to the %1").arg(trash::placeName());
+        else if (!r.deleted.isEmpty())
+            text += QStringLiteral(": its old data was deleted for good");
+        emit downloadNotice(id, text + QLatin1Char('.'));
+        return true;
+    }
     // ---- glue-2 per-transfer actions
     void findMoreSources(const QString &id) override
     {

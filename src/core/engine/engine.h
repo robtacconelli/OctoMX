@@ -106,6 +106,11 @@ public:
     void setFirstLastPiecesFirst(const QString &id, bool on) override;
     PreviewInfo previewInfo(const QString &id) const override;
     QString preparePreview(const QString &id, int fileIndex, QString *error) override;
+    // [ver-1] Verify File / Restart Download
+    bool canVerifyDownload(const QString &id, QString *why = nullptr) const override;
+    bool verifyDownload(const QString &id) override;
+    bool canRestartDownload(const QString &id, QString *why = nullptr) const override;
+    bool restartDownload(const QString &id) override;
 
     // ---- engine extras (tests, mxcli)
     void setTuning(const engine::Tuning &t);       // before start()

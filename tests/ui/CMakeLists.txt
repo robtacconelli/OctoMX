@@ -62,6 +62,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/bw1_tests.cmake OPTIONAL)
 # [dl-1] download order flags and Preview
 include(${CMAKE_CURRENT_SOURCE_DIR}/dl1_tests.cmake OPTIONAL)
 
+# [ver-1] Verify File and Restart Download
+include(${CMAKE_CURRENT_SOURCE_DIR}/ver1_tests.cmake OPTIONAL)
+
 # [ui-h] settings registry, sounds, the settings made to work
 include(${CMAKE_CURRENT_SOURCE_DIR}/ui_h_tests.cmake OPTIONAL)
 

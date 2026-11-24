@@ -43,9 +43,13 @@ void GnutellaPlugin::maintain()
     const int want = maxUltrapeers();
     // too many (e.g. the user lowered the setting): close the youngest non-manual ones
     if (connected > want) {
-        QList<UltrapeerConnection *> ups = connectedUps();
-        std::sort(ups.begin(), ups.end(), [](UltrapeerConnection *a, UltrapeerConnection *b) { return a->connectedMs() < b->connectedMs(); });
-        for (UltrapeerConnection *c : ups) {
+        // [ver-1] the ages are read once: connectedMs() grows while std::sort compares, which is no
+        // ordering at all, and on a busy machine the sort ran past the list (crash in tst_netsettings_p2p)
+        QList<QPair<qint64, UltrapeerConnection *>> aged;
+        for (UltrapeerConnection *c : connectedUps()) aged << qMakePair(c->connectedMs(), c);
+        std::stable_sort(aged.begin(), aged.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+        for (const auto &ac : std::as_const(aged)) {
+            UltrapeerConnection *c = ac.second;
             if (connected <= want) break;
             if (m_manualConnect.contains(c->address().key())) continue;
             c->close(QStringLiteral("enough ultrapeers"), 200);

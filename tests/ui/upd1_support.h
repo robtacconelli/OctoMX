@@ -251,6 +251,11 @@ inline QByteArray makeArchive(const QString &pkgDir)
         return makeZip(pkgDir);
     const QString out = pkgDir + QStringLiteral(".tar.xz");
     QProcess p;
+    // [ver-1] the package holds the test program itself (about 110 MB): xz's fastest preset, so the
+    // suite does not spend minutes of CPU compressing it (it timed out on a busy machine)
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("XZ_OPT"), QStringLiteral("-0"));
+    p.setProcessEnvironment(env);
     p.start(QStringLiteral("tar"), {QStringLiteral("-C"), QFileInfo(pkgDir).absolutePath(), QStringLiteral("-cJf"), out,
                                     QFileInfo(pkgDir).fileName()});
     p.waitForFinished(60000);

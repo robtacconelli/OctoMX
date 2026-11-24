@@ -335,6 +335,13 @@ void PartStore::publishVerified()
     m_sh->verified = m_verified;
 }
 
+qint64 PartStore::keptBlockUnit(qint64 size)
+{
+    qint64 u = 256 * 1024;
+    while (size / u > 4096) u *= 2;
+    return u;
+}
+
 void PartStore::finalCheck(std::function<void(const FinalResult &)> done)
 {
     auto sh = m_sh;
@@ -347,6 +354,9 @@ void PartStore::finalCheck(std::function<void(const FinalResult &)> done)
             r.hashes = h.hashes();
             r.ed2kParts = h.ed2kPartHashes();
             r.aichParts = h.aichPartHashes();
+            r.tthUnit = keptBlockUnit(h.bytesHashed());   // [ver-1]
+            r.tthLevel = h.tthLevel(r.tthUnit);
+            if (r.tthLevel.isEmpty()) r.tthUnit = 0;
         }
         IoQueue::post(this, [r, done] { done(r); });
     });
@@ -393,6 +403,55 @@ void PartStore::moveExact(const QString &target, std::function<void(bool, const 
             }
         }
         IoQueue::post(this, [ok, err, done] { done(ok, err); });
+    });
+}
+
+void PartStore::afterWrites(std::function<void()> done)
+{
+    m_io.run([this, done] { IoQueue::post(this, done); });
+}
+
+QList<Range> PartStore::completeUnits() const
+{
+    QList<Range> out;
+    if (m_scheme == NoUnits || m_size <= 0 || m_unit <= 0) return out;
+    for (qint64 pos = 0; pos < m_size; pos += m_unit) {
+        const Range u = unitAt(pos);
+        if (m_verifying.contains(u.first) || !canVerifyUnit(u.first)) continue;
+        if (m_have.contains(u.first, u.second)) out << u;
+    }
+    return out;
+}
+
+void PartStore::recheckResult(qint64 s, qint64 e, bool ok)
+{
+    if (ok) {
+        m_have.add(s, e);
+        m_verified.add(s, e);
+    } else {
+        m_have.remove(s, e);
+        m_durable.remove(s, e);
+        m_verified.remove(s, e);
+    }
+    publishVerified();
+    emit changed();
+}
+
+void PartStore::finishInPlace(std::function<void(bool, const QString &, const QString &)> done)
+{
+    m_closed = true;
+    auto sh = m_sh;
+    m_io.run([this, sh, done] {
+        QString path;
+        {
+            QMutexLocker l(&sh->mutex);
+            if (sh->file) sh->file->flush();
+            sh->file.reset();
+            sh->verified.clear();
+            path = sh->path;
+        }
+        const bool ok = QFileInfo::exists(path);
+        IoQueue::post(this, [ok, path, done] { done(ok, path, ok ? QString() : QStringLiteral("the file is gone")); });
     });
 }
 

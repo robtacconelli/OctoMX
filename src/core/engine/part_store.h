@@ -65,7 +65,12 @@ public:
         QString error;
         FileHashes hashes;
         QList<QByteArray> ed2kParts, aichParts;
+        // [ver-1] the file's tiger tree level of tthUnit bytes (kept as its block hashes: Verify File)
+        qint64 tthUnit = 0;
+        QList<QByteArray> tthLevel;
     };
+    // [ver-1] the unit of the block hashes a finished file keeps: 256 KiB or more, at most 4096 blocks
+    static qint64 keptBlockUnit(qint64 size);
     void finalCheck(std::function<void(const FinalResult &)> done);
     // Close the file and move it to dir/name (collision-safe "name (1).ext"). done(ok, path, error).
     // [dl-1] allowCopy = false: only a rename (same volume); fails while another program keeps the file
@@ -84,6 +89,16 @@ public:
     void sha1Ranges(const QList<Range> &ranges, std::function<void(const QList<QByteArray> &)> done);
     bool drain(int timeoutMs) { return m_io.drain(timeoutMs); }
     void abandon() { m_io.discardPending(); }
+    // [ver-1] Verify File. done() runs on the main thread once every write queued so far is on disk.
+    void afterWrites(std::function<void()> done);
+    // the units that are held completely (verified or not) and are not being checked right now
+    QList<Range> completeUnits() const;
+    QByteArray unitHash(qint64 unitStart) const { return m_hashes.value(int(unitStart / qMax<qint64>(1, m_unit))); }
+    // the outcome of reading a unit again: ok = verified; else its bytes are no longer held (they are
+    // fetched again) and it is not verified; nobody is blamed (no unitFailed)
+    void recheckResult(qint64 s, qint64 e, bool ok);
+    // completion of a file repaired in place: close it where it is (pending writes first)
+    void finishInPlace(std::function<void(bool, const QString &, const QString &)> done);
 
     // Thread-safe read of verified bytes (partial sharing). Empty unless fully verified.
     QByteArray readVerified(qint64 off, qint64 len) const;

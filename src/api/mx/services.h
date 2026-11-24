@@ -244,6 +244,35 @@ public:
     // The outcome of a delete arrives in downloadFilesDeleted (after the files were closed).
     // Default: cancel(id, mode != Keep).
     virtual void removeDownload(const QString &id, FileRemoval mode) { cancel(id, mode != FileRemoval::Keep); }
+
+    // ---- [added by ver-1] "Verify File" and "Restart Download" (Transfers context menu).
+    // Verify File: every block of the download that is on disk is read again and checked against
+    // the block hashes the download knows (torrent pieces, eD2k parts, tiger tree leaves) or, when
+    // only a checksum of the whole file is known, the whole file. A running download stops fetching
+    // while it is checked and goes on by itself afterwards. Damaged blocks, and only those, are
+    // downloaded again (a finished download becomes unfinished again until they are back; it is not
+    // shared as a complete file meanwhile). The outcome, in plain words, arrives in downloadNotice
+    // and in the row's status text; Pause stops a check. canVerifyDownload: false (with *why for the
+    // tool tip) when it cannot be done right now. Default: not supported.
+    virtual bool canVerifyDownload(const QString &id, QString *why = nullptr) const
+    {
+        Q_UNUSED(id)
+        if (why) *why = tr("This core cannot verify downloads.");
+        return false;
+    }
+    virtual bool verifyDownload(const QString &id) { Q_UNUSED(id) return false; }
+    // Restart Download: what the download received (or the finished file) is disposed of by the
+    // rules of removeDownload(id, TrashOrDelete) (diskInfo(id) says what and where), then the same
+    // download (same id, sources, folder, name, priority, wanted files of a bundle and its own
+    // options) starts again from zero, running even if it was paused; nothing of the old data is
+    // trusted or reused. The UI asks first. Default: not supported.
+    virtual bool canRestartDownload(const QString &id, QString *why = nullptr) const
+    {
+        Q_UNUSED(id)
+        if (why) *why = tr("This core cannot restart downloads.");
+        return false;
+    }
+    virtual bool restartDownload(const QString &id) { Q_UNUSED(id) return false; }
 signals:
     void transferAdded(const mx::TransferInfo &t);
     void transferChanged(const mx::TransferInfo &t);          // throttled to ~1/s per transfer
@@ -258,6 +287,9 @@ signals:
     // deleted for good, and the ones still there with one reason per failed path
     void downloadFilesDeleted(const QString &id, const QString &name, const QStringList &trashed, const QStringList &deleted,
                               const QStringList &failed, const QStringList &errors);
+    // [added by ver-1] the outcome of verifyDownload() / restartDownload() in one plain sentence
+    // ("Verified: 'name' is intact."), for the Transfers page's notice
+    void downloadNotice(const QString &id, const QString &text);
 };
 
 // ---------------------------------------------------------------- shared files page

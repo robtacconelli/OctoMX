@@ -45,6 +45,11 @@ struct Tuning {
     int     candidateUnitsInFlight = 2;
     int     candidateNetFailures = 3;
     int     nameSearchMax = 12;            // background size+name searches per session
+    // [ver-1] Verify File: a pause between two checked blocks (0 = none; tests slow a check down to stop
+    // it in the middle), and how long a damaged file whose only checksum covers the whole file waits for
+    // the networks to send block hashes that locate the damage
+    int     verifyBlockPauseMs = 0;
+    int     verifyHashSetWaitMs = 3 * 60 * 1000;
 };
 
 // [merge-1] eD2k and Kad serve the same copy (one hash family); every other network is its own

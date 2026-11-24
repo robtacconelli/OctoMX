@@ -18,6 +18,9 @@ chat rooms, hotlist, the lot), plugged into the networks that are alive today.
   verified before it is kept.
 * **One click.** The first-run wizard switches everything on; after that, double-click a result
   and it downloads.
+* **Verify File, Restart Download.** A finished or paused download can be checked again on the
+  disk (right-click it, Verify File): only the blocks that are damaged are downloaded again, the
+  file stays where it is. Restart Download throws away what was received and starts from zero.
 * **Its own network for the social part.** Chat rooms, private messages, browsing a friend's
   shared files and direct transfers run over a new, serverless OctoMX peer network.
 * **Looks like 2001, runs on 2026 hardware.** Native Qt 6 application for Windows 10/11 and

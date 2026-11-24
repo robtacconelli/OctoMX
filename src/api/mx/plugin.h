@@ -385,6 +385,11 @@ struct TorrentSnapshot {
     bool      paused = false;
     bool      finished = false;
     QDateTime added;
+    // [ver-1] the checks TorrentBackend::recheck() asked for that have ended in this session (not the
+    // check when the torrent was added), and the progress of the check running now (state Verifying),
+    // 0 ... 1000000 (-1 = not reported)
+    int       checksDone = 0;
+    int       checkPpm = -1;
 };
 
 // [diag-1] per-torrent connection counters for "why is this download slow" (cheap, cached).
@@ -437,6 +442,8 @@ public:
     virtual void resumeTorrent(const QString &id) = 0;
     virtual void setWantedFiles(const QString &id, const QList<int> &indexes) = 0;
     virtual void setTorrentPriority(const QString &id, int priority) = 0;
+    // Check every piece on disk again. [ver-1] A paused torrent is checked too and stays paused
+    // afterwards (nothing is fetched); TorrentSnapshot::checksDone grows by one when it has ended.
     virtual void recheck(const QString &id) = 0;
     virtual void reannounce(const QString &id) = 0;
     virtual QStringList torrents() const = 0;

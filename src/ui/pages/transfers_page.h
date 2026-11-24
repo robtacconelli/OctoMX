@@ -32,6 +32,7 @@ public:
     TransfersPage(mx::Core *core, MainWindow *mw, QWidget *parent = nullptr);
     QStringList statusFields() const override;
     void saveState() override;
+    bool scriptCommand(const QString &verb, const QStringList &args, QString *error) override;   // [ver-1]
 
     MxListView *downloadList() const { return m_down; }
     MxListView *uploadList() const { return m_up; }
@@ -65,6 +66,12 @@ private:
     // [dl-1] download order flags and Preview
     void addOrderEntries(QMenu *menu, const mx::TransferInfo &t, bool finished);
     void addPreviewEntry(QMenu *menu, const mx::TransferInfo &t);
+    // [ver-1] Verify File / Restart Download... (every selected download that can)
+    QList<mx::TransferInfo> actionTargets(const mx::TransferInfo &clicked) const;
+    void addVerifyEntries(QMenu *menu, const mx::TransferInfo &t);
+    void verifyDownloads(const QStringList &ids);
+    QString restartQuestion(const QList<mx::TransferInfo> &items) const;
+    bool restartDownloads(const QStringList &ids, int answer = 0);   // answer: 0 = ask (default No)
     void previewTransfer(const mx::TransferInfo &t, int fileIndex);
     void cancelSelected();
     void clearSelected();
@@ -107,6 +114,8 @@ private:
     StaticText *m_summary;
     QTimer *m_summaryTimer;
     QString m_notice;                          // transient status-bar note (8 s)
+    QStringList m_noticeBatch;                 // [ver-1] downloadNotice texts arriving together
+    QTimer *m_noticeBatchTimer = nullptr;
     // [ui-j] outcome of deletes, reported together (status bar; a message box for what failed)
     QTimer *m_deleteReport = nullptr;
     QStringList m_trashedNames, m_deletedNames, m_failedPaths, m_failedErrors;

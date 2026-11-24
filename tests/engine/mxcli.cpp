@@ -7,6 +7,7 @@
 //   mxcli --profile DIR get <n | magnet:... | ed2k://... | http(s)://... | file.torrent>
 //                           [--source URL]... [--until-done | --until-bytes N] [--timeout S] [--every S]
 //   mxcli --profile DIR list | info <id> | pause <id> | resume <id> | cancel <id> | wait <S>
+//   mxcli --profile DIR verify <id|last> [--timeout S] | restart <id|last>   ([ver-1] Verify File / Restart Download)
 //   mxcli --profile DIR maplog <id|last> <file.jsonl> [--every S] [--timeout S] [--until-done]
 //                           ([ui-i] the Transfers bar map + the ranges it is made of, one JSON line per sample)
 //   mxcli --profile DIR diag [--wait S] [--test] [--ports-online] [--show-ips] [--out FILE]
@@ -641,6 +642,37 @@ int Cli::run(QStringList a)
         if (cmd == QLatin1String("pause")) core->transfers()->pause(id);
         else core->transfers()->resume(id);
         return 0;
+    }
+    if (cmd == QLatin1String("verify") || cmd == QLatin1String("restart")) {
+        // [ver-1] verify <id|last> [--timeout s]: Verify File, prints the answer; restart <id|last>: Restart Download
+        QString id = a.value(0);
+        if (id == QLatin1String("last") && !core->transfers()->downloads().isEmpty()) id = core->transfers()->downloads().last().id;
+        const int ti = int(a.indexOf(QStringLiteral("--timeout")));
+        const qint64 timeout = ti >= 0 ? qint64(a.value(ti + 1).toDouble() * 1000) : 600000;
+        QString why, answer;
+        const bool can = cmd == QLatin1String("verify") ? core->transfers()->canVerifyDownload(id, &why) : core->transfers()->canRestartDownload(id, &why);
+        if (!can) {
+            say(QStringLiteral("%1: not now: %2").arg(cmd, why));
+            return 1;
+        }
+        QMetaObject::Connection c = QObject::connect(core->transfers(), &TransferService::downloadNotice, core,
+                                                     [&](const QString &nid, const QString &text) { if (nid == id) answer = text; });
+        QElapsedTimer t;
+        t.start();
+        if (cmd == QLatin1String("verify")) core->transfers()->verifyDownload(id);
+        else core->transfers()->restartDownload(id);
+        waitFor([&] {
+            static qint64 last = 0;
+            if (t.elapsed() - last >= 2000) {
+                last = t.elapsed();
+                const TransferInfo x = core->transfers()->transfer(id);
+                say(QStringLiteral("  %1s %2").arg(t.elapsed() / 1000).arg(x.statusText));
+            }
+            return !answer.isEmpty();
+        }, timeout);
+        QObject::disconnect(c);
+        say(QStringLiteral("%1: %2 (after %3 ms)").arg(cmd, answer.isEmpty() ? QStringLiteral("no answer yet") : answer).arg(t.elapsed()));
+        return answer.isEmpty() ? 1 : 0;
     }
     if (cmd == QLatin1String("echo")) { say(a.join(QLatin1Char(' '))); return 0; }
     if (cmd == QLatin1String("stats")) {   // [up-1] stats <id|last>: one JSON line of the engine's counters

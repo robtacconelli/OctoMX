@@ -75,6 +75,7 @@ private slots:
     void sequentialWithRealLibtorrent();   // [dl-1]
     void firstLastWithRealLibtorrent();    // [dl-1]
     void removeKeepResumeAndDelete();      // [ui-j]
+    void verifyAndRestartWithRealLibtorrent();   // [ver-1]
 
 private:
     void run(bool withPeer);
@@ -471,6 +472,135 @@ void TstEngineBt::removeKeepResumeAndDelete()
     QVERIFY(!QFile::exists(in + QStringLiteral("/gone.bin")));
     QCOMPARE(readFile(in + QStringLiteral("/someone else.txt")), QByteArray("not ours"));
     QCOMPARE(readFile(in + QStringLiteral("/keep.bin")), data);
+}
+
+// [ver-1] Verify File and Restart Download with real libtorrent on 127.0.0.1: a damaged piece of the
+// finished file is found by libtorrent's recheck and only it comes from the seed again; a paused
+// download is checked and stays paused (nothing fetched) until it is resumed; Restart Download puts
+// the old file in the trash and fetches every piece again with the same metadata
+void TstEngineBt::verifyAndRestartWithRealLibtorrent()
+{
+    Env env(QStringLiteral("bt-verify"));
+    const QString osRoot = env.root + QStringLiteral("/os-root");
+    const QByteArray savedRoot = qgetenv("MX_OS_ROOT");
+    qputenv("MX_OS_ROOT", osRoot.toUtf8());
+    qunsetenv("MX_TRASH");
+    struct Restore { QByteArray v; ~Restore() { if (v.isNull()) qunsetenv("MX_OS_ROOT"); else qputenv("MX_OS_ROOT", v); } } restore{savedRoot};
+    QVERIFY(trash::redirected() && trash::seamDir().startsWith(env.root));
+    const QByteArray data = randomBytes(8 * 1024 * 1024 + 4321, 71);
+    writeFile(env.root + QStringLiteral("/seed/Lantern.mkv"), data);
+    BtNode a(env.root + QStringLiteral("/nodeA"));
+    QVERIFY(a.start());
+    QSignalSpy ready(a.ev, &BitTorrentEvents::seedReady);
+    QString err;
+    QVERIFY2(a.be->seedLocalFile(env.root + QStringLiteral("/seed/Lantern.mkv"), &err), qPrintable(err));
+    QVERIFY(QTest::qWaitFor([&] { return ready.size() == 1; }, 60000));
+    const QString tid = ready.first().at(1).toString();
+    const QString torrentFile = env.root + QStringLiteral("/nodeA/bt/torrents/") + tid + QStringLiteral(".torrent");
+    QVERIFY(QTest::qWaitFor([&] { return QFileInfo(torrentFile).size() > 0; }, 10000));
+    BtNode b(env.root + QStringLiteral("/nodeB"), /*limitLan*/ true);
+    QVERIFY(b.start());
+    env.engineUp(b.be, b.plugin.get());
+    struct Down { Env &e; ~Down() { e.engineDown(true); } } down{env};
+    QSignalSpy notices(env.engine.get(), &TransferService::downloadNotice);
+    DownloadRequest r;
+    r.uri = torrentFile;
+    const QString id = env.engine->download(r);
+    QVERIFY(QTest::qWaitFor([&] { return !b.be->snapshot(tid).id.isEmpty(); }, 10000));
+    b.ctl->addPeer(tid, a.endpoint());
+    QVERIFY2(env.waitDone(id, 120000), qPrintable(env.info(id).statusText));
+    const QString path = env.engine->incomingDir() + QStringLiteral("/Lantern.mkv");
+    QCOMPARE(readFile(path), data);
+    const qint64 pl = b.be->snapshot(tid).pieceLength;
+    QVERIFY(pl > 0);
+    // what the seed sent: its counter is refreshed with its status updates; wait until it shows at
+    // least `atLeast`, then until it stays the same for two seconds
+    auto uploaded = [&](qint64 atLeast) {
+        (void)QTest::qWaitFor([&] { return a.be->snapshot(tid).uploadedBytes >= atLeast; }, 30000);
+        qint64 now = a.be->snapshot(tid).uploadedBytes, last = -1;
+        for (int i = 0; i < 15 && now != last; ++i) {
+            QTest::qWait(2000);
+            last = now;
+            now = a.be->snapshot(tid).uploadedBytes;
+        }
+        return now;
+    };
+    // a seed does not keep a connection to another seed: the peer is named again while waiting
+    auto doneWithSeed = [&] {
+        int n = 0;
+        return QTest::qWaitFor([&] {
+            if (n++ % 40 == 0) {
+                b.ctl->addPeer(tid, a.endpoint());
+            }
+            return env.info(id).state == TransferState::Completed;
+        }, 120000);
+    };
+    const qint64 sent0 = uploaded(data.size());
+    QVERIFY(sent0 >= data.size());
+
+    // ---- a finished file with one damaged piece
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::ReadWrite) && f.seek(5 * pl + 33));
+        f.write("XYZ");
+    }
+    QVERIFY(env.engine->verifyDownload(id));
+    QVERIFY(QTest::qWaitFor([&] { return !notices.isEmpty(); }, 60000));
+    QString text = notices.last().at(1).toString();
+    QVERIFY2(text.contains(QStringLiteral("1 piece of 'Lantern.mkv'")) && text.contains(QStringLiteral("being downloaded again")), qPrintable(text));
+    QVERIFY2(doneWithSeed(), qPrintable(env.info(id).statusText));
+    QCOMPARE(readFile(path), data);
+    const qint64 sent1 = uploaded(sent0 + pl);
+    qInfo("the seed sent %lld bytes again (piece length %lld)", sent1 - sent0, pl);
+    QVERIFY2(sent1 - sent0 >= pl && sent1 - sent0 <= 2 * pl, qPrintable(QString::number(sent1 - sent0)));   // that piece, not the file
+
+    // ---- Restart Download: the file to the trash, every piece again (same metadata, no magnet fetch)
+    b.ctl->setRateLimits(400 * 1024, 0);   // slow enough to pause it in the middle below
+    notices.clear();
+    QVERIFY(env.engine->restartDownload(id));
+    QVERIFY(QTest::qWaitFor([&] { return !notices.isEmpty(); }, 20000));
+    QVERIFY2(notices.last().at(1).toString().contains(QStringLiteral("starts again from zero")), qPrintable(notices.last().at(1).toString()));
+    QVERIFY(QFile::exists(osRoot + QStringLiteral("/trash/files/Lantern.mkv")));
+    // the backend's figures show the restart once its status after the recheck arrived
+    QVERIFY(QTest::qWaitFor([&] { return b.be->snapshot(tid).totalDone < 2 * 1024 * 1024; }, 20000));
+    int tick = 0;
+    QVERIFY(QTest::qWaitFor([&] {
+        if (tick++ % 40 == 0) b.ctl->addPeer(tid, a.endpoint());
+        return b.be->snapshot(tid).totalDone > 2 * 1024 * 1024;
+    }, 60000));
+
+    // ---- a paused download is checked and stays paused: the damaged piece is missing, nothing comes
+    env.engine->pause(id);
+    QVERIFY(QTest::qWaitFor([&] { return b.be->snapshot(tid).paused; }, 10000));
+    int had = -1;   // a piece it has
+    for (int p = 0; p < b.be->snapshot(tid).have.size() && had < 0; ++p)
+        if (b.be->snapshot(tid).have.testBit(p)) had = p;
+    QVERIFY(had >= 0);
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::ReadWrite) && f.seek(had * pl + 100));
+        f.write("XYZ");
+    }
+    notices.clear();
+    QVERIFY(env.engine->verifyDownload(id));
+    QVERIFY(QTest::qWaitFor([&] { return !notices.isEmpty(); }, 60000));
+    text = notices.last().at(1).toString();
+    QVERIFY2(text.contains(QStringLiteral("1 piece of 'Lantern.mkv'")) && text.contains(QStringLiteral("when you resume it")), qPrintable(text));
+    QCOMPARE(env.info(id).state, TransferState::Paused);
+    QTest::qWait(2500);
+    const TorrentSnapshot sn = b.be->snapshot(tid);
+    QVERIFY(sn.paused);
+    QVERIFY(!sn.have.testBit(had));
+    const qint64 doneWhilePaused = sn.totalDone;
+    QTest::qWait(2000);
+    QCOMPARE(b.be->snapshot(tid).totalDone, doneWhilePaused);   // nothing fetched while paused
+    b.ctl->setRateLimits(0, 0);
+    env.engine->resume(id);
+    QVERIFY2(doneWithSeed(), qPrintable(env.info(id).statusText));
+    QCOMPARE(readFile(path), data);
+    const qint64 sent2 = uploaded(sent1 + data.size());
+    qInfo("the seed sent %lld bytes for the restart", sent2 - sent1);
+    QVERIFY(sent2 - sent1 >= qint64(data.size()));   // every byte again
 }
 
 QTEST_GUILESS_MAIN(TstEngineBt)

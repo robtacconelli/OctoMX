@@ -143,7 +143,11 @@ bool Download::isFinished() const
     return s == TransferState::Completed || s == TransferState::Seeding || s == TransferState::Cancelled;
 }
 
-bool Download::wantsToRun() const { return !isFinished() && !m_userPaused && !m_errorState; }
+// [ver-1] not while it is checked (Verify File) or while a restart waits for its old files to go
+bool Download::wantsToRun() const
+{
+    return !isFinished() && !m_userPaused && !m_errorState && !m_verify.running && !m_restartPending;
+}
 
 QString Download::partPath() const
 {
@@ -211,6 +215,12 @@ void Download::restoreState(const QByteArray &blob)
         m_topExisted = own.value(QStringLiteral("topExisted")).toBool();
     }
     m_notOwned = m.value(QStringLiteral("notOwned")).toBool();
+    // [ver-1] a finished file repaired in place, a damaged one, one without any checksum, a restart
+    m_repairPath = m.value(QStringLiteral("repairPath")).toString();
+    m_damaged = m.value(QStringLiteral("damaged")).toBool();
+    m_noChecksum = m.value(QStringLiteral("noSum")).toBool();
+    m_restartPending = m.value(QStringLiteral("restartPending")).toBool();
+    m_repairWhole = !m_repairPath.isEmpty() && m.value(QStringLiteral("repairWhole")).toBool();
     // [merge-1] networks matched by name and size: confirmed / dropped
     const QVariantMap cn = m.value(QStringLiteral("candNets")).toMap();
     for (auto it = cn.constBegin(); it != cn.constEnd(); ++it) {
@@ -308,6 +318,11 @@ QByteArray Download::saveState() const
         m.insert(QStringLiteral("own"), own);
     }
     if (m_notOwned) m.insert(QStringLiteral("notOwned"), true);
+    if (!m_repairPath.isEmpty()) m.insert(QStringLiteral("repairPath"), m_repairPath);   // [ver-1]
+    if (m_damaged) m.insert(QStringLiteral("damaged"), true);
+    if (m_noChecksum) m.insert(QStringLiteral("noSum"), true);
+    if (m_restartPending) m.insert(QStringLiteral("restartPending"), true);
+    if (m_repairWhole) m.insert(QStringLiteral("repairWhole"), true);
     if (!m_candNets.isEmpty()) {   // [merge-1]
         QVariantMap cn;
         for (auto it = m_candNets.constBegin(); it != m_candNets.constEnd(); ++it) {
@@ -393,6 +408,10 @@ Store *Download::store() const
 void Download::ensureStore()
 {
     if (store() || !m_pendingTorrentUrl.isEmpty()) return;
+    if (!m_repairPath.isEmpty()) {   // [ver-1] a finished file repaired in place: its own file is the part file
+        createPartStore();
+        return;
+    }
     if (!m_fallbackTorrent.isEmpty() && m_host->backend()) {
         // restored while running as a part file next to a torrent that had no metadata yet
         m_promoteTorrent = m_fallbackTorrent;
@@ -547,6 +566,10 @@ void Download::applyHashSets()
     if (!m_part) return;
     if (!m_ed2kParts.isEmpty()) {
         m_part->setEd2kParts(m_ed2kParts);
+    } else if (!m_repairPath.isEmpty() && !m_tthLeaves.isEmpty() && m_tthUnit > 0 && m_tthUnit < PartStore::Ed2kPart) {
+        // [ver-1] a file repaired in place is checked by its finer block hashes: a block the check did
+        // not reach is judged alone (the disk's damage), never together with what sources sent again
+        m_part->setTthLeaves(m_tthUnit, m_tthLeaves);
     } else if (!m_rec.hashes.ed2k.isEmpty() && m_rec.size > 0 && m_rec.size < PartStore::Ed2kPart) {
         m_part->setEd2kParts({m_rec.hashes.ed2k});   // single-part file: the file hash is the part hash
     } else if (!m_tthLeaves.isEmpty() && m_tthUnit > 0) {
@@ -564,6 +587,8 @@ void Download::activate()
     m_seenSourceSinceActivation = false;
     m_metaStalled = false;
     ensureStore();
+    // [ver-1] damage only the whole-file checksum shows: the networks are asked for block hashes
+    if (m_repairWhole && !m_awaitSetsUntil) m_awaitSetsUntil = m_activatedMs + m_host->tuning().verifyHashSetWaitMs;
     if (m_torrent) m_host->backend()->resumeTorrent(m_torrentId);
     mapSourcesToFiles();
     findSources(true);
@@ -593,10 +618,18 @@ void Download::deactivate()
 
 void Download::setUserPaused(bool paused)
 {
+    if (paused && m_verify.running) {   // [ver-1] Pause stops a check; what was not read yet keeps its status
+        m_verify.stopped = true;
+        if (!isFinished()) m_userPaused = true;
+        stopVerify();
+        if (isFinished()) return;
+    }
+    if (paused) m_awaitSetsUntil = 0;   // [ver-1] the wait for block hashes starts again on resume
     if (isFinished()) return;
     if (paused == m_userPaused && !(!paused && !m_rec.errorText.isEmpty())) return;
     m_userPaused = paused;
     if (!paused) {
+        m_verifyNote.clear();   // [ver-1]
         m_rec.errorText.clear();
         m_errorState = false;
         resetBrokenStore();
@@ -652,6 +685,8 @@ void Download::retry()
 void Download::cancel(bool deleteData)
 {
     m_active = false;
+    if (m_verifyJob) m_verifyJob->stop();   // [ver-1]
+    m_verify.running = false;
     dropPreview();   // [dl-1]
     closeAllSources(QStringLiteral("cancelled"));
     stopFindSources();
@@ -826,6 +861,8 @@ DownloadDiskInfo Download::diskInfo(QStringList *pruneDirs) const
 void Download::stopForRemoval(bool keepData)
 {
     m_active = false;
+    if (m_verifyJob) m_verifyJob->stop();   // [ver-1]
+    m_verify.running = false;
     dropPreview();
     closeAllSources(QStringLiteral("cancelled"));   // the uploaders learn that the user removed the download
     stopFindSources();
@@ -862,6 +899,9 @@ void Download::setWantedFiles(const QList<int> &idx)
 
 void Download::shutdown(int drainMs)
 {
+    // [ver-1] a check that runs now leaves everything as it was stored (what it found so far is
+    // persisted already; a finished file's record stays finished)
+    if (m_verifyJob) m_verifyJob->stop();
     for (auto &s : m_slots) {
         if (s->rs) {
             QObject::disconnect(s->rs, nullptr, this, nullptr);
@@ -1021,6 +1061,13 @@ void Download::learnHashSet(const QString &kind, qint64 unit, const QList<QByteA
     }
     applyHashSets();
     if (m_awaitHashSetUntil) m_awaitHashSetUntil = 0;
+    if (m_repairWhole && m_part && m_part->scheme() != PartStore::NoUnits) {   // [ver-1] the damage can be located now
+        m_awaitSetsUntil = 0;
+        m_repairWhole = false;
+        qCInfo(lcEngine) << m_rec.id << "block hashes arrived: the damaged parts are found and fetched again";
+        setVerifyNote(QStringLiteral("block hashes arrived: only the damaged parts are downloaded again"), false);
+        emit needsSchedule();
+    }
     persist(false);
     markDirty();
 }
@@ -1141,6 +1188,12 @@ void Download::onSourceHashSet(SourceSlot *s, const QString &kind, qint64 unit, 
     }
     applyHashSets();
     if (m_awaitHashSetUntil) m_awaitHashSetUntil = 0;
+    if (m_repairWhole && m_part && m_part->scheme() != PartStore::NoUnits) {   // [ver-1]
+        m_awaitSetsUntil = 0;
+        m_repairWhole = false;
+        qCInfo(lcEngine) << m_rec.id << "block hashes arrived from" << s->key << ": the damaged parts are found and fetched again";
+        setVerifyNote(QStringLiteral("block hashes arrived: only the damaged parts are downloaded again"), false);
+    }
     persist(false);
     markDirty();
     emit needsSchedule();
@@ -2137,6 +2190,14 @@ void Download::onUnitFailed(qint64 s, qint64 e)
     if (m_part && !m_torrent && !contributors.isEmpty() && untrusted.isEmpty()) recordBlackBox(s, e, contributors);
     for (SourceSlot *c : std::as_const(contributors)) c->contributed.remove(s, e);
     qCInfo(lcEngine) << m_rec.id << "unit" << s << "-" << e << "failed verification;" << contributors.size() << "contributors";
+    if (contributors.isEmpty() && !m_repairPath.isEmpty()) {
+        // [ver-1] a finished file repaired in place: these bytes came from the disk, not from a source
+        m_unitOwner.remove(s);
+        m_dirtyBlob = true;
+        markDirty();
+        emit needsSchedule();
+        return;
+    }
     if (m_ed2kProvisional && !m_provisionalCorroborated && m_part && m_part->scheme() == PartStore::Ed2kParts) {
         // [up-1] judged by a set nobody vouches for: the set may be the liar, not the senders. No
         // strikes; the second failure drops the set (its sender's sets are not used again) and the
@@ -2291,6 +2352,7 @@ void Download::maybeComplete()
     }
     if (!m_part || m_part->extent() < 0 || m_part->hasError()) return;
     if (m_part->bufferedBytes() > 0) return;
+    if (m_repairWhole) return;   // [ver-1] damage only the whole-file checksum shows: block hashes first
     if (m_part->fullyVerified()) {
         finalizePart();
         return;
@@ -2364,6 +2426,13 @@ void Download::finalizePart()
         }
         if (!fine) creditWholeFile();   // [engine-4] no units: the whole file verified at once
         m_part->markAllVerified();
+        // [ver-1] a file that had no checksum before cannot be verified later (its hashes are those of
+        // whatever arrived); one that had: the block hashes of the checked file are kept for Verify File
+        const FileHashes &id = m_rec.hashes;
+        const bool hadSum = !id.ed2k.isEmpty() || !id.sha1.isEmpty() || !id.sha256.isEmpty() || !id.md5.isEmpty()
+                            || !id.tth.isEmpty() || !id.aich.isEmpty();
+        if (!hadSum) m_noChecksum = true;
+        else if (!m_rec.hashes.conflicts(r.hashes)) keepBlockHashes(r.tthUnit, r.tthLevel, r.ed2kParts, r.hashes);
         finishPart(r.hashes, r.ed2kParts, r.aichParts, true);
     });
 }
@@ -2437,7 +2506,7 @@ void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kPa
     const bool previewed = !m_previewPath.isEmpty() || m_moveRetries > 0;
     dropPreview();
     if (!m_moveRetries) setState(TransferState::Verifying, QStringLiteral("Moving..."));
-    m_part->moveTo(dir, safeFileName(m_rec.name), [this, all, haveAll, ed2kParts, aichParts, previewed](bool ok, const QString &path, const QString &err) {
+    auto done = [this, all, haveAll, ed2kParts, aichParts, previewed](bool ok, const QString &path, const QString &err) {
         if (!ok && previewed && m_moveRetries < 17280) {   // a day of 5 s retries
             ++m_moveRetries;
             setState(TransferState::Verifying, QStringLiteral("Complete, waiting for the preview player to close the file..."));
@@ -2474,10 +2543,21 @@ void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kPa
             else lib->requestHash(path);
         }
         m_completing = false;
+        if (!m_repairPath.isEmpty()) {   // [ver-1] a repaired file: where it was, with its name
+            qCInfo(lcEngine) << m_rec.id << "repaired in place:" << path;
+            m_repairPath.clear();
+            m_repairWhole = false;
+            m_damaged = false;
+        }
         persist(true);
         m_host->finished(this);
         m_host->completedFile(this);
-    }, !previewed);
+    };
+    // [ver-1] a finished file repaired in place stays where it is (no move, no "name (1)" copy)
+    if (!m_repairPath.isEmpty() && QFileInfo(m_part->path()).absoluteFilePath() == QFileInfo(m_repairPath).absoluteFilePath())
+        m_part->finishInPlace(done);
+    else
+        m_part->moveTo(dir, safeFileName(m_rec.name), done, !previewed);
 }
 
 void Download::completeTorrent()
@@ -2939,6 +3019,7 @@ void Download::onTorrentChanged()
     if (m_btBytesAtStart < 0 && sn.hasMetadata) m_btBytesAtStart = sn.totalDone;
     if (sn.rateDownBps > 0) m_lastDataMs = nowMs();
     markDirty();
+    if (m_verify.running && m_verify.torrent) pollTorrentVerify();   // [ver-1]
     if (sn.finished) QTimer::singleShot(0, this, [this] { maybeComplete(); });
 }
 
@@ -3105,6 +3186,15 @@ void Download::tick(qint64 now)
             }
         }
     }
+    if (m_verify.running && m_verify.torrent && m_torrent) pollTorrentVerify();   // [ver-1]
+    if (m_repairWhole && m_awaitSetsUntil && now > m_awaitSetsUntil) {   // [ver-1] no block hashes came
+        giveUpRepair(QStringLiteral("no network gave block hashes to locate the damage"));
+        return;
+    }
+    if (m_verifyNoteUntilMs && now > m_verifyNoteUntilMs) {
+        m_verifyNoteUntilMs = 0;
+        m_verifyNote.clear();
+    }
     if (m_torrent) {
         m_torrent->refresh();
         if (m_active && m_torrent->hasMetadata()) {
@@ -3186,8 +3276,9 @@ void Download::updateStatus()
 {
     if (isFinished() || m_completing) return;
     if (m_userPaused) {
-        setState(TransferState::Paused, m_rec.errorText.isEmpty() ? transferStateText(TransferState::Paused)
-                                                                 : QStringLiteral("Paused (%1)").arg(m_rec.errorText));
+        QString why = m_rec.errorText.isEmpty() ? m_verifyNote : m_rec.errorText;   // [ver-1] the check's outcome
+        if (why.isEmpty() && m_repairWhole) why = QStringLiteral("damaged; block hashes are asked for when it runs");
+        setState(TransferState::Paused, why.isEmpty() ? transferStateText(TransferState::Paused) : QStringLiteral("Paused (%1)").arg(why));
         return;
     }
     if (m_errorState) {
@@ -3203,6 +3294,10 @@ void Download::updateStatus()
         return;
     }
     if (m_awaitHashSetUntil) return;
+    if (m_repairWhole && m_awaitSetsUntil) {   // [ver-1]
+        setState(TransferState::Verifying, QStringLiteral("Damaged: asking the networks for block hashes to find the damaged parts..."));
+        return;
+    }
     if (!m_movingTo.isEmpty()) {   // [engine-3] torrent move_storage running
         setState(TransferState(m_rec.state), QStringLiteral("Moving..."));
         return;
@@ -3447,6 +3542,14 @@ TransferInfo Download::info() const
         t.diagnosis = m_diagnosis;
         t.diagnosisLevel = m_diagnosisLevel;
     }
+    if (!m_verify.running && !m_verifyNote.isEmpty() && m_verifyNoteUntilMs > now && !isFinished() && !m_userPaused)
+        t.statusText += QStringLiteral(" (verified: %1)").arg(m_verifyNote);   // [ver-1] the check's outcome, a moment
+    if (m_verify.running) {   // [ver-1] Verify File: the state of the row while it is checked
+        t.state = TransferState::Verifying;
+        t.statusText = verifyStatusText();
+        t.rateDownBps = 0;
+        t.etaSec = -1;
+    }
     return t;
 }
 
@@ -3561,6 +3664,10 @@ TransferInfo Download::briefInfo() const
     t.savePath = m_rec.savePath;
     t.sequential = m_seq;                // [dl-1]
     t.firstLastFirst = m_firstLast;
+    if (m_verify.running) {              // [ver-1]
+        t.state = TransferState::Verifying;
+        t.statusText = verifyStatusText();
+    }
     return t;
 }
 
@@ -3815,6 +3922,7 @@ void Download::onTorrentStorageMoved(const QString &path, bool ok, const QString
 
 bool Download::setTarget(const QString &dir, const QString &name)
 {
+    if (!m_repairPath.isEmpty() || m_verify.running) return false;   // [ver-1] repaired where it is
     if (isFinished() || m_completing) return false;
     if (m_torrent) {
         // [engine-3] libtorrent owns the files: move them with move_storage (async; the
@@ -5177,8 +5285,20 @@ Download::ServeView Download::serveView() const
 
 QStringList Download::busyPaths() const
 {
-    if (isFinished()) return {};
+    // [ver-1] a finished file found damaged is not shared as a complete file (nor while it is repaired)
+    const bool damagedNow = m_damaged || (m_verify.running && m_verify.finishedFile && m_verify.badUnits > 0);
+    if (isFinished()) {
+        if (!damagedNow) return {};
+        QStringList out;
+        if (!m_rec.savePath.isEmpty()) out << m_rec.savePath;
+        if (m_verify.torrent && m_torrent && m_torrent->hasMetadata()) {
+            const TorrentSnapshot &sn = m_torrent->snap();
+            for (const TorrentFile &f : sn.files) out << QDir(sn.savePath).filePath(f.path);
+        }
+        return out;
+    }
     QStringList out;
+    if (!m_repairPath.isEmpty()) out << m_repairPath;   // [ver-1] also before its part store exists
     if (m_part) out << m_part->path();
     if (m_torrent || !m_torrentId.isEmpty() || !m_promoteTorrent.isEmpty()) {
         if (!m_rec.savePath.isEmpty()) out << m_rec.savePath;
@@ -5188,6 +5308,752 @@ QStringList Download::busyPaths() const
         }
     }
     return out;
+}
+
+// ============================================================================ [ver-1] Verify File
+
+namespace {
+QString quotedName(const QString &n) { return QStringLiteral("'%1'").arg(n); }
+bool anyChecksum(const FileHashes &h)
+{
+    return !h.ed2k.isEmpty() || !h.sha1.isEmpty() || !h.sha256.isEmpty() || !h.md5.isEmpty() || !h.tth.isEmpty() || !h.aich.isEmpty();
+}
+} // namespace
+
+// A download whose data is a torrent's (not a part file): the backend checks it
+static bool torrentData(bool hasTorrentStore, bool hasPart, const QString &partPath, const QString &torrentId)
+{
+    return hasTorrentStore || (!hasPart && partPath.isEmpty() && !torrentId.isEmpty());
+}
+
+bool Download::canVerify(QString *why) const
+{
+    auto no = [why](const QString &t) {
+        if (why) *why = t;
+        return false;
+    };
+    const TransferState st = TransferState(m_rec.state);
+    if (m_verify.running) return no(QStringLiteral("It is being verified now."));
+    if (m_restartPending) return no(QStringLiteral("It is starting again from zero now."));
+    if (st == TransferState::Cancelled) return no(QStringLiteral("It was cancelled."));
+    if (m_completing) return no(QStringLiteral("It is being finished now; try again in a moment."));
+    if (m_promoting) return no(QStringLiteral("A torrent is taking it over now; try again in a moment."));
+    if (!m_movingTo.isEmpty()) return no(QStringLiteral("Its files are being moved now; try again in a moment."));
+    if (m_repairWhole && m_awaitSetsUntil) return no(QStringLiteral("It is damaged and waits for block hashes from the networks to find the damage."));
+    if (torrentData(m_torrent != nullptr, m_part != nullptr, m_partPath, m_torrentId)) {
+        TorrentBackend *be = m_host->backend();
+        if (!be || !be->torrents().contains(m_torrentId))
+            return no(QStringLiteral("The torrent is no longer in the BitTorrent session; Restart Download fetches it again."));
+        const TorrentSnapshot sn = m_torrent ? m_torrent->snap() : be->snapshot(m_torrentId);
+        if (!sn.hasMetadata) return no(QStringLiteral("Its file list (with the piece hashes) has not arrived yet."));
+        if (sn.state == TransferState::Verifying) return no(QStringLiteral("BitTorrent is checking it now."));
+        return true;
+    }
+    if (isFinished()) {
+        if (m_rec.savePath.isEmpty()) return no(QStringLiteral("Where its file is, is not known."));
+        return true;
+    }
+    if (!m_pendingTorrentUrl.isEmpty()) return no(QStringLiteral("Nothing of it has been received yet."));
+    const qint64 held = m_part ? m_part->heldBytes() : m_restoreHeld.total();
+    if (held <= 0) return no(QStringLiteral("Nothing of it has been received yet."));
+    return true;
+}
+
+void Download::setVerifyNote(const QString &text, bool sticky)
+{
+    m_verifyNote = text;
+    m_verifyNoteUntilMs = sticky ? 0 : nowMs() + 20000;
+}
+
+QString Download::verifyStatusText() const
+{
+    if (m_verify.total <= 0) return QStringLiteral("Verifying...");
+    const int pct = int(qBound<qint64>(0, m_verify.done * 100 / m_verify.total, qint64(100)));
+    QString t = QStringLiteral("Verifying %1%...").arg(pct);
+    if (m_verify.badUnits > 0)
+        t += QStringLiteral(" (%1 damaged so far)").arg(countNoun(m_verify.badUnits, m_verify.unitWord.isEmpty() ? QStringLiteral("part") : m_verify.unitWord));
+    return t;
+}
+
+bool Download::startVerify()
+{
+    QString why;
+    if (!canVerify(&why)) return false;
+    m_verify = VerifyRun();
+    m_verify.startedMs = nowMs();
+    m_verifyNote.clear();
+    m_verifyNoteUntilMs = 0;
+    const QString n = quotedName(m_rec.name);
+    auto answer = [this](const QString &notice, const QString &status) {
+        // nothing is changed: the answer only
+        if (isFinished() && !status.isEmpty()) setState(TransferState(m_rec.state), status);
+        else if (!isFinished()) {
+            setVerifyNote(status, m_userPaused);
+            updateStatus();
+        }
+        persist(true);
+        m_host->notice(this, notice);
+        markDirty(true);
+        return true;
+    };
+    if (torrentData(m_torrent != nullptr, m_part != nullptr, m_partPath, m_torrentId)) return startTorrentVerify();
+    if (isFinished()) {
+        const QString path = m_rec.savePath;
+        const QFileInfo fi(path);
+        if (m_noChecksum || (!anyChecksum(m_rec.hashes) && m_ed2kParts.isEmpty() && m_tthLeaves.isEmpty()))
+            return answer(QStringLiteral("%1 cannot be verified: no checksum is known for this file.").arg(n),
+                          QStringLiteral("%1, cannot be verified: no checksum known").arg(transferStateText(TransferState::Completed)));
+        if (!fi.exists() || !fi.isFile())
+            return answer(QStringLiteral("Cannot verify %1: the finished file is no longer at %2 (moved, renamed or deleted). Nothing was "
+                                         "changed; Restart Download fetches it again.").arg(n, QDir::toNativeSeparators(path)),
+                          QStringLiteral("%1, but the file is gone: Restart Download fetches it again").arg(transferStateText(TransferState::Completed)));
+        if (m_rec.size > 0 && fi.size() != m_rec.size)
+            return answer(QStringLiteral("Cannot verify %1: the file at %2 was changed (it has %3, the download %4). Nothing was changed; "
+                                         "Restart Download fetches it again.")
+                              .arg(n, QDir::toNativeSeparators(path), humanBytes(fi.size()), humanBytes(m_rec.size)),
+                          QStringLiteral("%1, but the file was changed: Restart Download fetches it again").arg(transferStateText(TransferState::Completed)));
+        m_verify.running = true;
+        m_verify.finishedFile = true;
+        qCInfo(lcEngine) << m_rec.id << "Verify File: the finished file" << path;
+        beginFileCheck();
+        markDirty(true);
+        return true;
+    }
+    if (!anyChecksum(m_rec.hashes) && m_ed2kParts.isEmpty() && m_tthLeaves.isEmpty())
+        return answer(QStringLiteral("%1 cannot be verified: no checksum is known for this file.").arg(n),
+                      QStringLiteral("cannot be verified: no checksum known"));
+    m_verify.running = true;
+    m_verify.resumeAfter = m_active;
+    qCInfo(lcEngine) << m_rec.id << "Verify File: the partial file" << (m_active ? "(running: stops fetching for the check)" : "");
+    if (m_active) deactivate();
+    if (!m_part) createPartStore();
+    m_part->afterWrites([this] {
+        if (m_verify.running && !m_verifyJob) beginPartCheck();
+    });
+    markDirty(true);
+    return true;
+}
+
+// the block hashes of a finished file, the finest trusted ones
+QList<VerifyJob::Block> Download::verifyBlocks(QString *unitWord) const
+{
+    QList<VerifyJob::Block> out;
+    const qint64 size = m_rec.size;
+    if (size <= 0) return out;
+    bool ed2kOk = !m_ed2kParts.isEmpty() && m_ed2kParts.size() == hash::Ed2kHasher::dataPartCount(size);
+    if (ed2kOk && !m_rec.hashes.ed2k.isEmpty()) {
+        QList<QByteArray> full = m_ed2kParts;
+        if (full.size() != hash::Ed2kHasher::partCount(size)) full << hash::Ed2kHasher::fileHashFromParts({});
+        ed2kOk = hash::Ed2kHasher::fileHashFromParts(full) == m_rec.hashes.ed2k
+                 || hash::Ed2kHasher::fileHashFromParts(m_ed2kParts) == m_rec.hashes.ed2k;
+    } else if (ed2kOk && m_ed2kProvisional) {
+        ed2kOk = false;   // a set nobody vouches for does not judge the user's file
+    }
+    const bool tthOk = !m_tthLeaves.isEmpty() && m_tthUnit > 0 && !m_rec.hashes.tth.isEmpty()
+                       && m_tthLeaves.size() == qMax<qint64>(1, (size + m_tthUnit - 1) / m_tthUnit)
+                       && hash::TigerTree::rootFromLevel(m_tthLeaves) == m_rec.hashes.tth;
+    const bool single = !m_rec.hashes.ed2k.isEmpty() && size < PartStore::Ed2kPart;
+    if (tthOk && (!ed2kOk || m_tthUnit < PartStore::Ed2kPart)) {
+        *unitWord = QStringLiteral("block");
+        for (int i = 0; i < m_tthLeaves.size(); ++i) {
+            VerifyJob::Block b;
+            b.start = qint64(i) * m_tthUnit;
+            b.end = qMin(size, b.start + m_tthUnit);
+            b.expect = m_tthLeaves.at(i);
+            b.kind = VerifyJob::Tiger;
+            out << b;
+        }
+    } else if (ed2kOk) {
+        *unitWord = QStringLiteral("part");
+        for (int i = 0; i < m_ed2kParts.size(); ++i) {
+            VerifyJob::Block b;
+            b.start = qint64(i) * PartStore::Ed2kPart;
+            b.end = qMin(size, b.start + PartStore::Ed2kPart);
+            b.expect = m_ed2kParts.at(i);
+            b.kind = VerifyJob::Md4;
+            if (b.end > b.start) out << b;
+        }
+    } else if (single) {
+        *unitWord = QStringLiteral("part");
+        VerifyJob::Block b;
+        b.start = 0;
+        b.end = size;
+        b.expect = m_rec.hashes.ed2k;
+        b.kind = VerifyJob::Md4;
+        out << b;
+    }
+    return out;
+}
+
+void Download::beginFileCheck()
+{
+    QString word;
+    const QList<VerifyJob::Block> blocks = verifyBlocks(&word);
+    m_verifyJob = std::make_unique<VerifyJob>(m_host->pool(), m_rec.savePath);
+    connect(m_verifyJob.get(), &VerifyJob::blockChecked, this, &Download::onVerifyBlock);
+    connect(m_verifyJob.get(), &VerifyJob::wholeChecked, this, &Download::onVerifyWhole);
+    connect(m_verifyJob.get(), &VerifyJob::finished, this, &Download::onVerifyFinished);
+    connect(m_verifyJob.get(), &VerifyJob::progress, this, [this](qint64 done, qint64) {
+        m_verify.done = done;
+        markDirty();
+    });
+    if (!blocks.isEmpty()) {
+        m_verify.unitWord = word;
+        for (const VerifyJob::Block &b : blocks) m_verify.total += b.end - b.start;
+        m_verifyJob->checkBlocks(blocks, m_host->tuning().verifyBlockPauseMs);
+    } else {
+        m_verify.whole = true;
+        m_verify.total = m_rec.size;
+        m_verifyJob->checkWhole(m_rec.hashes, PartStore::keptBlockUnit(m_rec.size));
+    }
+}
+
+void Download::beginPartCheck()
+{
+    if (!m_part) return;
+    const QString n = quotedName(m_rec.name);
+    if (m_part->scheme() == PartStore::NoUnits || (m_part->scheme() == PartStore::Ed2kParts && m_ed2kProvisional)) {
+        const QString what = m_part->scheme() == PartStore::NoUnits ? QStringLiteral("only a checksum of the whole file is known")
+                                                                    : QStringLiteral("only a block hash set nobody vouches for is known");
+        endVerify(QStringLiteral("%1 cannot be verified yet: %2, and the whole file is checked when it is complete.").arg(n, what),
+                  QStringLiteral("cannot be verified before it is complete"));
+        return;
+    }
+    QList<VerifyJob::Block> blocks;
+    const QList<Range> units = m_part->completeUnits();
+    const VerifyJob::Kind kind = m_part->scheme() == PartStore::Ed2kParts ? VerifyJob::Md4 : VerifyJob::Tiger;
+    for (const Range &u : units) {
+        VerifyJob::Block b;
+        b.start = u.first;
+        b.end = u.second;
+        b.expect = m_part->unitHash(u.first);
+        b.kind = kind;
+        blocks << b;
+    }
+    // units with some bytes but not all: they cannot be checked (they keep their bytes)
+    const RangeSet held = m_part->held();
+    for (qint64 pos = 0; pos < m_part->size(); pos += m_part->unitSize()) {
+        const Range u = m_part->unitAt(pos);
+        if (u.second <= u.first) break;
+        if (held.intersects(u.first, u.second) && !held.contains(u.first, u.second)) ++m_verify.partialUnits;
+    }
+    m_verify.unitWord = m_part->scheme() == PartStore::Ed2kParts ? QStringLiteral("part") : QStringLiteral("block");
+    if (blocks.isEmpty()) {
+        endVerify(QStringLiteral("Nothing of %1 can be checked yet: no %2 has arrived completely (a %2 is checked once all of it is there).")
+                      .arg(n, m_verify.unitWord),
+                  QStringLiteral("nothing complete to check yet"));
+        return;
+    }
+    for (const VerifyJob::Block &b : std::as_const(blocks)) m_verify.total += b.end - b.start;
+    m_verifyJob = std::make_unique<VerifyJob>(m_host->pool(), m_part->path());
+    connect(m_verifyJob.get(), &VerifyJob::blockChecked, this, &Download::onVerifyBlock);
+    connect(m_verifyJob.get(), &VerifyJob::finished, this, &Download::onVerifyFinished);
+    connect(m_verifyJob.get(), &VerifyJob::progress, this, [this](qint64 done, qint64) {
+        m_verify.done = done;
+        markDirty();
+    });
+    m_verifyJob->checkBlocks(blocks, m_host->tuning().verifyBlockPauseMs);
+    markDirty(true);
+}
+
+void Download::onVerifyBlock(qint64 s, qint64 e, bool ok, bool readable)
+{
+    if (!m_verify.running) return;
+    const bool good = ok && readable;
+    if (!good) {
+        ++m_verify.badUnits;
+        m_verify.badBytes += e - s;
+        qCInfo(lcEngine) << m_rec.id << "Verify File:" << m_verify.unitWord << s << "-" << e << (readable ? "is damaged" : "cannot be read");
+    }
+    if (m_verify.finishedFile) {
+        if (!readable && !QFileInfo::exists(m_rec.savePath)) {   // the file went away during the check
+            m_verify.bad = m_verify.good = RangeSet();
+            m_verify.badUnits = 0;
+            if (m_verifyJob) m_verifyJob->stop();
+            endVerify(QStringLiteral("Cannot verify %1: the finished file is no longer at %2. Nothing was changed; Restart Download "
+                                     "fetches it again.").arg(quotedName(m_rec.name), QDir::toNativeSeparators(m_rec.savePath)),
+                      QStringLiteral("%1, but the file is gone: Restart Download fetches it again").arg(transferStateText(TransferState::Completed)));
+            return;
+        }
+        (good ? m_verify.good : m_verify.bad).add(s, e);
+        if (!good && m_verify.badUnits == 1) m_host->sharingChanged();   // not shared as a complete file from now on
+    } else if (m_part) {
+        // what was read has its new status at once (a Pause or a crash keeps it): a damaged block is
+        // no longer held, so it is fetched again; nobody is blamed, the damage is the disk's
+        m_part->recheckResult(s, e, good);
+        if (!good) {
+            for (auto &sp : m_slots) sp->contributed.remove(s, e);
+            persist(false);
+        }
+    }
+    markDirty();
+}
+
+void Download::onVerifyFinished(bool stopped)
+{
+    Q_UNUSED(stopped)
+    if (!m_verify.running || m_verify.whole || m_verify.torrent) return;
+    const QString n = quotedName(m_rec.name);
+    const QString word = m_verify.unitWord.isEmpty() ? QStringLiteral("part") : m_verify.unitWord;
+    const QString damage = QStringLiteral("%1 of %2 (%3)").arg(countNoun(m_verify.badUnits, word), n, humanBytes(m_verify.badBytes));
+    const bool stop = m_verify.stopped;
+    const qint64 checked = m_verify.done;
+    if (m_verify.finishedFile) {
+        if (m_verify.badUnits == 0) {
+            if (stop) {
+                endVerify(QStringLiteral("Verification of %1 stopped: the %2 checked so far are intact; nothing was changed.").arg(n, humanBytes(checked)),
+                          transferStateText(TransferState::Completed));
+            } else {
+                m_damaged = false;
+                endVerify(QStringLiteral("Verified: %1 is intact.").arg(n),
+                          QStringLiteral("%1, verified intact").arg(transferStateText(TransferState::Completed)));
+            }
+            return;
+        }
+        const RangeSet bad = m_verify.bad, good = m_verify.good;
+        const QString found = QStringLiteral("%1 (%2)").arg(countNoun(m_verify.badUnits, word), humanBytes(m_verify.badBytes));
+        const QString text = stop ? QStringLiteral("Verification of %1 stopped: %2 %3 damaged; %4 downloaded again when you resume it.")
+                                        .arg(n, found, m_verify.badUnits == 1 ? QStringLiteral("is") : QStringLiteral("are"),
+                                             m_verify.badUnits == 1 ? QStringLiteral("it will be") : QStringLiteral("they will be"))
+                                  : QStringLiteral("Verified: %1 %2 damaged; %3 being downloaded again.")
+                                        .arg(damage, m_verify.badUnits == 1 ? QStringLiteral("is") : QStringLiteral("are"),
+                                             m_verify.badUnits == 1 ? QStringLiteral("it is") : QStringLiteral("they are"));
+        enterRepair(bad, good, stop, false);
+        endVerify(text, QString());
+        return;
+    }
+    // a partial file
+    if (m_verify.badUnits == 0) {
+        QString text;
+        if (stop) text = QStringLiteral("Verification of %1 stopped: the %2 checked so far are intact.").arg(n, humanBytes(checked));
+        else if (m_part && m_part->fullyHeld()) text = QStringLiteral("Verified: %1 is intact.").arg(n);
+        else text = QStringLiteral("Verified: the %1 of %2 received so far are intact.").arg(humanBytes(checked), n);
+        if (m_verify.partialUnits > 0)
+            text += QStringLiteral(" %1 that %2 not arrived completely cannot be checked yet.")
+                        .arg(countNoun(m_verify.partialUnits, word), m_verify.partialUnits == 1 ? QStringLiteral("has") : QStringLiteral("have"));
+        endVerify(text, QStringLiteral("intact"));
+        return;
+    }
+    const bool paused = m_userPaused;
+    const QString verb = m_verify.badUnits == 1 ? QStringLiteral("was") : QStringLiteral("were");
+    const QString text = paused ? QStringLiteral("Verified: %1 %2 damaged; %3 downloaded again when you resume it.")
+                                      .arg(damage, verb, m_verify.badUnits == 1 ? QStringLiteral("it will be") : QStringLiteral("they will be"))
+                                : QStringLiteral("Verified: %1 %2 damaged; %3 being downloaded again.")
+                                      .arg(damage, verb, m_verify.badUnits == 1 ? QStringLiteral("it is") : QStringLiteral("they are"));
+    endVerify(text, paused ? QStringLiteral("%1 damaged, downloaded again on resume").arg(countNoun(m_verify.badUnits, word))
+                           : QStringLiteral("%1 damaged, downloading again").arg(countNoun(m_verify.badUnits, word)));
+}
+
+void Download::onVerifyWhole(const VerifyJob::Whole &w)
+{
+    if (!m_verify.running || !m_verify.whole) return;
+    const QString n = quotedName(m_rec.name);
+    if (!w.readable) {
+        endVerify(QStringLiteral("Cannot verify %1: the file cannot be read (%2). Nothing was changed.").arg(n, w.error),
+                  QStringLiteral("%1, but its file cannot be read").arg(transferStateText(TransferState::Completed)));
+        return;
+    }
+    if (w.mismatch.isEmpty()) {
+        // an old record without block hashes: the checked file gives them, from now on
+        if (!m_rec.hashes.conflicts(w.hashes)) {
+            keepBlockHashes(PartStore::keptBlockUnit(m_rec.size), w.tthLevel, w.ed2kParts, w.hashes);
+            FileHashes h = w.hashes;
+            h.btih.clear();
+            h.btFileIndex = -1;
+            m_rec.hashes.mergeFrom(h);
+        }
+        m_damaged = false;
+        endVerify(QStringLiteral("Verified: %1 is intact.").arg(n), QStringLiteral("%1, verified intact").arg(transferStateText(TransferState::Completed)));
+        return;
+    }
+    qCWarning(lcEngine) << m_rec.id << "Verify File: the whole file is damaged (" << w.mismatch << "), no block hashes: asking the networks";
+    m_verify.badUnits = 1;
+    enterRepair(RangeSet(), RangeSet(), false, true);
+    endVerify(QStringLiteral("Verified: %1 is damaged (its %2 checksum differs), and only checksums of the whole file are known, so the damage "
+                             "cannot be located yet. OctoMX asks the networks for block hashes (an eD2k part hash set, a tiger tree) to "
+                             "download only the damaged parts again; if none can be had, Restart Download fetches it again.")
+                  .arg(n, w.mismatch.join(QStringLiteral(", "))),
+              QString());
+}
+
+void Download::endVerify(const QString &text, const QString &status)
+{
+    m_verify.running = false;
+    if (m_verifyJob) {
+        disconnect(m_verifyJob.get(), nullptr, this, nullptr);
+        m_verifyJob->stop();
+        m_verifyJob.release()->deleteLater();   // may be inside one of its signals
+    }
+    if (isFinished()) {
+        if (!status.isEmpty()) setState(TransferState(m_rec.state), status);
+    } else {
+        if (!status.isEmpty()) setVerifyNote(status, m_userPaused);
+        updateStatus();
+    }
+    qCInfo(lcEngine).noquote() << m_rec.id << "Verify File:" << text;
+    persist(true);
+    m_host->notice(this, text);
+    m_host->sharingChanged();
+    m_host->finished(this);   // a download that was running goes on (rebalance)
+    markDirty(true);
+}
+
+void Download::stopVerify()
+{
+    if (!m_verify.running) return;
+    m_verify.stopped = true;
+    if (m_verify.torrent) {
+        finishTorrentVerify(true);
+        return;
+    }
+    if (m_verifyJob) m_verifyJob->stop();
+    if (m_verify.whole || !m_verifyJob) {
+        endVerify(QStringLiteral("Verification of %1 stopped; nothing was changed.").arg(quotedName(m_rec.name)),
+                  isFinished() ? transferStateText(TransferState::Completed) : QString());
+        return;
+    }
+    onVerifyFinished(true);
+}
+
+void Download::keepBlockHashes(qint64 tthUnit, const QList<QByteArray> &tthLevel, const QList<QByteArray> &ed2kParts, const FileHashes &file)
+{
+    if (!m_ed2kParts.isEmpty() || !m_tthLeaves.isEmpty() || m_rec.size <= 0) return;
+    const qint64 expect = qMax<qint64>(1, (m_rec.size + qMax<qint64>(1, tthUnit) - 1) / qMax<qint64>(1, tthUnit));
+    if (tthUnit > 0 && tthLevel.size() == expect && !file.tth.isEmpty() && hash::TigerTree::rootFromLevel(tthLevel) == file.tth) {
+        m_tthUnit = tthUnit;
+        m_tthLeaves = tthLevel;
+        qCInfo(lcEngine) << m_rec.id << "kept the block hashes of the checked file:" << tthLevel.size() << "x" << tthUnit;
+        return;
+    }
+    const int full = hash::Ed2kHasher::partCount(m_rec.size), data = hash::Ed2kHasher::dataPartCount(m_rec.size);
+    if (data > 1 && (ed2kParts.size() == full || ed2kParts.size() == data) && !file.ed2k.isEmpty()
+        && hash::Ed2kHasher::fileHashFromParts(ed2kParts) == file.ed2k) {
+        m_ed2kParts = ed2kParts.mid(0, data);
+        m_ed2kProvisional = false;
+        qCInfo(lcEngine) << m_rec.id << "kept the eD2k part hashes of the checked file:" << data;
+    }
+}
+
+// A finished file with damage becomes an unfinished download again, repaired where it is: the damaged
+// blocks are missing (fetched again from the sources and a source search), the good ones verified.
+// awaitSets: damage only the whole-file checksum shows: everything held, nothing verified, block hashes
+// are asked for first (giveUpRepair when none come).
+void Download::enterRepair(const RangeSet &bad, const RangeSet &good, bool paused, bool awaitSets)
+{
+    const qint64 size = m_rec.size;
+    m_repairPath = m_rec.savePath;
+    m_partPath = m_repairPath;
+    m_restoreHeld = RangeSet(0, size);
+    m_restoreHeld.remove(bad);
+    m_restoreVerified = good;
+    m_repairWhole = awaitSets;
+    m_awaitSetsUntil = 0;
+    if (m_part) {
+        disconnect(m_part.get(), nullptr, this, nullptr);
+        m_part->abandon();
+        m_part.reset();
+    }
+    m_rec.completed = QDateTime();
+    m_rec.done = good.total();
+    m_completionNote.clear();
+    m_damaged = false;
+    m_rec.errorText.clear();
+    m_errorState = false;
+    m_userPaused = paused;
+    m_active = false;
+    for (auto &sp : m_slots) sp->contributed.clear();
+    m_isolated.clear();
+    m_unitOwner.clear();
+    m_failedBy.clear();
+    m_blackBox.clear();
+    m_deadEnd = m_deadEndBanned = false;
+    m_wholeFileFailures = 0;
+    m_awaitHashSetUntil = 0;
+    m_lastFindMs = 0;
+    m_rec.state = int(paused ? TransferState::Paused : TransferState::Queued);
+    m_rec.statusText = transferStateText(TransferState(m_rec.state));
+    if (!awaitSets)
+        setVerifyNote(QStringLiteral("%1 damaged, %2").arg(countNoun(m_verify.badUnits, m_verify.unitWord.isEmpty() ? QStringLiteral("part") : m_verify.unitWord),
+                                                           paused ? QStringLiteral("downloaded again on resume") : QStringLiteral("downloading again")),
+                      paused);
+    qCInfo(lcEngine) << m_rec.id << "repair in place:" << m_repairPath << "missing" << bad.total() << "bytes," << (awaitSets ? "waiting for block hashes" : "");
+    persist(true);
+}
+
+void Download::giveUpRepair(const QString &why)
+{
+    qCWarning(lcEngine) << m_rec.id << "repair given up:" << why;
+    closeAllSources(QStringLiteral("done"));
+    stopFindSources();
+    m_active = false;
+    if (m_part) {
+        disconnect(m_part.get(), nullptr, this, nullptr);
+        m_part->close();
+        m_part.reset();
+    }
+    m_repairPath.clear();
+    m_repairWhole = false;
+    m_awaitSetsUntil = 0;
+    m_partPath.clear();
+    m_restoreHeld = m_restoreVerified = RangeSet();
+    m_damaged = true;
+    m_userPaused = false;
+    m_rec.completed = QDateTime::currentDateTime();
+    m_rec.done = m_rec.size;
+    setState(TransferState::Completed, QStringLiteral("%1, but damaged: Restart Download fetches it again").arg(transferStateText(TransferState::Completed)));
+    persist(true);
+    m_host->notice(this, QStringLiteral("%1 is damaged, and %2, so nothing can be repaired; the file is not shared. Restart Download fetches it again.")
+                             .arg(quotedName(m_rec.name), why));
+    m_host->sharingChanged();
+    m_host->finished(this);
+    markDirty(true);
+}
+
+// ---- torrents: the backend checks every piece; the engine compares what it had before
+
+bool Download::startTorrentVerify()
+{
+    TorrentBackend *be = m_host->backend();
+    if (!be) return false;
+    if (!m_torrent) {
+        m_torrent = std::make_unique<TorrentStore>(be, m_torrentId, m_host->pool(), &m_host->tuning());
+        attachStore(m_torrent.get());
+    }
+    m_torrent->refresh();
+    const TorrentSnapshot sn = m_torrent->snap();
+    const QString n = quotedName(m_rec.name);
+    if (isFinished()) {
+        QStringList gone, changed;
+        for (int i = 0; i < sn.files.size(); ++i) {
+            const TorrentFile &f = sn.files.at(i);
+            if (m_torrent->isPadFile(i) || f.priority <= 0) continue;
+            const QFileInfo fi(QDir(sn.savePath).filePath(f.path));
+            if (!fi.isFile()) gone << QDir::toNativeSeparators(fi.filePath());
+            else if (fi.size() != f.size) changed << QDir::toNativeSeparators(fi.filePath());
+        }
+        if (!gone.isEmpty() || !changed.isEmpty()) {
+            const QString what = !gone.isEmpty() ? QStringLiteral("%1 no longer there (%2)").arg(gone.size() == 1 ? QStringLiteral("its file is") : QStringLiteral("files of it are"), gone.first())
+                                                 : QStringLiteral("%1 changed (%2)").arg(changed.size() == 1 ? QStringLiteral("its file was") : QStringLiteral("files of it were"), changed.first());
+            setState(TransferState(m_rec.state), QStringLiteral("%1, but %2: Restart Download fetches it again").arg(transferStateText(TransferState::Completed),
+                                                                                                                       gone.isEmpty() ? QStringLiteral("a file was changed") : QStringLiteral("a file is gone")));
+            persist(true);
+            m_host->notice(this, QStringLiteral("Cannot verify %1: %2. Nothing was changed; Restart Download fetches it again.").arg(n, what));
+            markDirty(true);
+            return true;
+        }
+    }
+    m_verify.running = true;
+    m_verify.torrent = true;
+    m_verify.finishedFile = isFinished();
+    m_verify.unitWord = QStringLiteral("piece");
+    m_verify.haveBefore = sn.have;
+    m_verify.checksBefore = sn.checksDone;
+    m_verify.total = sn.totalSize;
+    m_verify.resumeAfter = m_active;
+    qCInfo(lcEngine) << m_rec.id << "Verify File: torrent" << m_torrentId.left(8) << "rechecked by the backend;" << sn.have.count(true)
+                     << "of" << sn.numPieces << "pieces," << sn.totalDone << "bytes before";
+    if (m_active) deactivate();
+    else m_torrent->releaseAll();
+    be->recheck(m_torrentId);
+    QTimer::singleShot(0, this, [this] {
+        if (m_verify.running && m_verify.torrent) pollTorrentVerify();
+    });
+    markDirty(true);
+    return true;
+}
+
+void Download::pollTorrentVerify()
+{
+    if (!m_torrent || !m_verify.running) return;
+    m_torrent->refresh();
+    const TorrentSnapshot &sn = m_torrent->snap();
+    if (sn.checkPpm >= 0) m_verify.done = m_verify.total * qint64(sn.checkPpm) / 1000000;
+    if (sn.checksDone > m_verify.checksBefore && sn.state != TransferState::Verifying) {
+        finishTorrentVerify(false);
+        return;
+    }
+    markDirty();
+}
+
+void Download::finishTorrentVerify(bool stopped)
+{
+    TorrentBackend *be = m_host->backend();
+    const QString n = quotedName(m_rec.name);
+    if (stopped) {
+        // libtorrent forgot what it had when the check began and checks the rest when it runs again
+        if (be) be->pauseTorrent(m_torrentId);
+        if (isFinished()) {
+            m_rec.completed = QDateTime();
+            m_rec.state = int(TransferState::Paused);
+            m_userPaused = true;
+        }
+        m_verify.running = false;
+        endVerify(QStringLiteral("Verification of %1 stopped: BitTorrent checks the rest when you resume it (it does not keep the earlier result "
+                                 "of the pieces it has not read again yet).").arg(n),
+                  QStringLiteral("check goes on when resumed"));
+        return;
+    }
+    const TorrentSnapshot &sn = m_torrent->snap();
+    const qint64 pl = sn.pieceLength;
+    const qint64 payload = m_torrent->payloadSize();
+    auto wanted = [&sn, pl, this](int p) {
+        const qint64 s = qint64(p) * pl, e = s + pl;
+        for (int i = 0; i < sn.files.size(); ++i) {
+            const TorrentFile &f = sn.files.at(i);
+            if (f.priority <= 0 || m_torrent->isPadFile(i)) continue;
+            if (f.offset < e && f.offset + f.size > s) return true;
+        }
+        return false;
+    };
+    int lost = 0;
+    qint64 lostBytes = 0;
+    for (int p = 0; p < m_verify.haveBefore.size() && p < sn.have.size(); ++p) {
+        if (!m_verify.haveBefore.testBit(p) || sn.have.testBit(p) || !wanted(p)) continue;
+        ++lost;
+        lostBytes += qMin(pl, payload - qint64(p) * pl);
+    }
+    m_verify.badUnits = lost;
+    m_verify.badBytes = lostBytes;
+    qCInfo(lcEngine) << m_rec.id << "Verify File: torrent check done," << lost << "pieces lost," << lostBytes << "bytes;" << sn.have.count(true)
+                     << "pieces," << sn.totalDone << "bytes now";
+    if (lost == 0) {
+        const bool all = sn.finished || m_verify.finishedFile;
+        endVerify(all ? QStringLiteral("Verified: %1 is intact.").arg(n)
+                      : QStringLiteral("Verified: the %1 of %2 received so far are intact.").arg(humanBytes(sn.totalDone), n),
+                  m_verify.finishedFile ? QStringLiteral("%1, verified intact").arg(transferStateText(TransferState::Completed)) : QStringLiteral("intact"));
+        return;
+    }
+    const QString damage = QStringLiteral("%1 of %2 (%3)").arg(countNoun(lost, QStringLiteral("piece")), n, humanBytes(lostBytes));
+    const QString verb = lost == 1 ? QStringLiteral("was") : QStringLiteral("were");
+    if (m_verify.finishedFile) {
+        // unfinished again: the swarm (and the other networks, through the engine) fetch the pieces
+        m_rec.completed = QDateTime();
+        m_rec.state = int(TransferState::Queued);
+        m_rec.statusText = transferStateText(TransferState::Queued);
+        m_userPaused = false;
+        m_damaged = false;
+        setVerifyNote(QStringLiteral("%1 damaged, downloading again").arg(countNoun(lost, QStringLiteral("piece"))), false);
+        endVerify(QStringLiteral("Verified: %1 %2 damaged; %3 being downloaded again.").arg(damage, verb, lost == 1 ? QStringLiteral("it is") : QStringLiteral("they are")),
+                  QString());
+        return;
+    }
+    const bool paused = m_userPaused;
+    endVerify(paused ? QStringLiteral("Verified: %1 %2 damaged; %3 downloaded again when you resume it.").arg(damage, verb, lost == 1 ? QStringLiteral("it will be") : QStringLiteral("they will be"))
+                     : QStringLiteral("Verified: %1 %2 damaged; %3 being downloaded again.").arg(damage, verb, lost == 1 ? QStringLiteral("it is") : QStringLiteral("they are")),
+              QStringLiteral("%1 damaged, %2").arg(countNoun(lost, QStringLiteral("piece")), paused ? QStringLiteral("downloaded again on resume") : QStringLiteral("downloading again")));
+}
+
+// ============================================================================ [ver-1] Restart Download
+
+bool Download::canRestart(QString *why) const
+{
+    auto no = [why](const QString &t) {
+        if (why) *why = t;
+        return false;
+    };
+    if (m_restartPending) return no(QStringLiteral("It is starting again from zero now."));
+    if (TransferState(m_rec.state) == TransferState::Cancelled) return no(QStringLiteral("It was cancelled."));
+    if (m_completing) return no(QStringLiteral("It is being finished now; try again in a moment."));
+    if (!m_movingTo.isEmpty()) return no(QStringLiteral("Its files are being moved now; try again in a moment."));
+    return true;
+}
+
+DownloadRecord Download::restartRecord() const
+{
+    DownloadRecord r;
+    r.id = m_rec.id;
+    r.name = m_rec.name;
+    r.size = m_rec.size;
+    // the hashes of a file that had no checksum came from that data: not trusted
+    r.hashes = m_noChecksum ? FileHashes() : m_rec.hashes;
+    r.uri = m_rec.uri;
+    r.saveDir = m_rec.saveDir;
+    r.wantedFiles = m_rec.wantedFiles;
+    r.priority = m_rec.priority;
+    r.isBundle = m_rec.isBundle;
+    r.files = m_rec.files;
+    for (BundleFile &b : r.files) b.done = 0;
+    r.uploaded = m_rec.uploaded;
+    r.added = m_rec.added;
+    r.sortOrder = m_rec.sortOrder;
+    r.state = int(TransferState::Queued);
+    r.statusText = transferStateText(TransferState::Queued);
+    // a torrent's place comes from its metadata again; a part file's when it completes
+    if (torrentData(m_torrent != nullptr, m_part != nullptr, m_partPath, m_torrentId)) r.savePath = m_rec.savePath;
+    return r;
+}
+
+QByteArray Download::restartBlob(bool keepTorrent) const
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("v"), 1);
+    const bool torrent = torrentData(m_torrent != nullptr, m_part != nullptr, m_partPath, m_torrentId);
+    m.insert(QStringLiteral("store"), torrent ? QStringLiteral("torrent") : QStringLiteral("part"));
+    if (torrent && keepTorrent && !m_torrentId.isEmpty()) m.insert(QStringLiteral("torrentId"), m_torrentId);
+    // what is known about the file (not about the data): the trusted block hashes, proven-wrong claims
+    if (!m_noChecksum) {
+        QVariantList parts, leaves;
+        if (!m_ed2kProvisional)
+            for (const QByteArray &b : m_ed2kParts) parts << b;
+        for (const QByteArray &b : m_tthLeaves) leaves << b;
+        if (!parts.isEmpty()) m.insert(QStringLiteral("ed2kParts"), parts);
+        if (!leaves.isEmpty()) {
+            m.insert(QStringLiteral("tthUnit"), m_tthUnit);
+            m.insert(QStringLiteral("tthLeaves"), leaves);
+        }
+    }
+    QVariantList rej;
+    for (const FileHashes &h : m_rejected) rej << h.toVariant();
+    if (!rej.isEmpty()) m.insert(QStringLiteral("rejected"), rej);
+    if (!m_trackers.isEmpty()) m.insert(QStringLiteral("trackers"), m_trackers);
+    // the user's choices: per-source priorities, removed sources, AFS / AEQ, the download order
+    QVariantMap prio;
+    for (auto it = m_srcPriority.constBegin(); it != m_srcPriority.constEnd(); ++it) prio.insert(it.key(), it.value());
+    if (!prio.isEmpty()) m.insert(QStringLiteral("srcPrio"), prio);
+    QVariantList removed;
+    for (const QString &k : m_userRemoved) removed << k;
+    if (!removed.isEmpty()) m.insert(QStringLiteral("removed"), removed);
+    if (m_afs >= 0) m.insert(QStringLiteral("afs"), m_afs);
+    if (m_aeq >= 0) m.insert(QStringLiteral("aeq"), m_aeq);
+    if (m_seq) m.insert(QStringLiteral("seq"), true);
+    if (m_firstLast) m.insert(QStringLiteral("fl"), true);
+    // files that were on the disk before the download stay "not its own" (never deleted with it)
+    if (m_ownKnown) {
+        QVariantMap own;
+        own.insert(QStringLiteral("pre"), m_preexisting);
+        own.insert(QStringLiteral("topExisted"), m_topExisted);
+        m.insert(QStringLiteral("own"), own);
+    }
+    return QCborValue::fromVariant(m).toCbor();
+}
+
+void Download::stopForRestart(bool keepTorrent)
+{
+    m_active = false;
+    if (m_verifyJob) {
+        disconnect(m_verifyJob.get(), nullptr, this, nullptr);
+        m_verifyJob->stop();
+    }
+    m_verify.running = false;
+    dropPreview();
+    closeAllSources(QStringLiteral("cancelled"));
+    stopFindSources();
+    TorrentBackend *be = m_host->backend();
+    if (m_torrent) m_torrent->releaseAll();
+    if (be && !m_torrentId.isEmpty() && be->torrents().contains(m_torrentId)) {
+        if (keepTorrent) be->pauseTorrent(m_torrentId);
+        else be->removeTorrent(m_torrentId, false);
+    }
+    if (be && !m_promoteTorrent.isEmpty()) be->removeTorrent(m_promoteTorrent, false);
+    if (m_part) m_part->close();
+    dropPreview();
+}
+
+void Download::setRestartPending(bool on)
+{
+    m_restartPending = on;
+    persist(true);
+    markDirty(true);
 }
 
 } // namespace mx::engine

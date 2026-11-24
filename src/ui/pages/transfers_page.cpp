@@ -6,6 +6,7 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLocale>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtGui/QClipboard>
@@ -164,6 +165,22 @@ TransfersPage::TransfersPage(mx::Core *core, MainWindow *mw, QWidget *parent)
     m_deleteReport->setInterval(300);
     connect(m_deleteReport, &QTimer::timeout, this, &TransfersPage::reportDeletes);
     connect(core->transfers(), &TransferService::downloadFilesDeleted, this, &TransfersPage::onFilesDeleted);
+    // [ver-1] the outcome of Verify File / Restart Download; the answers for several downloads at once
+    // arrive together and are shown together
+    m_noticeBatchTimer = new QTimer(this);
+    m_noticeBatchTimer->setSingleShot(true);
+    m_noticeBatchTimer->setInterval(250);
+    connect(m_noticeBatchTimer, &QTimer::timeout, this, [this] {
+        const QStringList all = m_noticeBatch;
+        m_noticeBatch.clear();
+        if (!all.isEmpty())
+            showNotice(all.join(QLatin1Char(' ')));
+    });
+    connect(core->transfers(), &TransferService::downloadNotice, this, [this](const QString &, const QString &text) {
+        if (!m_noticeBatch.contains(text))
+            m_noticeBatch << text;
+        m_noticeBatchTimer->start();
+    });
     updateSummary();
 }
 
@@ -792,6 +809,156 @@ void TransfersPage::addAfsAeqMenus(QMenu *menu, const TransferInfo &t)
         addQ(QString::number(n), n);
 }
 
+// [ver-1] Verify File / Restart Download... for the clicked download, or every selected one when the
+// clicked one is in the selection
+QList<TransferInfo> TransfersPage::actionTargets(const TransferInfo &clicked) const
+{
+    const QList<TransferInfo> sel = selectedDownloads();
+    for (const TransferInfo &x : sel)
+        if (x.id == clicked.id)
+            return sel;
+    return {clicked};
+}
+
+void TransfersPage::addVerifyEntries(QMenu *menu, const TransferInfo &t)
+{
+    TransferService *ts = core()->transfers();
+    const QList<TransferInfo> targets = actionTargets(t);
+    QStringList canVerify, canRestart;
+    QString whyNotVerify, whyNotRestart;
+    for (const TransferInfo &x : targets) {
+        QString why;
+        if (ts->canVerifyDownload(x.id, &why))
+            canVerify << x.id;
+        else if (whyNotVerify.isEmpty())
+            whyNotVerify = why;
+        why.clear();
+        if (ts->canRestartDownload(x.id, &why))
+            canRestart << x.id;
+        else if (whyNotRestart.isEmpty())
+            whyNotRestart = why;
+    }
+    QAction *v = menu->addAction(tr("Verify File"), this, [this, canVerify] { verifyDownloads(canVerify); });
+    v->setObjectName(QStringLiteral("actVerifyFile"));
+    v->setEnabled(!canVerify.isEmpty());
+    v->setToolTip(canVerify.isEmpty() ? tr("Cannot be verified now: %1").arg(whyNotVerify)
+                                      : tr("Read the file on the disk again and check every part against its checksum; only damaged "
+                                           "parts are downloaded again (a running download pauses for the check and goes on by itself)"));
+    QAction *r = menu->addAction(tr("Restart Download..."), this, [this, canRestart] { restartDownloads(canRestart); });
+    r->setObjectName(QStringLiteral("actRestartDownload"));
+    r->setEnabled(!canRestart.isEmpty());
+    r->setToolTip(canRestart.isEmpty() ? tr("Cannot be restarted now: %1").arg(whyNotRestart)
+                                       : tr("Throw away what was received (a finished file goes to the %1) and download the whole file "
+                                            "again from the beginning; you are asked first")
+                                             .arg(trash::placeName()));
+}
+
+void TransfersPage::verifyDownloads(const QStringList &ids)
+{
+    for (const QString &id : ids)
+        core()->transfers()->verifyDownload(id);
+}
+
+QString TransfersPage::restartQuestion(const QList<TransferInfo> &items) const
+{
+    TransferService *ts = core()->transfers();
+    const QString where = trash::placeName();
+    QStringList lines;
+    for (const TransferInfo &t : items) {
+        const DownloadDiskInfo di = ts->diskInfo(t.id);
+        const bool finished = transfers::isFinished(t);
+        QString what;
+        if (di.paths.isEmpty())
+            what = finished ? tr("its file is not on the disk any more, nothing is deleted") : tr("nothing was received yet");
+        else if (finished)
+            what = di.trash ? tr("the finished file goes to the %1").arg(where)
+                            : tr("the finished file is deleted for good (there is no %1 for it)").arg(where);
+        else
+            what = di.trash ? tr("the %1 received so far go to the %2").arg(QLocale::system().formattedDataSize(di.bytes), where)
+                            : tr("the %1 received so far are deleted for good (there is no %2 for them)")
+                                  .arg(QLocale::system().formattedDataSize(di.bytes), where);
+        QString line = tr("\"%1\": %2").arg(t.name, what);
+        if (!di.kept.isEmpty())
+            line += tr("; %1 stays on the disk (%2)").arg(QDir::toNativeSeparators(di.kept.first()), di.keptWhy);
+        lines << line;
+    }
+    const QString head = items.size() == 1 ? tr("Restart \"%1\" from the beginning?").arg(items.first().name)
+                                           : tr("Restart these %1 downloads from the beginning?").arg(items.size());
+    return tr("%1\n\n%2\n\nEverything is then downloaded again from zero, with the same sources, folder, name and options.")
+        .arg(head, lines.join(QLatin1Char('\n')));
+}
+
+bool TransfersPage::restartDownloads(const QStringList &ids, int answer)
+{
+    if (ids.isEmpty())
+        return false;
+    QList<TransferInfo> items;
+    for (const QString &id : ids) {
+        const TransferInfo t = core()->transfers()->transfer(id);
+        if (!t.id.isEmpty())
+            items << t;
+    }
+    if (items.isEmpty())
+        return false;
+    const QString text = restartQuestion(items);
+    int reply = answer;
+    if (reply == 0) {
+        if (s_askHook) {
+            reply = s_askHook(tr("Restart Download"), text);
+        } else {
+            QMessageBox box(QMessageBox::Question, tr("Restart Download"), text, QMessageBox::Yes | QMessageBox::No, this);
+            box.setObjectName(QStringLiteral("restartQuestion"));
+            box.setDefaultButton(QMessageBox::No);   // nothing is thrown away by a hasty Enter
+            reply = box.exec();
+        }
+    }
+    if (reply != QMessageBox::Yes)
+        return false;
+    for (const TransferInfo &t : std::as_const(items))
+        core()->transfers()->restartDownload(t.id);
+    return true;
+}
+
+// [ver-1] script driver: verify-file <name part> / restart-download <name part> [yes|no]
+bool TransfersPage::scriptCommand(const QString &verb, const QStringList &args, QString *error)
+{
+    if (verb != QLatin1String("verify-file") && verb != QLatin1String("restart-download"))
+        return Page::scriptCommand(verb, args, error);
+    QStringList words = args;
+    int answer = 0;
+    if (verb == QLatin1String("restart-download") && !words.isEmpty() &&
+        (words.last() == QLatin1String("yes") || words.last() == QLatin1String("no")))
+        answer = words.takeLast() == QLatin1String("yes") ? int(QMessageBox::Yes) : int(QMessageBox::No);
+    const QString part = words.join(QLatin1Char(' '));
+    QStringList ids;
+    for (const TransferInfo &t : core()->transfers()->downloads())
+        if (!part.isEmpty() && t.name.contains(part, Qt::CaseInsensitive))
+            ids << t.id;
+    if (ids.isEmpty()) {
+        *error = QStringLiteral("no download named like '%1'").arg(part);
+        return true;
+    }
+    if (verb == QLatin1String("verify-file")) {
+        QStringList ok;
+        for (const QString &id : ids)
+            if (core()->transfers()->canVerifyDownload(id))
+                ok << id;
+        if (ok.isEmpty())
+            *error = QStringLiteral("'%1' cannot be verified now").arg(part);
+        verifyDownloads(ok);
+        return true;
+    }
+    QStringList ok;
+    for (const QString &id : ids)
+        if (core()->transfers()->canRestartDownload(id))
+            ok << id;
+    if (ok.isEmpty())
+        *error = QStringLiteral("'%1' cannot be restarted now").arg(part);
+    else
+        restartDownloads(ok, answer);
+    return true;
+}
+
 void TransfersPage::showDownloadMenu(const QModelIndex &viewIndex, const QPoint &globalPos)
 {
     auto *menu = new QMenu(this);
@@ -888,6 +1055,7 @@ void TransfersPage::showDownloadMenu(const QModelIndex &viewIndex, const QPoint 
             for (const TransferInfo &x : selectedDownloads())
                 core()->transfers()->pause(x.id);
         })->setEnabled(!finished);
+    addVerifyEntries(menu, t);   // [ver-1] Verify File / Restart Download...
     QMenu *prio = menu->addMenu(tr("Priority"));
     const struct { const char *t; int v; } prios[] = {{QT_TR_NOOP("High"), 1}, {QT_TR_NOOP("Normal"), 0}, {QT_TR_NOOP("Low"), -1}};
     for (const auto &p : prios) {

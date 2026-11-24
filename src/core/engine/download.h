@@ -15,6 +15,7 @@
 #include "core/engine/engine_types.h"
 #include "core/engine/part_store.h"
 #include "core/engine/torrent_store.h"
+#include "core/engine/verify_job.h"
 
 namespace mx {
 class Settings;
@@ -46,6 +47,8 @@ public:
     virtual void changed(class Download *d, bool important) = 0;   // → transferChanged (throttled)
     virtual void finished(class Download *d) = 0;                  // completed: frees a queue slot
     virtual void completedFile(class Download *d) = 0;             // downloadCompleted
+    virtual void notice(class Download *d, const QString &text) = 0;   // [ver-1] → downloadNotice
+    virtual void sharingChanged() = 0;                             // [ver-1] busy paths / partial sharing: now
 };
 
 class Download : public QObject {
@@ -151,6 +154,23 @@ public:
         return (!m_pendingTorrentUrl.isEmpty() && m_pendingTorrentUrl == url) || (!m_promoteUrl.isEmpty() && m_promoteUrl == url);
     }
 
+    // ---- [ver-1] Verify File / Restart Download (TransferService::verifyDownload / restartDownload)
+    bool canVerify(QString *why) const;
+    bool startVerify();
+    bool isVerifying() const { return m_verify.running; }
+    bool awaitsBlockHashes() const { return m_repairWhole; }
+    bool canRestart(QString *why) const;
+    // the record and the engine-state blob the restarted download starts from: identity, place,
+    // priority, wanted files, per-download options and the trusted block hashes; nothing of its data
+    DownloadRecord restartRecord() const;
+    QByteArray restartBlob(bool keepTorrent) const;
+    // stop everything for a restart: sources, checks, the part file (closed, pending writes dropped);
+    // keepTorrent: the torrent stays in the backend, paused (its files are disposed of, then rechecked)
+    void stopForRestart(bool keepTorrent);
+    // a restarted torrent download waits until its old files are gone (persisted)
+    void setRestartPending(bool on);
+    bool restartPending() const { return m_restartPending; }
+
     // ---- library hand-over
     void onFileHashed(const SharedFile &f);
     bool awaitsHashOf(const QString &path) const { return m_awaitHashPaths.contains(path); }
@@ -248,6 +268,40 @@ private:
     void finalizePart();
     void finishPart(const FileHashes &all, const QList<QByteArray> &ed2kParts, const QList<QByteArray> &aichParts, bool haveAll);
     void wholeFileFailed(const QStringList &mismatch);
+    // [ver-1] Verify File
+    struct VerifyRun {
+        bool running = false;
+        bool finishedFile = false;     // a finished download's file (its record stays finished until damage is found)
+        bool torrent = false;          // the backend's recheck
+        bool whole = false;            // only checksums of the whole file
+        bool resumeAfter = false;      // it was running: goes on by itself afterwards
+        bool stopped = false;          // Pause during the check
+        qint64 total = 0, done = 0;    // bytes to check / checked
+        int badUnits = 0;
+        qint64 badBytes = 0;
+        int partialUnits = 0;          // held in part only: not checkable
+        RangeSet bad, good;            // a finished file: what the check found
+        QString unitWord;              // "part" / "block" / "piece"
+        QBitArray haveBefore;          // torrent: the pieces before the recheck
+        int checksBefore = 0;
+        qint64 startedMs = 0;
+    };
+    void beginPartCheck();
+    void beginFileCheck();
+    QList<VerifyJob::Block> verifyBlocks(QString *unitWord) const;
+    void onVerifyBlock(qint64 s, qint64 e, bool ok, bool readable);
+    void onVerifyWhole(const VerifyJob::Whole &w);
+    void onVerifyFinished(bool stopped);
+    void endVerify(const QString &text, const QString &status);
+    void stopVerify();
+    bool startTorrentVerify();
+    void pollTorrentVerify();
+    void finishTorrentVerify(bool stopped);
+    void enterRepair(const RangeSet &bad, const RangeSet &good, bool paused, bool awaitSets);
+    void giveUpRepair(const QString &why);
+    QString verifyStatusText() const;
+    void setVerifyNote(const QString &text, bool sticky);
+    void keepBlockHashes(qint64 tthUnit, const QList<QByteArray> &tthLevel, const QList<QByteArray> &ed2kParts, const FileHashes &file);
     void completeTorrent();
     void publishLinks(const FileHashes &all);
     // promotion part → torrent
@@ -288,6 +342,17 @@ private:
     qint64 m_tthUnit = 0;
     QList<QByteArray> m_tthLeaves;             // validated TTH level
     std::unique_ptr<PartStore> m_part;
+    // [ver-1]
+    VerifyRun m_verify;
+    std::unique_ptr<VerifyJob> m_verifyJob;
+    QString m_verifyNote;                      // the outcome of the last check, for the status text
+    qint64 m_verifyNoteUntilMs = 0;            // ... of a running download: shown this long
+    QString m_repairPath;                      // a finished file being repaired in place (persisted)
+    bool m_damaged = false;                    // finished, known damaged, could not be repaired (persisted): not shared
+    bool m_noChecksum = false;                 // completed without any checksum known before (persisted)
+    bool m_repairWhole = false;                // ... the repair of damage only the whole-file checksum shows (persisted)
+    qint64 m_awaitSetsUntil = 0;               // ... it waits for block hashes from the networks until then
+    bool m_restartPending = false;             // restarted torrent: its old files go first (persisted)
     std::unique_ptr<TorrentStore> m_torrent;
     QString m_torrentId;
     QString m_pendingTorrentUrl;

@@ -1000,15 +1000,23 @@ void Library::setBusyPaths(const QSet<QString> &paths)
     QSet<QString> norm;
     for (const QString &p : paths)
         if (!p.isEmpty()) norm.insert(normPath(p));
-    bool released = false;
+    bool released = false, hidden = false;
     {
         QWriteLocker l(&m_lock);
         if (norm == m_busy) return;
         for (const QString &p : std::as_const(m_busy))
             if (!norm.contains(p)) released = true;
+        // [ver-1] a shared file that became busy (a finished download found damaged by Verify File):
+        // every network stops offering it at once, as for an unshared file
+        for (const QString &p : std::as_const(norm)) {
+            if (m_busy.contains(p)) continue;
+            for (auto it = m_entries.constBegin(); it != m_entries.constEnd() && !hidden; ++it)
+                if (it->shared && isUnder(it.key(), p)) hidden = true;
+        }
         m_busy = norm;
     }
-    scheduleUpdate();   // the lists the networks see change at once (busy entries are left out)
+    if (hidden && m_started) pushRemovalNow();
+    else scheduleUpdate();   // the lists the networks see change at once (busy entries are left out)
     // a download that finished (or was removed and left its file): look at the folder again soon,
     // so the file is hashed as a whole and shared (the engine also asks for the hash on completion)
     if (released && m_started && !m_stopped) m_watchDebounce.start();

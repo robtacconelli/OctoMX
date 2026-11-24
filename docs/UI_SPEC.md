@@ -1617,6 +1617,32 @@ Fidelity checks must treat these as intentional (the classic forms stay reachabl
   default). Double-click is unchanged (a running download expands / collapses; the original WinMX had no preview on
   double-click, and a modal player question on a double-click would surprise).
 
+* **Verify File and Restart Download** [ver-1] (owner: "reverify the file once download finished or if
+  paused, or to restart it from the beginning if user wants. In case of verification, parts/blocks damaged
+  have to be redownloaded"): the download file-row menu has `Verify File` and `Restart Download...` right
+  after `Pause` / `Resume` (menu only: the two button rows keep the classic layout). Both act on every
+  selected download that can; a greyed entry's tool tip says why (`Cannot be verified now: Nothing of it has
+  been received yet.`, `... It is being verified now.`). `Verify File` is offered for a finished row, a
+  paused, stopped (error, timed out) and a running one (a running download stops fetching for the check and
+  goes on by itself): every block on disk is read again and checked against the block hashes the download
+  knows (torrent pieces, eD2k parts, tiger tree leaves, the block hashes a file keeps from its final check);
+  the row says `Verifying 42%...` (`(1 part damaged so far)`); Pause stops the check. Damaged blocks, and
+  only those, are downloaded again (a finished row becomes unfinished until they are back, its file is not
+  shared meanwhile and stays where it was, with its name). The answer is the page's notice and the row's
+  status text: `Verified: 'name' is intact.`, `Verified: 2 parts of 'name' (19.5 MB) are damaged; they are
+  being downloaded again.` (a paused one: `... when you resume it.`), `Cannot verify 'name': the finished
+  file is no longer at <path> ... Restart Download fetches it again.`, `... was changed (it has 1.2 MB, the
+  download 1.3 MB) ...`, `'name' cannot be verified: no checksum is known for this file.`, and for damage only
+  a whole-file checksum shows: `... the damage cannot be located yet. OctoMX asks the networks for block
+  hashes ...`, then either the repair or `'name' is damaged, and no network gave block hashes ... Restart
+  Download fetches it again.` (the row `Complete, but damaged: Restart Download fetches it again`, not
+  shared). `Restart Download...` is offered for every download and always asks (`Restart Download`, buttons
+  `Yes` / `No`, default `No`): `Restart "name" from the beginning?` with one line per download naming what is
+  thrown away (`the finished file goes to the trash`, `the 12.3 MB received so far go to the Recycle Bin`, or
+  `... are deleted for good (there is no trash for them)`, a file the download did not create `stays on the
+  disk`). Yes: the same row (same id, sources, folder, name, priority, wanted files, order flags, AFS / AEQ)
+  starts from zero, running even if it was paused; the notice `'name' starts again from zero: its old data
+  went to the trash.` Script driver: `verify-file <name part>`, `restart-download <name part> [yes|no]`.
 * **[ui-h] No control that does nothing.** Every visible setting either works (proven by a test or
   a reader the settings registry `tests/ui/settings_registry.h` names) or is off the UI; its key stays
   readable (hidden in the schema) so old profiles load. Removed from the original pages, because

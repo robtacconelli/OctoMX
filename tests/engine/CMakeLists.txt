@@ -30,6 +30,21 @@ mx_engine_test(tst_engine_join)      # [eng-1] torrents that hold the same file:
 mx_engine_test(tst_engine_remove)    # [ui-j] removing a download: keep the file (and resume it) or delete it
 mx_engine_test(tst_engine_serve)     # [up-1] serving files still downloading, hash-set rules, close reasons
 mx_engine_test(tst_set1_engine)      # [set-1] the File Transfers settings, each with its effect
+mx_engine_test(tst_engine_verify)    # [ver-1] Verify File (damaged blocks only) and Restart Download
+# [ver-1] a damaged finished file is not offered while it is repaired: the Library and a second
+# OctoMX network node (two overlay nodes on 127.0.0.1, no discovery)
+if(TARGET mxnet_overlay)
+    mx_engine_test(tst_engine_verify_net ${CMAKE_SOURCE_DIR}/tests/overlay/ovl_test_support.h)
+    target_link_libraries(tst_engine_verify_net PRIVATE mxnet_overlay Qt6::Network)
+    target_include_directories(tst_engine_verify_net PRIVATE ${CMAKE_SOURCE_DIR}/tests/overlay ${CMAKE_SOURCE_DIR}/src/net/overlay)
+    set(MX_VER_NET_TMP ${MX_ENGINE_TEST_TMP}/ver-net)
+    file(MAKE_DIRECTORY ${MX_VER_NET_TMP})
+    if(WIN32 AND CMAKE_HOST_UNIX)
+        set(MX_VER_NET_TMP "Z:${MX_VER_NET_TMP}")   # cross build, run under wine
+    endif()
+    target_compile_definitions(tst_engine_verify_net PRIVATE MX_TEST_TMP="${MX_VER_NET_TMP}")
+    set_property(TEST engine_engine_verify_net APPEND PROPERTY ENVIRONMENT "MX_OVERLAY_DISCOVERY=0")
+endif()
 if(TARGET mxnet_bt)
     mx_engine_test(tst_engine_bt)
     target_link_libraries(tst_engine_bt PRIVATE mxnet_bt)

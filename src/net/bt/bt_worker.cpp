@@ -846,6 +846,7 @@ void Worker::resumeTorrent(const QString &id)
     if (!t || !t->inSession)
         return;
     t->h.clear_error();
+    t->pauseAfterCheck = false;   // [ver-1] wanted to run now: not paused again after a check
     t->h.set_flags(lt::torrent_flags::auto_managed);
     t->h.resume();
     t->resumeDirty = true;
@@ -921,7 +922,18 @@ void Worker::recheck(const QString &id)
         return;
     if (t && t->inSession) {
         t->replayed.clear();
-        t->h.force_recheck();
+        ++t->checksAsked;
+        // [ver-1] libtorrent checks a paused torrent only once it runs: let it run for the check, it is
+        // paused again as soon as the check has ended (torrent_checked_alert), before it fetches anything
+        const lt::torrent_status st = t->h.status({});
+        t->recheckOfFinished = st.is_finished;
+        if ((st.flags & lt::torrent_flags::paused) && !(st.flags & lt::torrent_flags::auto_managed)) {
+            t->pauseAfterCheck = true;
+            t->h.force_recheck();
+            t->h.resume();
+        } else {
+            t->h.force_recheck();
+        }
         t->finishedReported = false;
     }
 }
@@ -1497,6 +1509,19 @@ void Worker::handleAlert(lt::alert *a)
     case lt::torrent_checked_alert::alert_type: {
         auto *ca = static_cast<lt::torrent_checked_alert *>(a);
         if (Torrent *t = find(ca->handle)) {
+            if (t->checksDone < t->checksAsked) ++t->checksDone;   // [ver-1] a recheck() ended (not the check when it was added)
+            if (t->recheckOfFinished) {
+                t->recheckOfFinished = false;
+                // the libtorrent quirk of wakeTorrent(): a finished torrent that lost pieces in the
+                // check would never connect to the seeds it knows again
+                if (!t->h.status({}).is_finished) wakeTorrent(*t);
+            }
+            if (t->pauseAfterCheck) {
+                t->pauseAfterCheck = false;
+                t->h.unset_flags(lt::torrent_flags::auto_managed);
+                t->h.pause();
+                t->resumeDirty = true;
+            }
             t->st = t->h.status(kStatusFlags);
             // [dl-1] the check re-derives piece priorities from the file priorities: band pieces again
             if (t->firstLast) {
@@ -2078,6 +2103,8 @@ TorrentSnapshot Worker::makeSnapshot(Torrent &t, bool withFiles)
     const lt::torrent_status &st = t.st;
     s.id = t.id;
     s.added = t.rec.added;
+    s.checksDone = t.checksDone;   // [ver-1]
+    if (isChecking(st.state)) s.checkPpm = int(st.progress_ppm);
     s.name = !st.name.empty() ? qs(st.name) : (t.ti ? qs(t.ti->name()) : t.rec.name);
     if (s.name.isEmpty())
         s.name = t.id;

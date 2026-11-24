@@ -162,6 +162,11 @@ private:
         // [dl-1] download order (set by the engine each session, not persisted here)
         bool seqOrder = false;
         bool firstLast = false;
+        // [ver-1] checks of the files that ended (TorrentSnapshot::checksDone); a paused torrent that is
+        // rechecked runs for the check only and is paused again when it ends
+        int checksAsked = 0, checksDone = 0;
+        bool pauseAfterCheck = false;
+        bool recheckOfFinished = false;   // the recheck began on a finished torrent
         std::set<int> bandPieces;         // pieces raised to top priority by firstLast
         // [ui-i] pieces in libtorrent's download queue with a block requested / being written
         // (TorrentSnapshot::downloading), refreshed with every status update

@@ -326,6 +326,7 @@ struct FakeTorrent {
     QList<TransferSource> peerRows;      // [engine-4] TorrentSnapshot::sources (connected peers)
     QList<TransferSource> channels;      // [engine-4] TorrentSnapshot::channels (DHT, trackers ...)
     QBitArray downloading;               // [ui-i] the pieces the simulated peers send in the next step
+    int checksDone = 0;                  // [ver-1] rechecks that ended (TorrentSnapshot::checksDone)
     int numPieces() const { return int((payload.size() + pieceLength - 1) / pieceLength); }
 };
 
@@ -433,6 +434,7 @@ public:
         if (!active.contains(id)) return;
         rechecks << id;
         FakeTorrent &t = active[id];
+        ++t.checksDone;   // [ver-1] the check is synchronous here
         for (int p = 0; p < t.numPieces(); ++p) {
             const QByteArray want = piece(t, p);
             QByteArray got;
@@ -475,6 +477,7 @@ public:
         s.sources = t.peerRows;
         s.channels = t.channels;
         s.peersTotal = t.swarmTotal;   // [eng-1]
+        s.checksDone = t.checksDone;   // [ver-1]
         if (!t.metadata) { s.state = TransferState::FindingSources; s.peers = t.metaPeers; return s; }
         s.hasMetadata = true;
         s.name = t.name;

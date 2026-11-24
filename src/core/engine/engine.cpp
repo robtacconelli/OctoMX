@@ -287,6 +287,77 @@ struct DownloadEngine::Private : public engine::EngineHost {
         }
     }
 
+    void notice(Download *d, const QString &text) override   // [ver-1]
+    {
+        if (!started || stopped) return;
+        emitNow(d, true);
+        emit q->downloadNotice(d->id(), text);
+    }
+    void sharingChanged() override { updatePartials(); }   // [ver-1]
+
+    // ---- [ver-1] Restart Download: the old data goes (by the rules of removeDownload with delete),
+    // the download starts again from zero under the same id, in the same place of the list
+    struct Disposal {
+        QStringList trashed, deleted, failed, errors;
+    };
+    void restart(Download *old)
+    {
+        const QString id = old->id();
+        const int idx = int(list.indexOf(old));
+        QStringList prune;
+        const DownloadDiskInfo di = old->diskInfo(&prune);
+        TorrentBackend *be = ctx.torrents;
+        const QString tid = old->torrentId();
+        // a torrent leaves the session (libtorrent lets go of its files), its files go, then the same
+        // torrent is added again (its .torrent or magnet: the info-hash makes it the same metadata)
+        const bool inBackend = di.torrent && be && !tid.isEmpty() && be->torrents().contains(tid);
+        if (inBackend) removingTorrents.insert(tid);
+        old->stopForRestart(false);
+        DownloadRecord r = old->restartRecord();
+        r.engineState = old->restartBlob(false);
+        auto *n = new Download(this, r, q);
+        n->restoreState(r.engineState);
+        list[idx] = n;
+        byId.insert(id, n);
+        lastSig.remove(id);
+        lastEmit.remove(id);
+        dirty.remove(id);
+        QList<SearchSource> srcs;
+        if (daoPtr)
+            for (const SourceRecord &s : daoPtr->sources(id)) srcs << s.source;
+        n->addSources(srcs, nullptr, true);
+        old->deleteLater();
+        qCInfo(lcEngine) << "restart" << id << r.name << ": disposing of" << di.paths << (inBackend ? "(once the torrent left the session)" : "");
+        const bool forGood = !di.trash;   // the question said "deleted for good" where there is no trash
+        if (inBackend) {
+            n->setRestartPending(true);
+            pendingDeletes << PendingDelete{id, r.name, tid, di.paths, prune, forGood, true};
+            QTimer::singleShot(10000, q, [this, id] { flushPendingDelete(id, QString()); });
+        } else {
+            n->persist(true);
+            const trash::Result res = trash::dispose(di.paths, forGood);
+            for (const QString &dir : prune)
+                if (QFileInfo(dir).isDir() && !QFileInfo(dir).isSymLink()) QDir().rmdir(dir);
+            if (ctx.library && (!res.trashed.isEmpty() || !res.deleted.isEmpty())) ctx.library->forgetPaths(res.trashed + res.deleted);
+            restartNotice(n, Disposal{res.trashed, res.deleted, res.failed, res.errors});
+        }
+        emitNow(n, true);
+        updatePartials();
+        requestRebalance();
+    }
+    void restartNotice(Download *n, const Disposal &r)
+    {
+        const QString name = QStringLiteral("'%1'").arg(n->record().name);
+        QString text = QStringLiteral("%1 starts again from zero").arg(name);
+        if (!r.trashed.isEmpty()) text += QStringLiteral(": its old data went to the %1").arg(trash::placeName());
+        else if (!r.deleted.isEmpty()) text += QStringLiteral(": its old data was deleted for good");
+        text += QLatin1Char('.');
+        if (!r.failed.isEmpty())
+            text += QStringLiteral(" Could not be removed and stays on the disk: %1 (%2).").arg(QDir::toNativeSeparators(r.failed.first()), r.errors.value(0));
+        qCInfo(lcEngine).noquote() << n->id() << text;
+        notice(n, text);
+    }
+
     // ---- helpers
     void emitNow(Download *d, bool force = false)
     {
@@ -403,6 +474,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
         QString id, name, torrentId;
         QStringList paths, pruneDirs;
         bool forGood = false;
+        bool restart = false;                 // [ver-1] Restart Download: the same download takes the torrent up again
     };
     QList<PendingDelete> pendingDeletes;      // torrents: their files go once libtorrent let them go
     QSet<QString> removingTorrents;           // torrents removed with their download, until the backend confirms
@@ -576,6 +648,18 @@ struct DownloadEngine::Private : public engine::EngineHost {
     }
     void runDelete(const PendingDelete &p)
     {
+        if (p.restart) {   // [ver-1] the old files of a restarted torrent download: gone, then it starts
+            Download *n = byId.value(p.id);
+            if (!n || !n->restartPending()) return;
+            const trash::Result r = trash::dispose(p.paths, p.forGood);
+            for (const QString &dir : p.pruneDirs)
+                if (QFileInfo(dir).isDir() && !QFileInfo(dir).isSymLink()) QDir().rmdir(dir);
+            if (ctx.library && (!r.trashed.isEmpty() || !r.deleted.isEmpty())) ctx.library->forgetPaths(r.trashed + r.deleted);
+            n->setRestartPending(false);
+            restartNotice(n, Disposal{r.trashed, r.deleted, r.failed, r.errors});
+            requestRebalance();
+            return;
+        }
         // the same torrent was taken up again by a download meanwhile: its files are that download's now
         if (!p.torrentId.isEmpty() && findByTorrent(p.torrentId)) {
             qCWarning(lcEngine) << "not deleting the data of" << p.id << ": the torrent is downloading again";
@@ -881,6 +965,22 @@ void DownloadEngine::start()
         }
     }
     qCInfo(lcEngine) << "engine: restored" << d->list.size() << "downloads";
+    // [ver-1] a restart that was waiting for the old files of its torrent: done now
+    for (Download *x : std::as_const(d->list)) {
+        if (!x->restartPending()) continue;
+        QStringList prune;
+        const DownloadDiskInfo di = x->diskInfo(&prune);
+        const QString tid = x->torrentId();
+        Private::PendingDelete p{x->id(), x->record().name, tid, di.paths, prune, !di.trash, true};
+        if (d->ctx.torrents && !tid.isEmpty() && d->ctx.torrents->torrents().contains(tid)) {
+            d->removingTorrents.insert(tid);
+            d->ctx.torrents->removeTorrent(tid, false);
+            d->pendingDeletes << p;
+            QTimer::singleShot(10000, this, [this, id = x->id()] { d->flushPendingDelete(id, QString()); });
+        } else {
+            QTimer::singleShot(0, this, [this, p] { d->runDelete(p); });
+        }
+    }
     for (Download *x : std::as_const(d->list)) emit transferAdded(x->info());
     d->tickTimer.start();
     d->rebalance();
@@ -967,6 +1067,44 @@ QString DownloadEngine::preparePreview(const QString &id, int fileIndex, QString
         return QString();
     }
     return x->preparePreview(fileIndex, error);
+}
+
+// [ver-1] Verify File / Restart Download
+bool DownloadEngine::canVerifyDownload(const QString &id, QString *why) const
+{
+    Download *x = d->byId.value(id);
+    if (!x) {
+        if (why) *why = QStringLiteral("The download is gone.");
+        return false;
+    }
+    return x->canVerify(why);
+}
+
+bool DownloadEngine::verifyDownload(const QString &id)
+{
+    Download *x = d->byId.value(id);
+    if (!x || !x->startVerify()) return false;
+    d->emitNow(x, true);
+    d->requestRebalance();
+    return true;
+}
+
+bool DownloadEngine::canRestartDownload(const QString &id, QString *why) const
+{
+    Download *x = d->byId.value(id);
+    if (!x) {
+        if (why) *why = QStringLiteral("The download is gone.");
+        return false;
+    }
+    return x->canRestart(why);
+}
+
+bool DownloadEngine::restartDownload(const QString &id)
+{
+    Download *x = d->byId.value(id);
+    if (!x || !x->canRestart(nullptr)) return false;
+    d->restart(x);
+    return true;
 }
 
 void DownloadEngine::setAutoEnterQueue(const QString &id, int n)
