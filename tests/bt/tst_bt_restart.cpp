@@ -141,7 +141,11 @@ void TstBtRestart::stopMidDownloadAndRestore()
     QVERIFY(!r1.paused);
     const mx::TorrentSnapshot r2 = b2.snap(id2);
     QVERIFY(r2.paused);
-    QCOMPARE(r2.state, mx::TransferState::Paused);
+    // the resume data of a restored torrent is read in the background: on a busy disk the first
+    // snapshot can still show it as being checked; it must settle as paused without being started
+    if (r2.state != mx::TransferState::Paused)
+        qInfo() << "restored paused torrent first seen as" << int(r2.state) << r2.statusText;
+    QTRY_COMPARE_WITH_TIMEOUT(b2.snap(id2).state, mx::TransferState::Paused, 15000);
     QCOMPARE(r2.savePath, dl2);
     QCOMPARE(b2.be->pieceHash(id, 3), a.be->pieceHash(id, 3));
 
