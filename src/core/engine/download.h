@@ -93,7 +93,20 @@ public:
     void setNotOwned(bool on) { m_notOwned = on; }
     void setPriority(int p);
     void setWantedFiles(const QList<int> &idx);
-    void shutdown(int drainMs);       // persist, close sources, release reservations (no deletes)
+    // [safe-1] the safe quit: beginShutdown() closes every source, gives the reservations back and
+    // starts syncing the part file (no wait); shutdown(waitMs) waits up to waitMs until it is synced,
+    // then stores the record (it claims only what is synced). true = nothing was left unsaved.
+    void beginShutdown();
+    bool shutdown(int waitMs);
+    qint64 unsavedBytes() const;
+    // [safe-1] "check before trusting": set at the start after an unclean stop (what the last session
+    // wrote is unproven); stored, shown in the status text, cleared when a check ran: a torrent's
+    // recheck through the backend, the whole-file check at completion (and Verify File, step D)
+    bool checkFirst() const { return m_checkFirst; }
+    void setCheckFirst(bool on);
+    // [safe-1] a move to the target folder that a stop interrupted (PartStore's "<part>.moving"):
+    // finished when the file arrived, else the completion runs again (called at start)
+    void resolveInterruptedMove();
     void tick(qint64 now);            // 1 Hz housekeeping
     void addSources(const QList<SearchSource> &sources, NetworkPlugin *from, bool fromRequest);
     void mergeRequest(const DownloadRequest &req);
@@ -267,6 +280,10 @@ private:
     void maybeComplete();
     void finalizePart();
     void finishPart(const FileHashes &all, const QList<QByteArray> &ed2kParts, const QList<QByteArray> &aichParts, bool haveAll);
+    // [safe-1] the file is in place at `path` (synced): the download is complete
+    void completeAt(const QString &path, const FileHashes &all, const QList<QByteArray> &ed2kParts, const QList<QByteArray> &aichParts,
+                    bool haveAll);
+    void completeTorrentSynced();      // [safe-1] completeTorrent() after the files were synced
     void wholeFileFailed(const QStringList &mismatch);
     // [ver-1] Verify File
     struct VerifyRun {
@@ -373,6 +390,10 @@ private:
     bool m_userPaused = false;
     bool m_errorState = false;
     bool m_completing = false;
+    bool m_quitting = false;                  // [safe-1] beginShutdown() ran
+    bool m_checkFirst = false;                // [safe-1] see checkFirst()
+    bool m_recheckAsked = false, m_recheckSeen = false;
+    qint64 m_recheckAtMs = 0;
     bool m_singleSource = false;               // whole-file failure policy
     int m_wholeFileFailures = 0;
     qint64 m_awaitHashSetUntil = 0;             // whole-file failure: wait for a hash set first

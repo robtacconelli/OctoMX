@@ -2,6 +2,7 @@
 #include "core/engine/torrent_store.h"
 
 #include "mx/download_order.h"
+#include "mx/durable_file.h"   // [safe-1]
 
 #include "core/log.h"
 
@@ -407,6 +408,14 @@ void TorrentStore::mapOf(const TorrentSnapshot &sn, const QSet<int> &moving, int
     for (int p : moving)
         if (p >= 0 && p < n) progress.add(qint64(p) * L, qMin(qint64(p + 1) * L, payload));
     condensePieceMap(cells, spans, complete, progress, state, fill);
+}
+
+void TorrentStore::syncFiles(const QStringList &paths, std::function<void()> done)
+{
+    m_io.run([this, paths, done] {
+        for (const QString &p : paths) durable::syncPath(p);
+        IoQueue::post(this, [done] { done(); });
+    });
 }
 
 } // namespace mx::engine

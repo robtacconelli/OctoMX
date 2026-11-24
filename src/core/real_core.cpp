@@ -174,10 +174,11 @@ RealCore::RealCore(const QString &profileDir, const QList<NetworkPlugin *> &plug
 RealCore::~RealCore()
 {
     if (m_started && !m_shutDown) {
-        // emergency path (no shutdown() called): still persist what we can
+        // emergency path (no shutdown() called): still persist what we can; [safe-1] the downloads
+        // first (sources stop, every part file synced), as in shutdown()
+        m_engine->shutdown();
         m_diag->shutdown(500);
         m_network->stopAll();
-        m_engine->shutdown();
         m_library->stop(2000);
         m_bandwidth->shutdown();
         m_settings->sync();
@@ -231,6 +232,38 @@ void RealCore::start()
     qCInfo(lcCore) << "core started in" << t.elapsed() << "ms";
     emit statusMessage(m_network->overallHeadline());
 }
+
+// [safe-1] the safe quit, first step: transfers stop, writing and syncing starts (no wait)
+void RealCore::beginShutdown()
+{
+    if (!m_started || m_shutDown || m_closing) return;
+    m_closing = true;
+    m_engine->beginShutdown();
+    for (NetworkPlugin *p : m_network->plugins()) p->prepareStop(false);
+}
+
+bool RealCore::shutdownBusy() const
+{
+    if (!m_closing || m_shutDown) return false;
+    if (m_engine->unsavedBytes() > 0) return true;
+    for (NetworkPlugin *p : m_network->plugins())
+        if (p->savePending()) return true;
+    return false;
+}
+
+qint64 RealCore::shutdownBytesLeft() const
+{
+    return m_closing && !m_shutDown ? m_engine->unsavedBytes() : 0;
+}
+
+void RealCore::closeNow()
+{
+    qCWarning(lcCore) << "Close now: what is not saved yet is downloaded again";
+    m_engine->closeNow();
+    for (NetworkPlugin *p : m_network->plugins()) p->prepareStop(true);
+}
+
+bool RealCore::lastStopWasUnclean() const { return m_engine->uncleanStart(); }
 
 void RealCore::shutdown()
 {

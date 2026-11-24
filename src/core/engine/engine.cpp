@@ -16,9 +16,12 @@
 #include "core/upload_tracker.h"
 #include "mx/settings_keys.h"
 #include "mx/trash.h"
+#include "mx/durable_file.h"   // [safe-1]
 #include "mxhash/encoding.h"
 #include "mxhash/links.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -143,6 +146,9 @@ struct DownloadEngine::Private : public engine::EngineHost {
     QHash<QString, Download *> byId;
     bool started = false;
     bool stopped = false;
+    bool closing = false;      // [safe-1] beginShutdown() ran
+    bool closeNow = false;     // [safe-1] "Close now": shutdown() waits for nothing
+    bool uncleanStart = false; // [safe-1] the last session was not shut down
     QTimer tickTimer;
     QTimer flushTimer;
     QSet<QString> dirty;
@@ -437,7 +443,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
     }
     void rebalance()
     {
-        if (!started || stopped) return;
+        if (!started || stopped || closing) return;
         QList<Download *> run;
         for (Download *d : list) if (d->wantsToRun()) run << d;
         std::stable_sort(run.begin(), run.end(), [](Download *a, Download *b) {
@@ -953,16 +959,37 @@ void DownloadEngine::start()
         connect(d->ctx.search, &SearchService::hitsChanged, this, [this](quint32 id, const QList<SearchHit> &h) { d->onSearchHits(id, h); });
         connect(d->ctx.search, &SearchService::searchFinished, this, [this](quint32 id) { d->onSearchFinished(id); });
     }
+    // [safe-1] the running mark: still there = the last session ended without shutdown()
+    const QString mark = runningMarkPath(d->ctx.profileDir);
+    if (!mark.isEmpty()) {
+        d->uncleanStart = QFileInfo::exists(mark);
+        QFile f(mark);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            f.write(QStringLiteral("OctoMX is running (pid %1) since %2\n").arg(QCoreApplication::applicationPid())
+                        .arg(QDateTime::currentDateTime().toString(Qt::ISODate)).toUtf8());
+            durable::syncFile(f);
+        }
+        if (d->uncleanStart) qCWarning(lcEngine) << "the last session was not closed properly: downloads with data are checked first";
+    }
     if (d->daoPtr) {
         const QList<DownloadRecord> recs = d->daoPtr->all();
         for (DownloadRecord r : recs) {
             if (r.id.isEmpty()) continue;
             Download *x = d->adopt(r);
             x->restoreState(r.engineState);
+            x->resolveInterruptedMove();   // [safe-1]
+            if (d->uncleanStart && !x->isFinished() && (r.done > 0 || !x->torrentId().isEmpty())) x->setCheckFirst(true);
             QList<SearchSource> srcs;
             for (const SourceRecord &s : d->daoPtr->sources(r.id)) srcs << s.source;
             x->addSources(srcs, nullptr, true);
         }
+    }
+    // [safe-1] markers of moves to the target folder whose download is gone (finished ones are
+    // cleared by resolveInterruptedMove)
+    const QFileInfoList markers = QDir(d->incompleteDir()).entryInfoList({QStringLiteral("*.part.moving")}, QDir::Files);
+    for (const QFileInfo &fi : markers) {
+        const QString mid = fi.fileName().chopped(int(qstrlen(".part.moving")));
+        if (!d->byId.contains(mid)) QFile::remove(fi.absoluteFilePath());
     }
     qCInfo(lcEngine) << "engine: restored" << d->list.size() << "downloads";
     // [ver-1] a restart that was waiting for the old files of its torrent: done now
@@ -987,21 +1014,55 @@ void DownloadEngine::start()
     d->updatePartials();
 }
 
+void DownloadEngine::beginShutdown()
+{
+    if (d->stopped || d->closing) return;
+    d->closing = true;
+    d->tickTimer.stop();
+    for (Download *x : std::as_const(d->list)) x->beginShutdown();
+}
+
+qint64 DownloadEngine::unsavedBytes() const
+{
+    qint64 n = 0;
+    for (Download *x : d->list) n += x->unsavedBytes();
+    return n;
+}
+
+void DownloadEngine::closeNow()
+{
+    d->closeNow = true;
+}
+
+bool DownloadEngine::uncleanStart() const { return d->uncleanStart; }
+
+QString DownloadEngine::runningMarkPath(const QString &profileDir)
+{
+    return profileDir.isEmpty() ? QString() : QDir(profileDir).filePath(QStringLiteral("octomx.running"));
+}
+
 void DownloadEngine::shutdown()
 {
     if (d->stopped) return;
     QElapsedTimer t;
     t.start();
-    d->tickTimer.stop();
-    // ≤ ~1.5 s for draining pending writes in total, then persist what is durable
-    for (Download *x : std::as_const(d->list)) x->shutdown(int(qMax<qint64>(0, 1500 - t.elapsed())));
+    beginShutdown();
+    // [safe-1] every part file written and synced, as long as it takes (a hung disk: the last resort
+    // cap), then the records, which claim only what is synced
+    bool saved = true;
+    for (Download *x : std::as_const(d->list))
+        saved &= x->shutdown(d->closeNow ? 0 : int(qMax<qint64>(0, kShutdownCapMs - t.elapsed())));
     d->stopped = true;
     if (d->ctx.library) {
         d->ctx.library->setPartialProvider({}, {});
         d->ctx.library->setPartialDetails({});
     }
     if (d->ctx.db) d->ctx.db->flush();
-    qCInfo(lcEngine) << "engine shut down in" << t.elapsed() << "ms";
+    // the records are stored: this session ended properly (torrents: their resume data is saved and
+    // synced by the plugin's stop(), which runs after this)
+    if (const QString mark = runningMarkPath(d->ctx.profileDir); !mark.isEmpty()) QFile::remove(mark);
+    qCInfo(lcEngine) << "engine shut down in" << t.elapsed() << "ms:"
+                     << (saved ? "every download is saved" : "not everything was saved in time, it is downloaded again");
 }
 
 int DownloadEngine::knownSourceCount() const

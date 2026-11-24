@@ -56,6 +56,11 @@ public:
     QString versionString() const override { return QStringLiteral(MX_VERSION_STRING); }
     void start() override;
     void shutdown() override;
+    void beginShutdown() override;             // [safe-1]
+    bool shutdownBusy() const override;
+    qint64 shutdownBytesLeft() const override;
+    void closeNow() override;
+    bool lastStopWasUnclean() const override;
 
     // internals for the app / tests
     Database *database() const { return m_db; }
@@ -86,6 +91,7 @@ private:
     DiagnosticsManager *m_diag = nullptr;   // [diag-1]
     bool m_started = false;
     bool m_shutDown = false;
+    bool m_closing = false;    // [safe-1] beginShutdown() ran
 };
 
 } // namespace mx

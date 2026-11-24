@@ -39,6 +39,7 @@
 #include "ui/kit/session.h"
 #include "ui/kit/scale.h"
 #include "ui/kit/theme.h"
+#include "ui/dialogs/closing_window.h"
 #include "ui/dialogs/legal_notice.h"
 #include "ui/dialogs/setup_wizard.h"
 #include "ui/mac_glue.h"
@@ -49,7 +50,10 @@
 #include "ui/update_ui.h"
 #include "ui/kit/translation.h"
 #include "mx/update_install.h"
+#include "mx/quit_signals.h"
 #include <QtCore/QDirIterator>
+#include <QtGui/QSessionManager>
+#include <QtWidgets/QMessageBox>
 
 #ifdef MX_HAVE_CORE
 #include <QtNetwork/QNetworkAccessManager>
@@ -479,7 +483,8 @@ int main(int argc, char **argv)
                 again << QStringLiteral("--") + n << v;
         }
         mx::ui::UpdateController::setRestartArguments(again);
-        mx::ui::UpdateController::waitForPreviousProcess();
+        if (!mx::ui::UpdateController::waitForPreviousProcess())   // [safe-1] never two on one profile
+            return 0;
     }
 
     // single instance (not for screenshots / scripts, which use their own profiles)
@@ -613,7 +618,9 @@ int main(int argc, char **argv)
     if (automation)
         mw->move(0, 0);
 
-    // clean shutdown: hide the UI, core->shutdown(), wait for shutdownFinished (<= 5 s)
+    // [safe-1] the safe quit (menu, window close, tray, update install, signals, session end): hide the
+    // UI, stop the transfers, wait until every download is written and synced (a small "Closing:
+    // saving downloads..." window when it takes long), then core->shutdown() and exit
     bool shuttingDown = false;
     int exitCode = 0;
     auto shutdown = [&](int code) {
@@ -626,11 +633,40 @@ int main(int argc, char **argv)
         mw->hide();
         for (QWidget *w : QApplication::topLevelWidgets())
             w->hide();
+        mx::ui::waitForSafeQuit(core);
         QObject::connect(core, &mx::Core::shutdownFinished, &app, [&] { app.exit(exitCode); });
-        QTimer::singleShot(5000, &app, [&] { app.exit(exitCode); });
         core->shutdown();
     };
     QObject::connect(mw, &mx::ui::MainWindow::quitRequested, &app, [&] { shutdown(0); });
+    // [safe-1] SIGTERM / SIGINT / SIGHUP (Linux, macOS), console Ctrl+C / close / logoff / shutdown
+    // (Windows): the same safe quit
+    mx::QuitSignals *quitSignals = mx::QuitSignals::install(&app);
+    QObject::connect(quitSignals, &mx::QuitSignals::requested, &app, [&](const QString &why) {
+        qInfo("octomx: %s: closing safely", qPrintable(why));
+        shutdown(0);
+        quitSignals->finished();
+    });
+    // [safe-1] the session ends (logout, system shutdown): the desktop asks first (commitDataRequest:
+    // the transfers stop and saving starts at once; on Windows the reason shows on the shutdown
+    // screen), then the application is told to quit (aboutToQuit; on Windows the process is ended
+    // right after): everything is saved synchronously there if no quit ran yet
+    QObject::connect(&app, &QGuiApplication::commitDataRequest, &app, [&](QSessionManager &) {
+        qInfo("octomx: the session ends: saving downloads");
+        core->beginShutdown();
+#ifdef Q_OS_WIN
+        using Create = BOOL(WINAPI *)(HWND, LPCWSTR);
+        if (auto create = reinterpret_cast<Create>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "ShutdownBlockReasonCreate")))
+            create(reinterpret_cast<HWND>(mw->winId()), L"OctoMX is saving downloads...");
+#endif
+    });
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [&] {
+        if (shuttingDown)
+            return;
+        shuttingDown = true;
+        qInfo("octomx: quitting without the quit command (session end): saving downloads first");
+        mw->saveState();
+        core->shutdown();
+    });
     QObject::disconnect(earlyConn);
     QObject::disconnect(earlyOpenConn);
     QObject::connect(&openEvents, &mx::ui::OpenEventFilter::linksReceived, mw, [mw](const QStringList &l) { mw->addLinks(l); });
@@ -661,6 +697,22 @@ int main(int argc, char **argv)
         mw->showMinimized();
     else
         mw->show();
+    // [safe-1] the last session was not closed properly (a crash, a kill, a power cut): said once
+    if (core->lastStopWasUnclean()) {
+        const QString text = QObject::tr("OctoMX was not closed properly the last time; the downloads are being checked.");
+        qInfo("octomx: %s", qPrintable(text));
+        if (!automation || qEnvironmentVariableIsSet("MX_SCRIPT_UNCLEAN_NOTICE")) {
+            auto *box = new QMessageBox(QMessageBox::Information, QObject::tr("OctoMX"), text, QMessageBox::Ok, mw);
+            box->setObjectName(QStringLiteral("uncleanStopNotice"));
+            box->setTextFormat(Qt::PlainText);
+            box->setAttribute(Qt::WA_DeleteOnClose);
+            if (QAbstractButton *ok = box->button(QMessageBox::Ok)) {
+                ok->setObjectName(QStringLiteral("uncleanStopOk"));
+                ok->setToolTip(QObject::tr("Close this notice. The check runs on its own."));
+            }
+            box->open();
+        }
+    }
     if (!earlyLinks.isEmpty())
         qInfo("octomx: %d link(s) forwarded by a second instance during start-up", int(earlyLinks.size()));
     if (!links.isEmpty() || !earlyLinks.isEmpty())

@@ -231,6 +231,12 @@ public:
     virtual void start() = 0;                          // go online (async)
     virtual void stop() = 0;                           // go offline, persist nodes/servers; fast
     virtual NetworkStatus status() const = 0;
+    // [safe-1] the safe quit, before stop(): stop transferring and start saving what stop() saves
+    // (BitTorrent: every torrent's resume data, after its files were synced) without blocking;
+    // savePending() says whether that still runs. closeNow = the user does not want to wait: stop()
+    // keeps its waits short. Defaults: nothing to prepare.
+    virtual void prepareStop(bool closeNow) { Q_UNUSED(closeNow) }
+    virtual bool savePending() const { return false; }
 
     // --- servers / nodes list (optional)
     virtual QList<ServerEntry> servers() const { return {}; }

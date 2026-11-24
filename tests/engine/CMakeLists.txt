@@ -45,9 +45,32 @@ if(TARGET mxnet_overlay)
     target_compile_definitions(tst_engine_verify_net PRIVATE MX_TEST_TMP="${MX_VER_NET_TMP}")
     set_property(TEST engine_engine_verify_net APPEND PROPERTY ENVIRONMENT "MX_OVERLAY_DISCOVERY=0")
 endif()
+mx_engine_test(tst_engine_safe)      # [safe-1] synced records, interrupted moves, the unclean-stop mark, the database copy
 if(TARGET mxnet_bt)
     mx_engine_test(tst_engine_bt)
     target_link_libraries(tst_engine_bt PRIVATE mxnet_bt)
+    # [safe-1] closing, kills and power cuts on every store: crash_child is the program that is
+    # stopped; one ctest per way of stopping and store (each fits the 900 s timeout)
+    add_executable(crash_child crash_child.cpp engine_fakes.h bt_node.h ${CMAKE_SOURCE_DIR}/tests/core/fake_plugin.h)
+    target_link_libraries(crash_child PRIVATE mxcore mxnet_bt Qt6::Test)
+    target_include_directories(crash_child PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/tests/core)
+    add_executable(tst_engine_crash tst_engine_crash.cpp engine_fakes.h engine_env.h bt_node.h ${CMAKE_SOURCE_DIR}/tests/core/fake_plugin.h)
+    target_link_libraries(tst_engine_crash PRIVATE mxcore mxnet_bt Qt6::Test)
+    target_include_directories(tst_engine_crash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/tests/core)
+    add_dependencies(tst_engine_crash crash_child)
+    set(_crash_tests movekill throughput)
+    foreach(m quit slowquit closenow term kill cut)
+        foreach(st ed2k tth whole torrent merged)
+            list(APPEND _crash_tests "${m}:${st}")
+        endforeach()
+    endforeach()
+    foreach(t ${_crash_tests})
+        string(REPLACE ":" "_" tn "engine_crash_${t}")
+        add_test(NAME ${tn} COMMAND tst_engine_crash ${t})
+        set_tests_properties(${tn} PROPERTIES
+            ENVIRONMENT "MX_PORT_MAPPING=0;TMPDIR=${MX_ENGINE_TEST_TMP};QT_QPA_PLATFORM=offscreen;HOME=${MX_TEST_HOME};XDG_DOWNLOAD_DIR=${MX_TEST_HOME}/Downloads;XDG_CONFIG_HOME=${MX_TEST_HOME}/.config;XDG_DATA_HOME=${MX_TEST_HOME}/.local/share;MX_OS_ROOT=${CMAKE_BINARY_DIR}/os-root"
+            TIMEOUT 900)
+    endforeach()
 endif()
 
 # ---- mxcli: the real core + every plugin that exists in this build tree, no GUI

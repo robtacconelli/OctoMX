@@ -33,6 +33,8 @@ public:
     void init(const PluginContext &ctx) override;
     void start() override;
     void stop() override;
+    void prepareStop(bool closeNow) override;   // [safe-1]
+    bool savePending() const override;
     NetworkStatus status() const override { return m_status; }
     QList<ServerEntry> servers() const override;
     void addServer(const QString &address, const QString &name) override;
@@ -110,6 +112,7 @@ private:
     Config m_cfg;
     bool m_inited = false;
     bool m_started = false;
+    bool m_quitPrepared = false, m_quitHurry = false;   // [safe-1]
     QThread *m_thread = nullptr;
     Worker *m_worker = nullptr;
     BitTorrentEvents *m_events = nullptr;

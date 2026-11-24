@@ -92,8 +92,10 @@ Check checkPartSample(const TransferInfo &t, const QVariantMap &dbg)
             ++r.moving;
             if (!arriving.intersects(c.first, c.second))
                 r.error = QStringLiteral("cell %1 drawn in progress, nothing requested or arriving there").arg(i);
-            if (inFlight.isEmpty())
-                r.error = QStringLiteral("cell %1 drawn in progress while no request is out").arg(i);
+            // [safe-1] a unit being checked is in progress too (PartStore::pieceMap); its check can wait
+            // behind a sync of the part file while no request is out (seen under wine)
+            if (inFlight.isEmpty() && dbg.value(QStringLiteral("verifyingUnits")).toInt() == 0)
+                r.error = QStringLiteral("cell %1 drawn in progress while no request is out and no unit is checked").arg(i);
         }
     }
     return r;

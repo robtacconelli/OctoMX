@@ -3,6 +3,7 @@
 #include "bt_worker.h"
 #include "bt_pacing.h"
 #include "mx/download_order.h"   // [dl-1]
+#include "mx/durable_file.h"     // [safe-1]
 
 #include <QtCore/QDir>
 #include <climits>
@@ -50,6 +51,26 @@ QByteArray toBytes(const std::vector<char> &v) { return QByteArray(v.data(), int
 bool isChecking(lt::torrent_status::state_t s)
 {
     return s == lt::torrent_status::checking_files || s == lt::torrent_status::checking_resume_data;
+}
+
+// [safe-1] the files of a torrent on disk (pad files excluded)
+QStringList payloadFiles(const lt::torrent_info &ti, const std::string &savePath)
+{
+    QStringList out;
+    const lt::file_storage &fs = ti.files();
+    for (const lt::file_index_t i : fs.file_range())
+        if (!(fs.file_flags(i) & lt::file_storage::flag_pad_file))
+            out << QString::fromStdString(fs.file_path(i, savePath));
+    return out;
+}
+
+// [safe-1] test seam: a finished piece is "written, not synced" for the power cut journal
+void notePieceWritten(const lt::torrent_info &ti, const std::string &savePath, lt::piece_index_t piece)
+{
+    const lt::file_storage &fs = ti.files();
+    for (const lt::file_slice &s : fs.map_block(piece, 0, fs.piece_size(piece)))
+        if (!(fs.file_flags(s.file_index) & lt::file_storage::flag_pad_file))
+            durable::noteWritten(QString::fromStdString(fs.file_path(s.file_index, savePath)), s.offset, s.size);
 }
 
 } // namespace
@@ -387,6 +408,11 @@ void Worker::writeResume(const lt::add_torrent_params &p0)
         }
     }
     p.piece_priorities.clear();   // reservations are not persisted
+    // [safe-1] the pieces this resume data claims were finished before it was taken: their files are
+    // synced to the disk now, so the resume file never claims a piece a power cut can take away
+    if (const auto ti = t->ti ? t->ti : t->h.torrent_file())
+        for (const QString &f : payloadFiles(*ti, p.save_path))
+            durable::syncPath(f);
     const std::vector<char> buf = lt::write_resume_data_buf(p);
     QString err;
     if (!writeFileAtomic(resumeFile(m_dataDir, id), toBytes(buf), &err))
@@ -499,14 +525,32 @@ void Worker::goOnline(const Config &cfg)
     updateStatus();
 }
 
+void Worker::beginOffline()
+{
+    if (!m_ses)
+        return;
+    m_ses->pause();   // [safe-1] no more pieces arrive: the resume data saved now is the last word
+    int n = 0;
+    for (auto &kv : m_t) {
+        Torrent &t = kv.second;
+        if (!t.inSession || t.removing)
+            continue;
+        requestResume(t, true);
+        ++n;
+    }
+    m_quitSaving = m_resumePending > 0;
+    qCInfo(lcBt) << "quit: the session is paused, saving the resume data of" << n << "torrents";
+}
+
 void Worker::goOffline(int timeoutMs)
 {
     if (!m_ses)
         return;
+    m_ses->pause();   // [safe-1] first: nothing changes after the resume data below is taken
     const int n = saveAllResume(timeoutMs, true);
+    m_quitSaving = false;
     saveSessionState();
     m_online = false;
-    m_ses->pause();
     applySettingsNow();
     m_listen.clear();
     m_listenPort = 0;
@@ -1456,6 +1500,10 @@ void Worker::handleAlert(lt::alert *a)
                 t->replayed[std::size_t(p)] = false;
                 break;
             }
+            if (durable::powerCutTest())   // [safe-1] test seam
+                if (const auto ti = t->h.torrent_file())
+                    notePieceWritten(*ti, t->haveStatus && !t->st.save_path.empty() ? t->st.save_path : t->rec.savePath.toStdString(),
+                                     pa->piece_index);
             t->pieceDone << p;
             t->injected.erase(p);
             if (int(t->st.pieces.size()) > p)
@@ -1542,15 +1590,19 @@ void Worker::handleAlert(lt::alert *a)
     }
     case lt::save_resume_data_alert::alert_type: {
         auto *ra = static_cast<lt::save_resume_data_alert *>(a);
+        writeResume(ra->params);
         if (m_resumePending > 0)
             --m_resumePending;
-        writeResume(ra->params);
+        if (m_resumePending == 0)
+            m_quitSaving = false;
         break;
     }
     case lt::save_resume_data_failed_alert::alert_type: {
         auto *ra = static_cast<lt::save_resume_data_failed_alert *>(a);
         if (m_resumePending > 0)
             --m_resumePending;
+        if (m_resumePending == 0)
+            m_quitSaving = false;
         if (ra->error != lt::errors::resume_data_not_modified)
             qCInfo(lcBt) << "save_resume_data failed:" << qs(ra->error.message());
         break;

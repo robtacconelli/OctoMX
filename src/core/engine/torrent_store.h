@@ -59,6 +59,8 @@ public:
     // [dl-1] the order in which plan() reserves pieces for other networks: first and last = the head
     // and tail band of each lane's file first; sequential = ascending (else from the end backwards)
     void setOrder(bool sequential, bool firstLast) { m_seq = sequential; m_firstLast = firstLast; }
+    // [safe-1] sync these files (written by the backend) to the disk on the store's queue, then done()
+    void syncFiles(const QStringList &paths, std::function<void()> done);
 
     // Store
     Kind kind() const override { return Torrent; }

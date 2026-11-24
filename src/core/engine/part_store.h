@@ -2,7 +2,10 @@
 // OctoMX engine: PartFileStore: a sparse <incomplete>/<id>.part file with a range map.
 //
 // Range states: missing → (requested: tracked by the Download) → held (received; written or queued
-// for writing) → verified. "durable" = held bytes whose write has completed (what gets persisted).
+// for writing) → verified. "durable" = held bytes whose write has completed; [safe-1] "synced" =
+// durable bytes the disk confirmed (fsync), the only ones the stored record may claim
+// (persistable()). The part file is synced every kSyncBytes / kSyncMs of new data, before the final
+// check and before the move to the target folder.
 // Verification units, by preference: eD2k part hashes (9 728 000 bytes), TTH leaves, else the
 // whole file at completion (finalCheck). All file I/O and hashing run on the store's serial
 // IoQueue; results are posted back to the main thread.
@@ -10,6 +13,7 @@
 
 #include <QtCore/QMutex>
 #include <QtCore/QSet>
+#include <QtCore/QTimer>
 
 #include <functional>
 #include <memory>
@@ -39,7 +43,23 @@ public:
     RangeSet held() const { return m_have; }
     RangeSet verified() const { return m_verified; }
     RangeSet durable() const { return m_durable; }
-    RangeSet persistable() const;                 // durable ∪ verified
+    RangeSet persistable() const;                 // [safe-1] held bytes that are synced to the disk
+    RangeSet persistableVerified() const;         // [safe-1] verified bytes that are synced to the disk
+    RangeSet synced() const { return m_synced; }
+    RangeSet written() const;                     // [safe-1] held bytes in the file now (synced or not)
+    // [safe-1] the sync schedule: after this much new data or this long after the first unsynced byte
+    static constexpr qint64 kSyncBytes = qint64(16) << 20;
+    static constexpr int kSyncMs = 1000;
+    void flushToDisk();                           // queue a sync of everything written so far (no wait)
+    // Wait (≤ timeoutMs) until every queued write is on the disk and synced and the results are in;
+    // true when nothing is left. What is not synced then stays unclaimed (downloaded again).
+    bool syncNow(int timeoutMs);
+    qint64 unsyncedBytes() const;                 // held bytes not yet synced (queued + written)
+    int syncCount() const { return m_syncs; }
+    // [safe-1] the move to the target folder is announced in "<part>.moving" until the record knows
+    // where the file went (Download::resolveInterruptedMove)
+    static QString moveMarkerPath(const QString &partPath) { return partPath + QStringLiteral(".moving"); }
+    static bool readMoveMarker(const QString &partPath, QString *target, QString *tempCopy);
 
     // Fine verification (the caller validated the set against the trusted root first).
     void setEd2kParts(const QList<QByteArray> &parts);
@@ -133,6 +153,8 @@ private:
     void onWritten(qint64 off, qint64 n, bool ok, const QString &err, bool diskFull);
     void onVerified(qint64 s, qint64 e, bool ok, quint64 gen);
     void publishVerified();
+    void onSynced(const RangeSet &covered, bool ok);   // [safe-1]
+    void onShortFile(const RangeSet &lost);            // [safe-1] claims beyond the end of the file on disk
 
     QString m_path;
     qint64 m_size;
@@ -140,6 +162,10 @@ private:
     IoQueue m_io;
     std::shared_ptr<Shared> m_sh;
     RangeSet m_have, m_durable, m_verified;
+    RangeSet m_synced, m_unsynced;            // [safe-1] synced; accepted since the last queued sync
+    qint64 m_unsyncedBytes = 0;
+    int m_syncsInFlight = 0, m_syncs = 0;
+    QTimer m_syncTimer;
     QSet<qint64> m_verifying;                 // unit starts being checked
     Scheme m_scheme = NoUnits;
     qint64 m_unit = Ed2kPart;

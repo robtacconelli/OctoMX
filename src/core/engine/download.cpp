@@ -221,6 +221,7 @@ void Download::restoreState(const QByteArray &blob)
     m_noChecksum = m.value(QStringLiteral("noSum")).toBool();
     m_restartPending = m.value(QStringLiteral("restartPending")).toBool();
     m_repairWhole = !m_repairPath.isEmpty() && m.value(QStringLiteral("repairWhole")).toBool();
+    m_checkFirst = m.value(QStringLiteral("checkFirst")).toBool();   // [safe-1]
     // [merge-1] networks matched by name and size: confirmed / dropped
     const QVariantMap cn = m.value(QStringLiteral("candNets")).toMap();
     for (auto it = cn.constBegin(); it != cn.constEnd(); ++it) {
@@ -259,7 +260,7 @@ QByteArray Download::saveState() const
     m.insert(QStringLiteral("v"), 1);
     m.insert(QStringLiteral("store"), isTorrent() ? QStringLiteral("torrent") : QStringLiteral("part"));
     const RangeSet held = m_part ? m_part->persistable() : m_restoreHeld;
-    const RangeSet ver = m_part ? m_part->verified() : m_restoreVerified;
+    const RangeSet ver = m_part ? m_part->persistableVerified() : m_restoreVerified;   // [safe-1] synced only
     m.insert(QStringLiteral("held"), held.toVariant());
     m.insert(QStringLiteral("verified"), ver.toVariant());
     if (!m_torrentId.isEmpty()) m.insert(QStringLiteral("torrentId"), m_torrentId);
@@ -323,6 +324,7 @@ QByteArray Download::saveState() const
     if (m_noChecksum) m.insert(QStringLiteral("noSum"), true);
     if (m_restartPending) m.insert(QStringLiteral("restartPending"), true);
     if (m_repairWhole) m.insert(QStringLiteral("repairWhole"), true);
+    if (m_checkFirst) m.insert(QStringLiteral("checkFirst"), true);   // [safe-1]
     if (!m_candNets.isEmpty()) {   // [merge-1]
         QVariantMap cn;
         for (auto it = m_candNets.constBegin(); it != m_candNets.constEnd(); ++it) {
@@ -542,6 +544,13 @@ bool Download::startTorrent(QString *error)
     if (raw.size() == 20 && m_rec.hashes.btih.isEmpty()) m_rec.hashes.btih = raw;
     m_torrent = std::make_unique<TorrentStore>(be, id, m_host->pool(), &m_host->tuning());
     attachStore(m_torrent.get());
+    if (m_checkFirst && !m_recheckAsked) {   // [safe-1] after an unclean stop: the backend checks every piece on disk first
+        be->recheck(id);
+        m_recheckAsked = true;
+        m_recheckSeen = false;
+        m_recheckAtMs = nowMs();
+        qCInfo(lcEngine) << m_rec.id << "rechecking torrent" << id.left(8) << "after an unclean stop";
+    }
     applyTorrentOrder();   // [dl-1] before resuming (the backend does not persist the order flags)
     if (m_active) be->resumeTorrent(id);
     else be->pauseTorrent(id);
@@ -645,7 +654,7 @@ void Download::resetBrokenStore()
     // space again); what was durable on disk is kept
     if (!m_part || !m_part->hasError()) return;
     m_restoreHeld = m_part->persistable();
-    m_restoreVerified = m_part->verified();
+    m_restoreVerified = m_part->persistableVerified();
     disconnect(m_part.get(), nullptr, this, nullptr);
     m_part->abandon();
     m_part.reset();
@@ -847,7 +856,7 @@ DownloadDiskInfo Download::diskInfo(QStringList *pruneDirs) const
         if (onDisk(p)) {
             di.folder = QFileInfo(p).absolutePath();
             own << p;
-            const qint64 held = m_part ? m_part->persistable().total() : m_restoreHeld.total();
+            const qint64 held = m_part ? m_part->written().total() : m_restoreHeld.total();   // [safe-1] in the file now
             di.bytes = qMin(QFileInfo(p).size(), qMax(m_rec.done, held));
             if (QFileInfo(p).fileName() != m_rec.id + QStringLiteral(".part")) di.inPlaceFile = p;
         }
@@ -872,9 +881,9 @@ void Download::stopForRemoval(bool keepData)
     if (be && !m_promoteTorrent.isEmpty()) be->removeTorrent(m_promoteTorrent, false);
     if (m_part) {
         if (keepData) {
-            m_part->drain(1500);   // what is held reaches the disk and the kept record
+            m_part->syncNow(60000);   // [safe-1] what is held reaches the disk, synced, then the kept record
             m_restoreHeld = m_part->persistable();
-            m_restoreVerified = m_part->verified();
+            m_restoreVerified = m_part->persistableVerified();
         }
         m_part->close();
     }
@@ -897,8 +906,9 @@ void Download::setWantedFiles(const QList<int> &idx)
     markDirty(true);
 }
 
-void Download::shutdown(int drainMs)
+void Download::beginShutdown()
 {
+    m_quitting = true;
     // [ver-1] a check that runs now leaves everything as it was stored (what it found so far is
     // persisted already; a finished file's record stays finished)
     if (m_verifyJob) m_verifyJob->stop();
@@ -914,8 +924,55 @@ void Download::shutdown(int drainMs)
     }
     if (m_torrent) m_torrent->releaseAll();
     stopFindSources();
-    if (m_part && drainMs > 0) m_part->drain(drainMs);
+    if (m_part) {
+        // a final check or a copy to the target folder is not waited for: it runs again at the next
+        // start (the copy is never seen half done, PartStore::moveTo)
+        if (m_completing) m_part->abandon();
+        m_part->flushToDisk();
+    }
+}
+
+bool Download::shutdown(int waitMs)
+{
+    beginShutdown();
+    const bool saved = !m_part || m_part->syncNow(qMax(0, waitMs));
     persist(true);
+    return saved;
+}
+
+qint64 Download::unsavedBytes() const
+{
+    return m_part ? m_part->unsyncedBytes() : 0;   // held, not synced yet: queued writes included
+}
+
+void Download::setCheckFirst(bool on)
+{
+    if (m_checkFirst == on) return;
+    m_checkFirst = on;
+    m_recheckAsked = m_recheckSeen = false;
+    qCInfo(lcEngine) << m_rec.id << (on ? "to be checked before its data is trusted (the last session ended unexpectedly)"
+                                        : "checked: its data is trusted again");
+    markDirty(true);
+}
+
+void Download::resolveInterruptedMove()
+{
+    const QString part = partPath();
+    QString target, tmp;
+    if (!PartStore::readMoveMarker(part, &target, &tmp)) return;
+    if (!tmp.isEmpty()) QFile::remove(tmp);   // a copy that did not finish
+    const bool partThere = QFileInfo::exists(part);
+    const bool arrived = !isFinished() && !target.isEmpty() && QFileInfo(target).isFile() && (m_rec.size <= 0 || QFileInfo(target).size() == m_rec.size);
+    if (arrived) {
+        // the file reached the target folder (renamed, or copied, synced and renamed) before the stop;
+        // only the record did not know yet
+        if (partThere) QFile::remove(part);
+        qCInfo(lcEngine) << m_rec.id << "the move to the target folder was interrupted after the file arrived: complete at" << target;
+        completeAt(target, m_rec.hashes, {}, {}, false);
+    } else if (!isFinished()) {
+        qCInfo(lcEngine) << m_rec.id << "the move to the target folder was interrupted before the file arrived: it runs again";
+    }
+    QFile::remove(PartStore::moveMarkerPath(part));
 }
 
 void Download::mergeRequest(const DownloadRequest &req)
@@ -1533,7 +1590,7 @@ int Download::knownSources() const
 
 void Download::openMoreSources()
 {
-    if (!m_active || isFinished() || m_completing || !store()) return;
+    if (!m_active || isFinished() || m_completing || m_quitting || !store()) return;
     if (m_part && !m_part->acceptingData()) return;
     const Tuning &t = m_host->tuning();
     int limit = t.maxOpenSourcesPerDownload;
@@ -2338,6 +2395,7 @@ void Download::maybeComplete()
     if (m_completing || isFinished() || !m_active) return;
     if (m_torrent) {
         if (!m_torrent->hasMetadata() || !m_torrent->snap().finished || m_torrent->reservedCount() != 0) return;
+        if (m_checkFirst) return;   // [safe-1] the recheck decides first
         // [merge-1] "finished" alone is not enough: right after a promotion the snapshot can still be the
         // metadata-only one (no file wanted = finished) before the recheck; every wanted file must be done
         const TorrentSnapshot &sn = m_torrent->snap();
@@ -2376,6 +2434,7 @@ void Download::finalizePart()
         return;
     }
     m_part->finalCheck([this, fine](const PartStore::FinalResult &r) {
+        if (m_quitting) return;   // [safe-1] cancelled by the quit: it runs again at the next start
         if (!r.ok) {
             m_completing = false;
             setError(r.error.isEmpty() ? QStringLiteral("Cannot read the downloaded file") : r.error, true);
@@ -2433,6 +2492,7 @@ void Download::finalizePart()
                             || !id.tth.isEmpty() || !id.aich.isEmpty();
         if (!hadSum) m_noChecksum = true;
         else if (!m_rec.hashes.conflicts(r.hashes)) keepBlockHashes(r.tthUnit, r.tthLevel, r.ed2kParts, r.hashes);
+        setCheckFirst(false);   // [safe-1] every byte was just checked
         finishPart(r.hashes, r.ed2kParts, r.aichParts, true);
     });
 }
@@ -2516,48 +2576,58 @@ void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kPa
         m_moveRetries = 0;
         dropPreview();   // [dl-1] Windows: the link could not go while our own handle was open
         if (!ok) {
+            if (m_quitting) return;   // [safe-1] a copy cancelled by the quit runs again at the next start
             m_completing = false;
             setError(QStringLiteral("Cannot move to the incoming folder: %1").arg(err), true);
             return;
         }
-        m_rec.savePath = path;
-        if (haveAll) {
-            FileHashes h = all;
-            h.btih.clear();
-            h.btFileIndex = -1;
-            checkClaimsAgainst(h);   // [core-5]
-            if (!m_rec.hashes.conflicts(h)) m_rec.hashes.mergeFrom(h);
-        }
-        m_rec.completed = QDateTime::currentDateTime();
-        m_rec.errorText.clear();
-        m_active = false;
-        setState(TransferState::Completed, m_completionNote.isEmpty() ? transferStateText(TransferState::Completed)
-                                                                      : QStringLiteral("%1, but %2").arg(transferStateText(TransferState::Completed), m_completionNote));
-        qCInfo(lcEngine) << m_rec.id << "complete:" << path;
-        logShares();
-        if (haveAll) publishLinks(m_rec.hashes);
-        if (Library *lib = m_host->library()) {
-            m_awaitHashPaths.insert(QFileInfo(path).absoluteFilePath());
-            // our final pass already produced every hash: the library must not read the file again
-            if (haveAll) lib->addHashed(path, all, ed2kParts, aichParts);
-            else lib->requestHash(path);
-        }
-        m_completing = false;
-        if (!m_repairPath.isEmpty()) {   // [ver-1] a repaired file: where it was, with its name
-            qCInfo(lcEngine) << m_rec.id << "repaired in place:" << path;
-            m_repairPath.clear();
-            m_repairWhole = false;
-            m_damaged = false;
-        }
-        persist(true);
-        m_host->finished(this);
-        m_host->completedFile(this);
+        completeAt(path, all, ed2kParts, aichParts, haveAll);
     };
     // [ver-1] a finished file repaired in place stays where it is (no move, no "name (1)" copy)
     if (!m_repairPath.isEmpty() && QFileInfo(m_part->path()).absoluteFilePath() == QFileInfo(m_repairPath).absoluteFilePath())
         m_part->finishInPlace(done);
     else
         m_part->moveTo(dir, safeFileName(m_rec.name), done, !previewed);
+}
+
+// [safe-1] the finished file is at `path` (synced before the rename or copy)
+void Download::completeAt(const QString &path, const FileHashes &all, const QList<QByteArray> &ed2kParts,
+                          const QList<QByteArray> &aichParts, bool haveAll)
+{
+    m_rec.savePath = path;
+    if (haveAll) {
+        FileHashes h = all;
+        h.btih.clear();
+        h.btFileIndex = -1;
+        checkClaimsAgainst(h);   // [core-5]
+        if (!m_rec.hashes.conflicts(h)) m_rec.hashes.mergeFrom(h);
+    }
+    m_rec.completed = QDateTime::currentDateTime();
+    m_rec.errorText.clear();
+    m_active = false;
+    setState(TransferState::Completed, m_completionNote.isEmpty() ? transferStateText(TransferState::Completed)
+                                                                  : QStringLiteral("%1, but %2").arg(transferStateText(TransferState::Completed), m_completionNote));
+    qCInfo(lcEngine) << m_rec.id << "complete:" << path;
+    logShares();
+    if (haveAll) publishLinks(m_rec.hashes);
+    if (Library *lib = m_host->library()) {
+        m_awaitHashPaths.insert(QFileInfo(path).absoluteFilePath());
+        // our final pass already produced every hash: the library must not read the file again
+        if (haveAll) lib->addHashed(path, all, ed2kParts, aichParts);
+        else lib->requestHash(path);
+    }
+    m_completing = false;
+    if (!m_repairPath.isEmpty()) {   // [ver-1] a repaired file: where it was, with its name
+        qCInfo(lcEngine) << m_rec.id << "repaired in place:" << path;
+        m_repairPath.clear();
+        m_repairWhole = false;
+        m_damaged = false;
+    }
+    persist(true);
+    m_host->finished(this);
+    m_host->completedFile(this);
+    // the move's marker stays until the next start sees this record (resolveInterruptedMove): a power
+    // cut may still take the last database commit, never the marker before it
 }
 
 void Download::completeTorrent()
@@ -2580,6 +2650,20 @@ void Download::completeTorrent()
         m_rec.savePath = QDir(sn.savePath).filePath(top.isEmpty() ? sn.name : top);
     } else {
         m_rec.savePath = paths.first();
+    }
+    // [safe-1] the files are synced to the disk before the download is announced as finished
+    m_torrent->syncFiles(paths, [this] { completeTorrentSynced(); });
+}
+
+void Download::completeTorrentSynced()
+{
+    if (!m_torrent || isFinished() || m_quitting) return;
+    const TorrentSnapshot &sn = m_torrent->snap();
+    QStringList paths;
+    for (int i = 0; i < sn.files.size(); ++i) {
+        const TorrentFile &f = sn.files.at(i);
+        if (m_torrent->isPadFile(i) || f.priority <= 0) continue;
+        paths << QDir(sn.savePath).filePath(f.path);
     }
     m_rec.completed = QDateTime::currentDateTime();
     m_active = false;
@@ -2871,7 +2955,7 @@ void Download::tryPromote()
                 m_promoting = false;
                 be->removeTorrent(m_promoteTorrent, false);
                 m_promoteTorrent.clear();
-                m_restoreHeld = m_part->persistable();
+                m_restoreHeld = m_part->written();   // [safe-1] moveExact synced the file before it tried
                 m_restoreVerified = m_part->verified();
                 QFile::rename(target, partPath());
                 m_part.reset();
@@ -3018,6 +3102,10 @@ void Download::onTorrentChanged()
     const TorrentSnapshot &sn = m_torrent->snap();
     if (m_btBytesAtStart < 0 && sn.hasMetadata) m_btBytesAtStart = sn.totalDone;
     if (sn.rateDownBps > 0) m_lastDataMs = nowMs();
+    if (m_checkFirst && m_recheckAsked) {   // [safe-1] the recheck ran: checking seen, then over (or quick: 20 s)
+        if (sn.state == TransferState::Verifying) m_recheckSeen = true;
+        else if (sn.hasMetadata && (m_recheckSeen || nowMs() - m_recheckAtMs > 20000)) setCheckFirst(false);
+    }
     markDirty();
     if (m_verify.running && m_verify.torrent) pollTorrentVerify();   // [ver-1]
     if (sn.finished) QTimer::singleShot(0, this, [this] { maybeComplete(); });
@@ -3133,6 +3221,12 @@ void Download::onUrlTorrentFailed(const QString &url, const QString &error)
 
 void Download::tick(qint64 now)
 {
+    // [safe-1] a recheck that never showed "checking" (a small torrent, quick): over after 20 s
+    if (m_torrent && m_checkFirst && m_recheckAsked && !m_recheckSeen && now - m_recheckAtMs > 20000
+        && m_torrent->snap().state != TransferState::Verifying) {
+        setCheckFirst(false);
+        QTimer::singleShot(0, this, [this] { maybeComplete(); });
+    }
     if (m_errorState && !(m_deadEnd && m_deadEndBanned) && !isFinished() && m_host->settings() && m_host->settings()->b(keys::transfers::AutoRetry)) {
         const qint64 interval = qint64(qMax(5, m_host->settings()->i(keys::transfers::RetryIntervalSec))) * 1000;
         const int maxAttempts = m_host->settings()->i(keys::transfers::RetryMaxAttempts);
@@ -3454,6 +3548,9 @@ TransferInfo Download::info() const
     t.done = m_rec.done;
     t.state = TransferState(m_rec.state);
     t.statusText = m_rec.statusText.isEmpty() ? transferStateText(t.state) : m_rec.statusText;
+    if (m_checkFirst && !isFinished())   // [safe-1]
+        t.statusText += m_recheckAsked ? QStringLiteral(" (checking: OctoMX was not closed properly)")
+                                       : QStringLiteral(" (to be checked: OctoMX was not closed properly)");
     t.errorText = m_rec.errorText;
     t.hashes = m_rec.hashes;
     t.isBundle = m_rec.isBundle;
@@ -3677,6 +3774,13 @@ QVariantMap Download::debugInfo() const
     m.insert(QStringLiteral("store"), m_torrent ? QStringLiteral("torrent") : m_part ? QStringLiteral("part") : QStringLiteral("none"));
     m.insert(QStringLiteral("torrentId"), m_torrentId);
     m.insert(QStringLiteral("active"), m_active);
+    m.insert(QStringLiteral("checkFirst"), m_checkFirst);   // [safe-1]
+    if (m_part) {
+        m.insert(QStringLiteral("syncedBytes"), m_part->synced().total());
+        m.insert(QStringLiteral("writtenBytes"), m_part->written().total());
+        m.insert(QStringLiteral("syncs"), m_part->syncCount());
+        m.insert(QStringLiteral("verifyingUnits"), m_part->verifyingCount());
+    }
     QVariantMap byNet;
     for (auto it = m_verifiedByNet.constBegin(); it != m_verifiedByNet.constEnd(); ++it) byNet.insert(netName(Net(it.key())), it.value());
     QVariantMap recvNet;

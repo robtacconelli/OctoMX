@@ -28,6 +28,11 @@ add_library(mxapi STATIC
     # [dl-1] download order bands (sequential / first and last) and preview readiness
     mx/download_order.h
     download_order.cpp
+    # [safe-1] sync to the disk, copies never seen half done, the crash / power cut test seams
+    mx/durable_file.h
+    durable_file.cpp
+    mx/quit_signals.h
+    quit_signals.cpp
     # [ren-1] copies installed before 5.0: legacy profile folder, database, download folder, settings
     mx/legacy_names.h
     legacy_names.cpp

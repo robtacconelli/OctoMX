@@ -155,8 +155,26 @@ void BtPlugin::stop()
         return;
     m_started = false;
     Worker *w = m_worker;
-    toWorkerBlocking([w] { w->goOffline(3000); });
+    // [safe-1] every torrent's resume data, as long as it takes (a last resort of 2 minutes for a
+    // hung disk); 3 s after "Close now"
+    const int wait = m_quitHurry ? 3000 : 120000;
+    toWorkerBlocking([w, wait] { w->goOffline(wait); });
     QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
+}
+
+void BtPlugin::prepareStop(bool closeNow)
+{
+    if (closeNow) m_quitHurry = true;
+    if (!m_started || m_quitPrepared || closeNow) return;
+    m_quitPrepared = true;
+    Worker *w = m_worker;
+    if (w) w->armQuitSaving();
+    toWorker([w] { w->beginOffline(); });
+}
+
+bool BtPlugin::savePending() const
+{
+    return m_worker && m_quitPrepared && m_worker->quitSaving();
 }
 
 void BtPlugin::applyCtxToConfig()

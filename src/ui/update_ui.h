@@ -120,7 +120,10 @@ public:
     // very early in main(): wait for the process that restarted us (MX_UPDATE_WAIT_PID); then finish
     // or undo an interrupted swap and remove old files (call after the single-instance check).
     // Returns true when the program must start again at once (files were moved under it).
-    static void waitForPreviousProcess();
+    // [safe-1] as long as the previous process lives (it may still be saving downloads; it is never
+    // killed), a last resort of kPreviousWaitMs: false = it is still there, this one must not start
+    static bool waitForPreviousProcess();
+    static constexpr int kPreviousWaitMs = 15 * 60 * 1000;
     static bool startupRecovery();
     // after the core has shut down: install a ready update (and start the new version after Restart
     // Now). Returns true when a new process was started.

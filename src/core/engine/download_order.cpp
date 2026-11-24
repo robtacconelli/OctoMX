@@ -217,7 +217,7 @@ PreviewFile Download::previewOf(int fileIndex, QString *path) const
             pf.done = pf.headBytes = pf.tailBytes = pf.size;
         } else {
             file = m_part ? m_part->path() : partPath();
-            const RangeSet disk = m_part ? m_part->persistable() : m_restoreHeld;
+            const RangeSet disk = m_part ? m_part->written() : m_restoreHeld;   // [safe-1] on disk (synced or not)
             pf.done = disk.total();
             pf.headBytes = disk.contains(0) ? disk.runEnd(0) : 0;
             if (pf.size > 0 && disk.contains(pf.size - 1)) {

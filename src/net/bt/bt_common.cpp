@@ -2,6 +2,7 @@
 // OctoMX: BitTorrent plugin internals: settings mapping, small helpers.
 #include "bt_common.h"
 #include "bt_pacing.h"
+#include "mx/durable_file.h"   // [safe-1]
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -390,11 +391,13 @@ bool writeFileAtomic(const QString &path, const QByteArray &data, QString *error
         return false;
     }
     f.write(data);
+    mx::durable::syncFile(f);   // [safe-1] the new content is on the disk before it replaces the old
     if (!f.commit()) {
         if (error)
             *error = f.errorString();
         return false;
     }
+    mx::durable::syncDir(QFileInfo(path).absolutePath());
     return true;
 }
 

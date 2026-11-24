@@ -9,6 +9,8 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QSaveFile>
 
+#include "mx/durable_file.h"
+
 namespace mx {
 
 JsonSettings::JsonSettings(const QString &filePath, QObject *parent)
@@ -125,6 +127,7 @@ void JsonSettings::sync()
         return;
     }
     f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    durable::syncFile(f);   // [safe-1] on the disk before it replaces the old file (a power cut)
     if (!f.commit()) {
         qCWarning(lcCore) << "cannot commit" << m_path << f.errorString();
         return;

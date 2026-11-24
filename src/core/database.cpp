@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/database.h"
 #include "core/log.h"
+#include "mx/durable_file.h"
 
 #include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QUuid>
 #include <QtSql/QSqlError>
@@ -119,6 +121,52 @@ int Database::latestSchemaVersion()
 bool Database::open(const QString &path, QString *error)
 {
     close();
+    m_recovered = NotNeeded;
+    QString why;
+    if (openOnce(path, &why) && healthy(&why)) return true;
+    // [safe-1] damaged: kept aside for a look, the last good copy comes back (the model: the settings
+    // file's .bak); a copy that fails too gives way to a new database
+    closeConnection(false);
+    const QString bad = path + QStringLiteral(".bad"), bak = path + QStringLiteral(".bak");
+    qCCritical(lcDb) << "the database" << path << "is damaged (" << why << "): kept as" << bad;
+    for (const QString &x : {QString(), QStringLiteral("-wal"), QStringLiteral("-shm")}) {
+        QFile::remove(bad + x);
+        QFile::rename(path + x, bad + x);
+    }
+    if (QFileInfo::exists(bak) && QFile::copy(bak, path)) {
+        QString why2;
+        if (openOnce(path, &why2) && healthy(&why2)) {
+            m_recovered = FromBackup;
+            qCWarning(lcDb) << "the database was restored from its last good copy" << bak;
+            return true;
+        }
+        closeConnection(false);
+        qCCritical(lcDb) << "the last good copy is damaged too (" << why2 << "): starting with a new database";
+        QFile::remove(path);
+    }
+    m_recovered = Fresh;
+    const bool ok = openOnce(path, error);
+    if (ok) qCWarning(lcDb) << "started a new database" << path;
+    return ok;
+}
+
+// [safe-1] PRAGMA quick_check: the pages and the structure, quick enough for every start
+bool Database::healthy(QString *why)
+{
+    QSqlQuery q(db());
+    if (!q.exec(QStringLiteral("PRAGMA quick_check")) || !q.next()) {
+        *why = q.lastError().text();
+        return false;
+    }
+    const QString r = q.value(0).toString();
+    if (r == QLatin1String("ok")) return true;
+    *why = r.left(200);
+    return false;
+}
+
+bool Database::openOnce(const QString &path, QString *error)
+{
+    closeConnection(false);
     m_path = path;
     m_conn = QStringLiteral("mxdb-main-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -134,7 +182,7 @@ bool Database::open(const QString &path, QString *error)
     }
     applyPragmas(db);
     if (!migrate(error)) {
-        close();
+        closeConnection(false);
         return false;
     }
     qCInfo(lcDb) << "opened" << path << "schema version" << schemaVersion();
@@ -149,12 +197,33 @@ bool Database::isOpen() const
 
 void Database::close()
 {
+    closeConnection(true);
+}
+
+void Database::closeConnection(bool backup)
+{
     if (m_conn.isEmpty()) return;
-    flush();
+    if (backup) flush();
     {
         QSqlDatabase db = QSqlDatabase::database(m_conn, false);
         if (db.isOpen()) {
-            QSqlQuery(db).exec(QStringLiteral("PRAGMA wal_checkpoint(TRUNCATE)"));
+            if (backup) {
+                QSqlQuery(db).exec(QStringLiteral("PRAGMA wal_checkpoint(TRUNCATE)"));
+                // [safe-1] the last good copy (a consistent snapshot, synced, then put in place)
+                const QString bak = m_path + QStringLiteral(".bak"), tmp = bak + QStringLiteral(".new");
+                QFile::remove(tmp);
+                QSqlQuery v(db);
+                v.prepare(QStringLiteral("VACUUM INTO ?"));
+                v.addBindValue(tmp);
+                if (v.exec() && durable::syncPath(tmp)) {
+                    QFile::remove(bak);
+                    QFile::rename(tmp, bak);
+                    durable::syncDir(QFileInfo(bak).absolutePath());
+                } else {
+                    qCWarning(lcDb) << "cannot write the database copy" << tmp << v.lastError().text();
+                    QFile::remove(tmp);
+                }
+            }
             db.close();
         }
     }
@@ -179,6 +248,10 @@ bool Database::migrate(QString *error)
     QSqlDatabase d = db();
     const int have = schemaVersion();
     const auto &steps = migrations();
+    if (have < 0) {   // [safe-1] not readable: not a database, or a damaged one
+        if (error) *error = QStringLiteral("cannot read the schema version: %1").arg(d.lastError().text());
+        return false;
+    }
     if (have > steps.size()) {
         qCWarning(lcDb) << "database schema" << have << "is newer than this build (" << steps.size()
                         << "); continuing read/write with known tables";

@@ -4,6 +4,9 @@
 mx_ui_test(tst_theme)
 if(MX_TEST_HOOKS)   # [upd-1] the self-update tests trust a throwaway key (MX_UPDATE_TEST_HOOKS)
     mx_ui_test(tst_update)
+    # [safe-1] 65 s on an idle machine, 130 s on the shared one under load (also on the code before
+    # safe-1): the default 120 s of the UI tests timed it out
+    set_tests_properties(ui_tst_update PROPERTIES TIMEOUT 600)
 endif()
 mx_ui_test(tst_nodashes)
 # the published source tree itself (tools/check-no-dashes.sh needs bash: not on a Windows host)

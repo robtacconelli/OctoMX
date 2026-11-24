@@ -57,7 +57,20 @@ public:
     ~DownloadEngine() override;
 
     void start();                 // restore the download list from the DB and resume work
-    void shutdown();              // persist everything; stop sources (≤ 2 s)
+    // [safe-1] the safe quit: beginShutdown() stops every source and starts writing and syncing what
+    // was received (returns at once); unsavedBytes() is what is still on its way to the disk;
+    // shutdown() waits until it is all synced (as long as it takes; a last resort of
+    // kShutdownCapMs for a hung disk, nothing after closeNow()), then stores the records. A record
+    // never claims what was not synced: what was not saved is downloaded again.
+    void beginShutdown();
+    qint64 unsavedBytes() const;
+    void closeNow();
+    void shutdown();
+    static constexpr int kShutdownCapMs = 10 * 60 * 1000;
+    // [safe-1] the last session did not end with shutdown() (a crash, a kill, a power cut): the
+    // downloads that hold data are checked before they are trusted (Download::checkFirst)
+    bool uncleanStart() const;
+    static QString runningMarkPath(const QString &profileDir);
     int knownSourceCount() const; // sum of known sources of all unfinished downloads
     int connectedSourceCount() const; // [engine-4] sources we exchange data / queue slots with (S=)
     // [engine-4] downloads without their source rows (cheap: search-hit flags, chat checks)

@@ -455,7 +455,18 @@ public:
     virtual QString profileDir() const = 0;
     virtual QString versionString() const = 0;                // MX_VERSION_STRING (title bar)
     virtual void start() = 0;                                 // load state, start enabled networks
-    virtual void shutdown() = 0;                              // save everything, stop networks (≤ 5 s)
+    virtual void shutdown() = 0;                              // save everything, stop networks
+    // [safe-1] the safe quit in steps, so the program can show "Closing: saving downloads...":
+    // beginShutdown() stops the transfers and starts writing and syncing what was received (returns
+    // at once); shutdownBusy() = something is still being saved, shutdownBytesLeft() = how much is
+    // still on its way to the disk (bytes); closeNow() = do not wait any more (what is not saved yet
+    // is downloaded again). shutdown() finishes (and waits for what is left unless closeNow()).
+    virtual void beginShutdown() {}
+    virtual bool shutdownBusy() const { return false; }
+    virtual qint64 shutdownBytesLeft() const { return 0; }
+    virtual void closeNow() {}
+    // [safe-1] the last session ended without the safe quit (a crash, a kill, a power cut)
+    virtual bool lastStopWasUnclean() const { return false; }
     virtual bool isMock() const { return false; }
     // [added by diag-1] the Connection Test service; nullptr = not available (old cores)
     virtual DiagnosticsService *diagnostics() { return nullptr; }

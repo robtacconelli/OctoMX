@@ -59,6 +59,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/upd1_tests.cmake OPTIONAL)
 # [bw-1] 4.3: speed limits one click away (Bandwidth page row, tray menu, title, schedule)
 include(${CMAKE_CURRENT_SOURCE_DIR}/bw1_tests.cmake OPTIONAL)
 
+# [safe-1] closing safely: the closing window, signals, slow disks, Close now
+include(${CMAKE_CURRENT_SOURCE_DIR}/safe1_tests.cmake OPTIONAL)
+
 # [dl-1] download order flags and Preview
 include(${CMAKE_CURRENT_SOURCE_DIR}/dl1_tests.cmake OPTIONAL)
 

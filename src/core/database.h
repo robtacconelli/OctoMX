@@ -25,8 +25,13 @@ public:
     explicit Database(QObject *parent = nullptr);
     ~Database() override;
 
-    bool open(const QString &path, QString *error = nullptr);  // creates + migrates
-    void close();                                               // flushes deferred writes
+    // creates + migrates. [safe-1] A damaged file (a torn write, a disk that lied, the file is not a
+    // database) is kept aside as <path>.bad and the last good copy (<path>.bak, written by every
+    // close()) is taken instead, else a new database: recovered() says what happened.
+    bool open(const QString &path, QString *error = nullptr);
+    void close();                                               // flushes deferred writes; [safe-1] refreshes <path>.bak
+    enum Recovery { NotNeeded = 0, FromBackup = 1, Fresh = 2 };
+    Recovery recovered() const { return m_recovered; }
     bool isOpen() const;
     QString path() const { return m_path; }
     QSqlDatabase db() const;                                    // main-thread connection
@@ -53,6 +58,10 @@ signals:
 
 private:
     bool migrate(QString *error);
+    bool openOnce(const QString &path, QString *error);   // [safe-1]
+    bool healthy(QString *why);
+    void closeConnection(bool backup);
+    Recovery m_recovered = NotNeeded;
     QString m_path;
     QString m_conn;
     QList<std::function<void(QSqlDatabase &)>> m_pending;

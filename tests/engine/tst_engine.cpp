@@ -168,7 +168,9 @@ void TstEngine::slowSourceReplaced()
 {
     Env env(QStringLiteral("slow"));
     auto *http = env.addPlugin(Net::Http, NetworkPlugin::CanFetchRanges);
-    const QByteArray data = randomBytes(6 * 1024 * 1024, 3);
+    // [safe-1] 12 MiB (was 6): the download outlasts the slow detection (slowForMs + slowHoldMs) even
+    // on a fast run, so the slow source is always replaced, not just outrun (failed under load)
+    const QByteArray data = randomBytes(12 * 1024 * 1024, 3);
     SourceConfig fast, slow;
     fast.data = slow.data = data;
     fast.bytesPerSec = 3 << 20;

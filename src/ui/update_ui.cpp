@@ -10,6 +10,7 @@
 #include <QtCore/QLocale>
 #include <QtCore/QProcess>
 #include <QtCore/QThread>
+#include <QtCore/QThreadPool>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
@@ -995,24 +996,30 @@ QString UpdateController::justUpdatedTo()
     return g_updatedTo;
 }
 
-void UpdateController::waitForPreviousProcess()
+bool UpdateController::waitForPreviousProcess()
 {
     const qint64 pid = qEnvironmentVariable("MX_UPDATE_WAIT_PID").toLongLong();
     qunsetenv("MX_UPDATE_WAIT_PID");
     if (pid <= 0 || pid == QCoreApplication::applicationPid())
-        return;
+        return true;
     QElapsedTimer t;
     t.start();
+    bool gone = true;
 #ifdef Q_OS_WIN
     if (HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, DWORD(pid))) {
-        WaitForSingleObject(h, 60000);
+        gone = WaitForSingleObject(h, DWORD(kPreviousWaitMs)) != WAIT_TIMEOUT;
         CloseHandle(h);
     }
 #else
-    while (t.elapsed() < 60000 && !(::kill(pid_t(pid), 0) == -1 && errno == ESRCH))
+    while (!(gone = ::kill(pid_t(pid), 0) == -1 && errno == ESRCH) && t.elapsed() < kPreviousWaitMs)
         QThread::msleep(50);
 #endif
-    g_waited = QStringLiteral("waited %1 ms for the previous OctoMX (pid %2) to end").arg(t.elapsed()).arg(pid);
+    g_waited = gone ? QStringLiteral("waited %1 ms for the previous OctoMX (pid %2) to end").arg(t.elapsed()).arg(pid)
+                    : QStringLiteral("the previous OctoMX (pid %1) is still running after %2 s: not starting a second one")
+                          .arg(pid).arg(t.elapsed() / 1000);
+    if (!gone)
+        qWarning("octomx: update: %s", qPrintable(g_waited));
+    return gone;
 }
 
 bool UpdateController::startupRecovery()
@@ -1068,9 +1075,15 @@ bool UpdateController::finishOnExit()
         return false;
     const Pending p = g_pending;
     g_pending = Pending();
-    qInfo("octomx: update: installing OctoMX %s into %s", qPrintable(p.version), qPrintable(QDir::toNativeSeparators(p.plan.programDir)));
+    // [safe-1] the core is gone (every download written and synced, every network thread joined);
+    // helpers of the process that may still run (hashing on the shared pool) finish first: no file
+    // of the program is replaced while anything of the old one still works
     QString err;
-    if (!mx::upd::swapInstall(p.plan, &err)) {
+    if (!QThreadPool::globalInstance()->waitForDone(120000))
+        err = QStringLiteral("a task of the old version did not end");
+    else
+        qInfo("octomx: update: installing OctoMX %s into %s", qPrintable(p.version), qPrintable(QDir::toNativeSeparators(p.plan.programDir)));
+    if (!err.isEmpty() || !mx::upd::swapInstall(p.plan, &err)) {
         qWarning("octomx: update: OctoMX %s was not installed: %s", qPrintable(p.version), qPrintable(err));
         const QString text = QObject::tr("OctoMX %1 could not be installed: %2").arg(displayVersion(p.version), err);
         if (s_messageHook) {

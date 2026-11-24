@@ -79,6 +79,12 @@ public:
     void init(const Config &cfg, const QStringList &userNodes, const QStringList &userTrackers);
     void goOnline(const Config &cfg);
     void goOffline(int timeoutMs);                 // save everything, then take the session offline
+    // [safe-1] the safe quit, first step: the session stops transferring, every torrent's resume
+    // data is requested (written after its files were synced); no wait. quitSaving() (any thread):
+    // requests of this step are still outstanding
+    void beginOffline();
+    bool quitSaving() const { return m_quitSaving.load(); }
+    void armQuitSaving() { m_quitSaving = true; }   // any thread: beginOffline() was posted
     void teardown(int timeoutMs);                  // save everything + destroy the session
     void applyConfig(const Config &cfg);
     void setRateLimits(int downBps, int upBps);
@@ -223,6 +229,7 @@ private:
     std::unique_ptr<lt::session> m_ses;
     Config m_cfg;
     bool m_online = false;
+    std::atomic<bool> m_quitSaving{false};   // [safe-1]
     int m_port = 0;              // configured/derived port for listen_interfaces
     int m_downBps = 0, m_upBps = 0;
     QStringList m_userNodes, m_userTrackers;
