@@ -174,9 +174,27 @@ class TstSet1Colors : public QObject {
         emit m_app.core->chat()->messageReceived(m);
     }
 
-    // Every row of a list, also the ones below the visible part (a small screen makes the main
-    // window short): the viewport page by page, stacked into one picture.
-    static QImage grabAllRows(MxListView *lv)
+    // Every row of a list, also the ones below the visible part (a small screen makes the windows
+    // short): the viewport page by page, stacked into one picture.
+    static QImage stacked(const QList<QImage> &parts)
+    {
+        if (parts.size() == 1) return parts.first();
+        int w = 0, h = 0;
+        for (const QImage &p : parts) {
+            w = qMax(w, p.width());
+            h += p.height();
+        }
+        QImage all(w, h, QImage::Format_ARGB32);
+        all.fill(parts.first().pixelColor(0, 0));
+        QPainter pt(&all);
+        int y = 0;
+        for (const QImage &p : parts) {
+            pt.drawImage(0, y, p);
+            y += p.height();
+        }
+        return all;
+    }
+    static QImage grabAllRows(QAbstractItemView *lv)
     {
         QScrollBar *sb = lv->verticalScrollBar();
         const int keep = sb->value();
@@ -189,18 +207,7 @@ class TstSet1Colors : public QObject {
         }
         sb->setValue(keep);
         QCoreApplication::processEvents();
-        if (parts.size() == 1) return parts.first();
-        int h = 0;
-        for (const QImage &p : std::as_const(parts)) h += p.height();
-        QImage all(parts.first().width(), h, QImage::Format_ARGB32);
-        all.fill(parts.first().pixelColor(0, 0));
-        QPainter pt(&all);
-        int y = 0;
-        for (const QImage &p : std::as_const(parts)) {
-            pt.drawImage(0, y, p);
-            y += p.height();
-        }
-        return all;
+        return stacked(parts);
     }
 
     QImage render(Scene s)
@@ -277,7 +284,11 @@ class TstSet1Colors : public QObject {
         if (!w) return {};
         QCoreApplication::processEvents();
         if (auto *lv = qobject_cast<MxListView *>(w)) return grabAllRows(lv);
-        return w->grab().toImage();
+        // a window: itself, then every row of its lists (a screen lower than the window cuts them)
+        QList<QImage> parts{w->grab().toImage()};
+        if (s == ScConnTest)
+            for (QTreeView *v : w->findChildren<QTreeView *>()) parts << grabAllRows(v);
+        return stacked(parts);
     }
 
     // the scenes where `key` must show, and the ones where it must not; empty = nothing to check
