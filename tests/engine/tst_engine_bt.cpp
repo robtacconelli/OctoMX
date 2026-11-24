@@ -334,8 +334,13 @@ void TstEngineBt::order(bool sequential)
         qInfo("libtorrent sequential: %lld bytes in %d ranges, first [%lld, %lld), piece %lld", have, int(h.size()),
               h.value(0).first, h.value(0).second, L);
         QCOMPARE(h.value(0).first, qint64(0));
-        // complete pieces form a prefix, up to the pieces libtorrent has in flight
-        QVERIFY2(h.last().second - have <= 24 * L, "pieces far ahead of the prefix");
+        // complete pieces form a prefix, up to the pieces libtorrent has in flight. [net-3] The seed's upload
+        // slots count peers of this computer now (LAN peers used to be unchoked at once): until the seed's
+        // first unchoke round the downloader is choked and may fetch its "allowed fast" pieces (BEP 6, a
+        // fixed set chosen by address, anywhere in the file). So: what lies outside the prefix stays small
+        QString ranges;
+        for (const auto &x : h) ranges += QStringLiteral(" [%1, %2)").arg(x.first).arg(x.second);
+        QVERIFY2(have - h.first().second <= 24 * L, qPrintable(QStringLiteral("too much outside the prefix:") + ranges));
     } else {
         // [eng-1] when the order reached libtorrent (bytes already there) and when the bands were done
         QElapsedTimer clock;

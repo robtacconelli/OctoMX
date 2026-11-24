@@ -13,6 +13,8 @@
 #include "ovl_util.h"
 #include "rats_node.h"
 
+#include "mx/upload_slots.h"
+
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
@@ -122,6 +124,7 @@ public:
     UserRef localUser() const override;
     bool isUserOnline(const UserRef &u) const override;
     void setHotlist(const QList<UserRef> &users) override;
+    void setIgnored(const QList<UserRef> &users) override;   // [net-3]
     void connectPeer(const QString &hostPort) override;
 
     // ---- tests / probes
@@ -191,10 +194,18 @@ public:
     PluginContext &ctx() { return m_ctx; }
     const OverlayTimings &timings() const { return m_t; }
     bool onHotlist(const QString &userId) const { return m_hotlist.contains(userId); }
+    bool isIgnoredUser(const QString &userId) const;   // [net-3] on the user's ignore list (by key or by name)
     QString displayName() const { return m_displayName; }
     QString connectionLabel() const;
     int freeSlots() const;
     int totalSlots() const;
+    // [net-3] the shared pool (transfers/maxUploads over the OctoMX network, eD2k and Gnutella) when
+    // the core gives one, else this network's own count
+    bool slotFree();
+    void takeSlot(UploadSession *s, bool forced);
+    void giveBackSlot(UploadSession *s);
+    void reportWaiting();
+    QPointer<UploadSlots> m_slots;
     UserRef userRefFor(const QString &userId) const;
     void unregisterSource(quint32 sid);
 
@@ -396,6 +407,8 @@ private:
     QHash<QString, UserInfo> m_users;         // user id → info
     QHash<QString, QString> m_nodeUser;       // node id → user id (verified by hello)
     QSet<QString> m_hotlist;
+    QSet<QString> m_ignoredIds;               // [net-3] ignored user keys (lower case hex)
+    QStringList m_ignoredNames;               // [net-3] entries added by name only (/ignore Bob)
     struct Pending { QByteArray bytes; qint64 expiresMs; std::function<void(bool)> done; };
     QHash<QString, QList<Pending>> m_pending; // node id → messages waiting for connect + hello
     RateGate m_peerGate{50.0, 200.0};

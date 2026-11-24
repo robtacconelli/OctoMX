@@ -180,7 +180,7 @@ void Form::endGroup()
 static QString checkTip(const QString &key)
 {
     static const QHash<QString, const char *> tips = {
-        {QString(overlay::Relay), QT_TR_NOOP("Pass connections on for users who cannot accept incoming ones, so they can chat and download too. Uses a little upload bandwidth.")},
+        {QString(overlay::Relay), QT_TR_NOOP("Pass connections on for users who cannot accept incoming ones, so they can chat and download too. Uses a little upload bandwidth. Applies when the OctoMX network connects again.")},
         {QString(overlay::ShareHashLinks), QT_TR_NOOP("Tell the OctoMX Peer Network which other hashes (eD2k, BitTorrent, SHA-1) belong to files you have, so others find more sources.")},
         {QString(queue::HotlistPriority), QT_TR_NOOP("On the OctoMX Peer Network, users on your Hotlist are put in front of the upload queue.")},
         {QString(transfers::UploadsToHotlistOnly), QT_TR_NOOP("On the OctoMX Peer Network, only users on your Hotlist may download from you; everyone else is refused.")},

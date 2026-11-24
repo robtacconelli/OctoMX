@@ -151,10 +151,11 @@ private slots:
 
     // [set-1] the settings of these groups are proven by a behaviour test each (no "reader" smoke
     // check), never by a test that only stores, migrates or round-trips the value
-    void ownedGroupsHaveBehaviourTests()
+    // [set-1] for its groups, [net-3] for every group: each visible key that is not internal state is
+    // proven by a behaviour test (the key is set and its effect observed); a reader, a test that only
+    // stores / migrates / round-trips the value, or a live probe tool that ctest never runs is no proof
+    void everyKeyHasABehaviourTest()
     {
-        static const QStringList groups = {"identity", "ui", "colors", "chat", "messages", "hotlist", "library", "search",
-                                           "transfers", "queue", "launch", "misc", "diag", "updates", "other"};
         // test functions that store, migrate, coerce or reset a value: they prove no effect
         static const QStringList weak = {"schemaIsConsistent", "coercion", "jsonRoundTrip", "debouncedSave", "roundTrip",
                                          "resetDefaults", "hiddenSchemaEntries", "schemaHasTheBatch", "specDefaults",
@@ -165,17 +166,20 @@ private slots:
         int n = 0;
         for (const mxreg::Proof &p : mxreg::kProofs) {
             const QString key = QString::fromLatin1(p.key), kind = QString::fromLatin1(p.kind);
-            if (!groups.contains(key.section(QLatin1Char('/'), 0, 0)) || kind == QLatin1String("internal"))
+            if (kind == QLatin1String("internal"))
                 continue;
             ++n;
+            const QString file = QString::fromLatin1(p.file);
             if (kind != QLatin1String("test"))
                 errors << QStringLiteral("%1: only a reader proof; add a behaviour test").arg(key);
             else if (weak.contains(QString::fromLatin1(p.what)))
                 errors << QStringLiteral("%1: %2 only stores or migrates the value").arg(key, QString::fromLatin1(p.what));
+            else if (!file.section(QLatin1Char('/'), -1).startsWith(QLatin1String("tst_")) || !file.endsWith(QLatin1String(".cpp")))
+                errors << QStringLiteral("%1: %2 is a probe tool or a helper, not a test ctest runs").arg(key, file);
         }
         errors.sort();
         QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QLatin1Char('\n'))));
-        QVERIFY(n > 240);
+        QVERIFY(n > 350);
     }
 
     // a key taken off the UI stays off it; every key of a page has a hand-written tool tip

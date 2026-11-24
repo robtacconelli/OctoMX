@@ -36,6 +36,7 @@ struct RatsNodeConfig {
     // discovery / connectivity subsystems
     bool    dht = true;                // mainline-DHT rendezvous on SHA1(protocol)
     quint16 dhtPort = 0;
+    bool    stun = true;               // [net-3] the DHT asks public STUN servers for the outside address (tests: off)
     QStringList dhtBootstrap;          // "host:port"; empty = librats' default internet routers
     int     dhtSearchIntervalMs = 30000;
     bool    mdns = true;               // LAN discovery

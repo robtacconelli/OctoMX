@@ -238,6 +238,43 @@ void GnutellaPlugin::setSharedFiles(const QList<mx::SharedFile> &files)
     }
     rebuildShareIndex();
     scheduleQrpUpdate();
+    dropUnshared();
+}
+
+// [net-3] a file that left the shares: a running upload of it stops (the row says why) and its
+// queued clients leave the queue; query answers, browse and requests by hash already use the new list
+void GnutellaPlugin::dropUnshared()
+{
+    QSet<QString> paths;
+    for (const mx::SharedFile &f : std::as_const(m_shared)) paths.insert(f.path);
+    auto stillShared = [this, &paths](const QByteArray &sha1, const QString &path) {
+        mx::SharedFile f;
+        if (sha1.size() == 20) return sharedBySha1(sha1, &f);   // the library also serves a running download
+        return paths.contains(path);
+    };
+    const QList<UploadSession *> sessions = m_sessions.values();
+    for (UploadSession *s : sessions) {
+        // a session whose last request was the file (sending, or between requests on a kept connection)
+        if (s->file().path.isEmpty() && s->file().hashes.sha1.isEmpty()) continue;
+        if (!stillShared(s->file().hashes.sha1, s->file().path)) {
+            log(QStringLiteral("upload of %1 stopped: no longer shared").arg(s->file().name));
+            s->stopNotShared();
+        }
+    }
+    bool changed = false;
+    for (int i = int(m_uploadQueue.size()) - 1; i >= 0; --i) {
+        const QByteArray id = QByteArray::fromHex(m_uploadQueue[i].key.section(QLatin1Char('/'), 1).toLatin1());
+        const bool kept = id.size() == 20 ? stillShared(id, QString()) : paths.contains(QString::fromUtf8(id));
+        if (kept) continue;
+        const QueueEntry e = m_uploadQueue.takeAt(i);
+        if (e.session && e.session->uploadId() == e.uploadId) e.session->stopNotShared();
+        else if (!e.uploadId.isEmpty()) reportUploadFinished(e.uploadId);
+        changed = true;
+    }
+    if (changed) {
+        for (QueueEntry &o : m_uploadQueue) o.reportedRank = -1;
+        reportUploadQueue();
+    }
 }
 
 void GnutellaPlugin::rebuildShareIndex()
@@ -314,7 +351,7 @@ QList<QByteArray> GnutellaPlugin::browsePackets()
     HitTrailer t;
     t.serventGuid = m_guid;
     t.firewalled = firewalled();
-    t.busy = m_slotHolders.size() >= uploadSlots();
+    t.busy = slotsBusy();
     t.uploaded = m_uploadsDone > 0;
     t.browseHost = true;
     t.tls = tlsAdvertised();   // [enc-1]
@@ -381,7 +418,7 @@ void GnutellaPlugin::onQuery(UltrapeerConnection *c, const Message &m)
     HitTrailer t;
     t.serventGuid = m_guid;
     t.firewalled = firewalled();
-    t.busy = m_slotHolders.size() >= uploadSlots();
+    t.busy = slotsBusy();
     t.uploaded = m_uploadsDone > 0;
     t.browseHost = browseAllowed(HostPort());
     t.tls = tlsAdvertised();   // [enc-1]
@@ -487,7 +524,10 @@ int GnutellaPlugin::acquireSlot(UploadSession *s, const QString &key, const QStr
     for (int i = 0; i < m_uploadQueue.size(); ++i)
         if (m_uploadQueue[i].key == key || (!parqId.isEmpty() && m_uploadQueue[i].id == parqId)) { pos = i; break; }
     const int nslots = uploadSlots();
-    const int free = nslots - int(m_slotHolders.size());
+    mx::UploadSlots *pool = slotPool();   // [net-3] one total with the OctoMX network and eD2k
+    const int pollSec = qBound(1, setting(QStringLiteral("gnutella/uploadQueuePollSec"), 30).toInt(), 40);
+    if (pool) pool->setWaiting(mx::Net::Gnutella, int(m_uploadQueue.size()) + (pos < 0 ? 1 : 0), (pollSec + 10) * 1000);
+    const int free = pool ? (nslots > 0 ? pool->available(mx::Net::Gnutella) : 0) : nslots - int(m_slotHolders.size());
     const bool forced = pos >= 0 && m_uploadQueue[pos].forced;   // [glue-3] "Start Transfer"
     if (forced || (free > 0 && (pos < 0 ? m_uploadQueue.size() < free : pos < free))) {
         if (pos >= 0) {
@@ -497,6 +537,10 @@ int GnutellaPlugin::acquireSlot(UploadSession *s, const QString &key, const QStr
             changed = true;
         }
         m_slotHolders.insert(s);
+        if (pool) {
+            pool->acquire(mx::Net::Gnutella, QStringLiteral("gnut-%1").arg(quintptr(s)), true);
+            pool->setWaiting(mx::Net::Gnutella, int(m_uploadQueue.size()), (pollSec + 10) * 1000);
+        }
         if (changed) reportUploadQueue();
         return 1;
     }
@@ -601,6 +645,7 @@ bool GnutellaPlugin::setUploadPriority(const QString &uploadId, int priority)
 void GnutellaPlugin::releaseSlot(UploadSession *s)
 {
     if (m_slotHolders.remove(s)) ++m_uploadsDone;
+    if (m_ctx.uploadSlots) m_ctx.uploadSlots->release(QStringLiteral("gnut-%1").arg(quintptr(s)));   // [net-3]
     for (int i = int(m_uploadQueue.size()) - 1; i >= 0; --i)
         if (m_uploadQueue[i].session == s && m_uploadQueue[i].session) { /* keep: PARQ clients reconnect */ }
 }

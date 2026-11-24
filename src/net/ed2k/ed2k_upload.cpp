@@ -351,19 +351,70 @@ void UploadManager::onStartUpload(PeerConnection *pc, const QByteArray &hash)
     }
 }
 
+void UploadManager::sharedFilesChanged()
+{
+    QStringList gone;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        if (it->fileHash.size() != 16 || it->partial) continue;   // a running download is served from its verified parts
+        if (!lookupFile(it->fileHash, nullptr)) gone << it.key();
+    }
+    for (const QString &k : std::as_const(gone)) {
+        auto it = m_clients.find(k);
+        if (it == m_clients.end()) continue;
+        Client &c = *it;
+        if (c.pc && c.pc->isOpen() && c.pc->handshakeDone()) sendNoFile(c.pc, c.fileHash);
+        if (c.uploading) {
+            ++c.counter;   // a block read in flight is dropped
+            c.endText = QStringLiteral("Stopped: the file is no longer shared");
+            endSession(c, QStringLiteral("file no longer shared"), false);
+        } else {
+            m_core->log(QStringLiteral("queued client %1 dropped: %2 is no longer shared").arg(c.key, c.file.name));
+            dropClient(k);
+        }
+    }
+    if (!gone.isEmpty()) {
+        reportQueue();
+        process();
+    }
+}
+
+void UploadManager::slotsFreed()
+{
+    process();
+}
+
+bool UploadManager::slotFree()
+{
+    if (mx::UploadSlots *p = m_core->slotPool()) return p->available(mx::Net::ED2K) > 0;
+    return activeUploads() < m_core->uploadSlots();
+}
+
+void UploadManager::reportWaiting()
+{
+    mx::UploadSlots *p = m_core->slotPool();
+    if (!p) return;
+    // a client that is connected, or that we can call back (HighID), can start now; a LowID client
+    // that is not connected only when it asks again (eMule: every half hour)
+    int n = 0;
+    for (const QString &k : std::as_const(m_waiting)) {
+        auto it = m_clients.constFind(k);
+        if (it == m_clients.cend()) continue;
+        if ((it->pc && it->pc->isOpen() && it->pc->handshakeDone()) || (!it->lowId && it->ip && it->port)) ++n;
+    }
+    p->setWaiting(mx::Net::ED2K, n, int(m_core->peerConnectTimeoutMs()) + 10000);
+}
+
 void UploadManager::process()
 {
-    const int nSlots = m_core->uploadSlots();
-    int active = activeUploads();
+    reportWaiting();
     for (int idx = 0; idx < m_waiting.size();) {
         const QString key = m_waiting[idx];
         auto it = m_clients.find(key);
         if (it == m_clients.end()) { m_waiting.removeAt(idx); continue; }
         Client &c = *it;
-        if (active >= nSlots && !c.forced) { ++idx; continue; }   // [glue-3] forced: "Start Transfer"
+        if (!c.forced && !slotFree()) { ++idx; continue; }   // [glue-3] forced: "Start Transfer"
         if (c.pc && c.pc->isOpen() && c.pc->handshakeDone()) {
             startSession(c);        // removes from m_waiting
-            ++active;
             continue;
         }
         if (!c.lowId && c.ip && c.port && !c.connectingBack) {
@@ -392,7 +443,7 @@ void UploadManager::peerConnected(PeerConnection *pc)
     if (it->connectingBack || it->addNextConnect) {
         it->connectingBack = false;
         m_core->log(QStringLiteral("queued client %1 is back").arg(pc->describe()));
-        if (activeUploads() < m_core->uploadSlots() || it->forced) startSession(*it);
+        if (it->forced || slotFree()) startSession(*it);
     }
 }
 
@@ -434,6 +485,7 @@ static bool alreadyCompressed(const QString &name)
 void UploadManager::startSession(Client &c)
 {
     m_waiting.removeAll(c.key);
+    if (mx::UploadSlots *p = m_core->slotPool()) p->acquire(mx::Net::ED2K, c.key, true);   // [net-3] checked by the caller
     c.uploading = true;
     c.addNextConnect = false;
     c.connectingBack = false;
@@ -483,6 +535,7 @@ void UploadManager::endSession(Client &c, const QString &why, bool requeue)
     const QString key = c.key;
     if (c.uploading) {
         c.uploading = false;
+        if (m_core->ctx().uploadSlots) m_core->ctx().uploadSlots->release(key);   // [net-3]
         c.blocks.clear();
         if (c.pc) {
             c.pc->conn()->clearDataQueue();
@@ -637,10 +690,11 @@ mx::TransferInfo UploadManager::info(const Client &c) const
     t.rateUpBps = c.rateBps;
     const int rank = c.uploading ? -1 : int(m_waiting.indexOf(c.key)) + 1;
     t.state = c.uploading ? mx::TransferState::Transferring
-                          : rank > 0 ? mx::TransferState::Queued : mx::TransferState::Completed;
+                          : rank > 0 ? mx::TransferState::Queued
+                          : !c.endText.isEmpty() ? mx::TransferState::Error : mx::TransferState::Completed;
     t.statusText = c.uploading ? QStringLiteral("Uploading")
                    : rank > 0  ? QStringLiteral("Queued (position %1 of %2)").arg(rank).arg(m_waiting.size())
-                               : QStringLiteral("Finished");
+                   : !c.endText.isEmpty() ? c.endText : QStringLiteral("Finished");
     t.priority = c.priority;
     t.queuePosition = rank > 0 ? rank : 0;
     t.hashes = c.file.hashes;
@@ -709,6 +763,7 @@ void UploadManager::enqueue(Client &c)
     c.reportedRank = -1;
     sortWaiting();
     reportQueue();
+    reportWaiting();
 }
 
 void UploadManager::sortWaiting()
@@ -733,8 +788,10 @@ void UploadManager::reportQueue()
 void UploadManager::dropClient(const QString &key)
 {
     m_waiting.removeAll(key);
+    reportWaiting();
     auto it = m_clients.find(key);
     if (it == m_clients.end()) return;
+    if (it->uploading && m_core->ctx().uploadSlots) m_core->ctx().uploadSlots->release(key);   // [net-3]
     const QString id = it->uploading ? QString() : it->uploadId;
     m_clients.erase(it);
     if (!id.isEmpty()) emit m_core->uploadFinished(id);   // the core removes a row that was only queued

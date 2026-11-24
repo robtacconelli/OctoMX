@@ -74,7 +74,11 @@ void Ed2kCore::init(const mx::PluginContext &ctx)
         connect(m_servers, &ServerManager::log, this, &Ed2kCore::log);
         connect(m_servers, &ServerManager::serverMessage, this, &Ed2kCore::serverMessage);   // [glue-2]
     }
-    if (!m_uploads) m_uploads = new UploadManager(this);
+    if (!m_uploads) {
+        m_uploads = new UploadManager(this);
+        if (m_ctx.uploadSlots)   // [net-3] a slot of the shared pool came free: the queue may move
+            connect(m_ctx.uploadSlots, &mx::UploadSlots::slotsFreed, m_uploads, [u = m_uploads] { u->slotsFreed(); });
+    }
     m_servers->load();
     loadState();
 }
@@ -108,6 +112,11 @@ qint64 Ed2kCore::peerConnectTimeoutMs() const
 {
     // [net-2] "Connection attempts timeout after" (Internet Connection, Outgoing) for eD2k peers too
     return qint64(qBound(5, m_cfg.i(QStringLiteral("connection/connectTimeoutSec"), 25), 300)) * 1000;
+}
+
+mx::UploadSlots *Ed2kCore::slotPool() const
+{
+    return m_ctx.uploadSlots && m_cfg.i(QStringLiteral("ed2k/uploadSlots"), 0) <= 0 ? m_ctx.uploadSlots : nullptr;
 }
 
 int Ed2kCore::uploadSlots() const
@@ -691,6 +700,7 @@ void Ed2kCore::setSharedFiles(const QList<mx::SharedFile> &files)
     for (const mx::SharedFile &f : files)
         if (f.hashes.ed2k.size() == 16 && f.size > 0) m_shared.insert(f.hashes.ed2k, f);
     if (m_servers) m_servers->publishFiles(m_shared.values());
+    if (m_uploads) m_uploads->sharedFilesChanged();   // [net-3] nothing more of a file that left the shares
 }
 
 bool Ed2kCore::sharedFile(const QByteArray &ed2k, mx::SharedFile *out) const

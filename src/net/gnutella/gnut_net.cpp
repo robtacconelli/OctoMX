@@ -411,7 +411,9 @@ void GnutellaPlugin::pingUhc(const QString &hostPort)
         for (const QHostAddress &a : info.addresses()) {
             if (a.protocol() != QAbstractSocket::IPv4Protocol) continue;
             const quint32 ip = a.toIPv4Address();
-            if (!isRoutableIp(ip)) continue;                       // e.g. 0.0.0.0 for a parked name
+            // e.g. 0.0.0.0 for a parked name; [net-3] a cache on the own network (private / loopback) is
+            // asked as well: the user entered it
+            if (!isRoutableIp(ip) && !isPrivateIp(ip)) continue;
             Message m = Message::make(MsgPing, buildUhcPingPayload(), 1);
             self->m_uhcPings.insert(m.guid, hostPort);
             if (self->m_uhcPings.size() > 64) self->m_uhcPings.erase(self->m_uhcPings.begin());

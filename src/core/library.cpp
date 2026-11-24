@@ -361,7 +361,7 @@ void Library::unshareFile(const QString &path)
         }
     }
     m_hashQueue.removeIf([&](const QString &q) { return isUnder(q, p); });
-    scheduleUpdate();
+    pushRemovalNow();
 }
 
 // [ui-j] deleted from the disk (Shared Files ▸ Delete File...): gone from the index at once, no exclusion
@@ -388,7 +388,7 @@ void Library::forgetPaths(const QStringList &paths)
         }
     }
     m_hashQueue.removeIf([&](const QString &q) { return gone(q); });
-    scheduleUpdate();
+    pushRemovalNow();
 }
 
 void Library::reshareFile(const QString &path)
@@ -600,6 +600,7 @@ void Library::onScanDone()
     QSet<QString> found;
     QStringList toQueue;
     int cachedCount = 0;
+    int removed = 0;   // [net-3] files that left the shares
     {
         QWriteLocker l(&m_lock);
         for (const ScanItem &item : std::as_const(r->items)) {
@@ -639,6 +640,7 @@ void Library::onScanDone()
             if (it->shared && !found.contains(it.key())) {
                 unindexLocked(*it);
                 it = m_entries.erase(it);
+                ++removed;
             } else {
                 ++it;
             }
@@ -655,7 +657,8 @@ void Library::onScanDone()
     qCInfo(lcLibrary) << "scan done:" << r->items.size() << "files," << cachedCount << "from cache,"
                       << toQueue.size() << "to hash," << r->stale.size() << "stale cache rows";
     delete r;
-    scheduleUpdate();
+    if (removed > 0 && m_started) pushRemovalNow();
+    else scheduleUpdate();
     if (m_rescanPending) {
         startScan();
         return;
@@ -922,6 +925,16 @@ QString Library::scanStatus() const
         return QStringLiteral("Hashing %1 of %2: %3").arg(qMin(m_hashDone + 1, m_hashTotal)).arg(m_hashTotal).arg(m_current);
     if (m_scanning) return QStringLiteral("Scanning shared folders...");
     return QStringLiteral("Sharing %1 (%2)").arg(countNoun(fileCount(), QStringLiteral("file"))).arg(humanSize(totalBytes()));
+}
+
+// [net-3] additions wait for the next push (at most one every 2 s); a removal is sent at once, so
+// no network goes on offering a file that is no longer shared
+void Library::pushRemovalNow()
+{
+    if (!m_updateTimer.isActive()) m_updateTimer.start();
+    m_pushTimer.stop();
+    emit sharedFilesUpdated(sharedFiles());
+    m_pushTimer.start();   // the next push (additions) not before 2 s
 }
 
 void Library::scheduleUpdate()

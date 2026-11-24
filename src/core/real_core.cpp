@@ -20,6 +20,7 @@
 #include "mx/app_paths.h"
 #include "mx/legacy_names.h"
 #include "mx/settings_keys.h"
+#include "mx/upload_slots.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
@@ -106,6 +107,7 @@ RealCore::RealCore(const QString &profileDir, const QList<NetworkPlugin *> &plug
     m_library = new Library(m_settings, m_db, this);
     m_library->setSuggestHomeFolders(!isolated);
     m_network = new NetworkManager(m_settings, plugins, this);
+    m_network->setUploadSlots(new UploadSlots(m_settings, this));   // [net-3] transfers/maxUploads: one total
     m_search = new SearchManager(m_settings, m_network, m_userDao, this);
     m_uploads = new UploadTracker(m_settings, this);
     m_uploads->setLibrary(m_library);

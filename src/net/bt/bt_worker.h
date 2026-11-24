@@ -88,6 +88,11 @@ public:
     void addTorrent(const AddRequest &req);
     void mergeTrackers(const QString &id, const std::vector<std::string> &trackers);
     void removeTorrent(const QString &id, bool deleteFiles);
+    // [net-3] the upload rows of a torrent end now with this reason (it stops being offered)
+    void endUploads(const QString &id, const QString &why);
+    // [net-3] the Library's shared files (canonical paths): a finished torrent whose shared file left
+    // the list stops seeding ("not shared"), and seeds again once all of them are back
+    void applySharing(const QSet<QString> &sharedPaths);
     void pauseTorrent(const QString &id);
     void resumeTorrent(const QString &id);
     void setWantedFiles(const QString &id, const QList<int> &indexes);
@@ -141,6 +146,8 @@ private:
         bool torrentFileWritten = false;
         bool removing = false;
         bool deleteFiles = false;
+        bool sharingChecked = false;     // [net-3] compared with the last shared list
+        qint64 lastSeedLookMs = 0;       // [net-3] status refreshed for the seeding time limit
         QList<TransferSource> sources;
         QList<TransferSource> channels;  // [engine-4] DHT / trackers / PEX / web seeds (TorrentSnapshot::channels)
         QList<TransferSource> trackerRows;
@@ -215,6 +222,9 @@ private:
     int m_downBps = 0, m_upBps = 0;
     QStringList m_userNodes, m_userTrackers;
     std::map<QString, Torrent> m_t;
+    QSet<QString> m_sharedPaths;   // [net-3] the last shared list (canonical paths)
+    bool m_haveSharing = false;
+    void checkSharing(Torrent &t);
     std::unordered_map<lt::torrent_handle, QString> m_byHandle;
     std::map<QString, UpRow> m_up;
     std::atomic<bool> m_alertsPending{false};

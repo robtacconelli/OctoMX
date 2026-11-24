@@ -11,8 +11,10 @@
 #include <QtCore/QSaveFile>
 #include <QtNetwork/QHostAddress>
 
+#include <libtorrent/add_torrent_params.hpp>
 #include <libtorrent/alert.hpp>
 #include <libtorrent/fingerprint.hpp>
+#include <libtorrent/torrent_info.hpp>
 #include <libtorrent/version.hpp>
 
 #include "mx/net_policy.h"
@@ -116,6 +118,10 @@ QVariantMap Record::toVariant() const
         m.insert(QStringLiteral("seededPath"), seededPath);
     if (seedLimitReached)
         m.insert(QStringLiteral("seedLimitReached"), true);
+    if (!sharedFiles.isEmpty())
+        m.insert(QStringLiteral("sharedFiles"), sharedFiles);
+    if (notShared)
+        m.insert(QStringLiteral("notShared"), true);
     return m;
 }
 
@@ -130,6 +136,8 @@ Record Record::fromVariant(const QVariantMap &m)
     r.priority = m.value(QStringLiteral("priority")).toInt();
     r.seededPath = m.value(QStringLiteral("seededPath")).toString();
     r.seedLimitReached = m.value(QStringLiteral("seedLimitReached")).toBool();
+    r.sharedFiles = m.value(QStringLiteral("sharedFiles")).toStringList();
+    r.notShared = m.value(QStringLiteral("notShared")).toBool();
     return r;
 }
 
@@ -396,6 +404,18 @@ QByteArray readFile(const QString &path, qint64 maxSize)
     if (!f.open(QIODevice::ReadOnly) || f.size() > maxSize)
         return QByteArray();
     return f.readAll();
+}
+
+void stripWebSeeds(lt::add_torrent_params &atp, bool webSeedsOn)
+{
+    if (webSeedsOn)
+        return;
+    atp.url_seeds.clear();
+    if (atp.ti && !atp.ti->web_seeds().empty()) {
+        auto copy = std::make_shared<lt::torrent_info>(*atp.ti);
+        copy->set_web_seeds({});
+        atp.ti = copy;
+    }
 }
 
 } // namespace bt

@@ -46,3 +46,11 @@ mx_overlay_test(tst_set1_overlay)
 if(TARGET tst_set1_overlay AND TARGET mxcore)
     target_link_libraries(tst_set1_overlay PRIVATE mxcore)
 endif()
+
+# [net-3] the OctoMX network and Rats settings observed between real nodes (127.0.0.1); the ignore
+# list between two nodes (no browse, whois details or upload for an ignored user)
+mx_overlay_test(tst_netsettings_ovl)
+target_link_libraries(tst_netsettings_ovl PRIVATE mxcore)
+set_tests_properties(overlay_tst_netsettings_ovl PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;MX_OVERLAY_DISCOVERY=0")
+mx_overlay_test(tst_overlay_ignore)
+target_link_libraries(tst_overlay_ignore PRIVATE mxcore)

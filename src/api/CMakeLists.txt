@@ -43,6 +43,9 @@ add_library(mxapi STATIC
     net_policy.cpp
     bind_relay.h
     bind_relay.cpp
+    # [net-3] one pool of upload slots for the OctoMX network, eD2k and Gnutella (transfers/maxUploads)
+    mx/upload_slots.h
+    upload_slots.cpp
 )
 target_include_directories(mxapi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mxapi PUBLIC Qt6::Core Qt6::Network)

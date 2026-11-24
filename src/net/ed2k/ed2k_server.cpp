@@ -983,6 +983,19 @@ void ServerManager::publishFiles(const QList<mx::SharedFile> &files)
         present.insert(f.hashes.ed2k);
         m_shared.append(f);
     }
+    // [net-3] a file offered to the server is no longer shared: the protocol has no "remove", so the
+    // whole list is offered again (as eMule does after a change; a server takes a new list in place of
+    // the old one). Asked for it anyway, we answer "no such file".
+    bool removed = false;
+    for (const QByteArray &h : std::as_const(m_offered))
+        if (!present.contains(h)) { removed = true; break; }
+    if (removed) {
+        m_offered.clear();
+        m_lastOfferMs = 0;
+        emit log(QStringLiteral("a shared file was removed: offering the list again"));
+        ServerConnection *c = current();
+        if (m_shared.isEmpty() && c && c->connectedForMs() >= 2000) c->sendOfferFiles({}, true);   // nothing shared any more
+    }
     pumpOffers();
 }
 
@@ -1035,7 +1048,9 @@ void ServerManager::pumpUdpPings()
     for (int n = 0; n < m_servers.size(); ++n) {
         m_pingCursor = (m_pingCursor + 1) % int(m_servers.size());
         ServerInfo &s = m_servers[m_pingCursor];
-        if (!s.ip || s.udpChallenge || isKnownBadServer(s)) continue;
+        // [net-3] a server on the own network (ed2k/allowLan) is pinged too, as it is dialled
+        const bool lanServer = s.ip && !isRoutableIp(s.ip) && m_core->allowLan() && s.port;
+        if (!s.ip || s.udpChallenge || (isKnownBadServer(s) && !lanServer)) continue;
         const bool due = !s.pingedThisSession || (epoch - qint64(s.lastPingTime) > 4 * 3600);
         if (!due) continue;
         s.udpChallenge = 0x55AA0000u | quint32(QRandomGenerator::global()->bounded(0x10000));

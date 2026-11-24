@@ -21,6 +21,7 @@
 #include <libtorrent/hasher.hpp>
 #include <libtorrent/ip_filter.hpp>
 #include <libtorrent/magnet_uri.hpp>
+#include <libtorrent/peer_class.hpp>
 #include <libtorrent/peer_info.hpp>
 #include <libtorrent/read_resume_data.hpp>
 #include <libtorrent/session.hpp>
@@ -314,6 +315,7 @@ void Worker::loadPersisted()
         atp.max_uploads = m_cfg.maxUploadsPerTorrent;
         if (!m_cfg.pex)
             atp.flags |= lt::torrent_flags::disable_pex;
+        stripWebSeeds(atp, m_cfg.webSeeds);   // [net-3] off: libtorrent must never see them
         // torrent::init() calls we_have() → piece_finished_alert for every piece in the resume
         // data; those are not new verifications, so they are not reported again
         t.replayed.assign(atp.have_pieces.size(), false);
@@ -472,6 +474,13 @@ void Worker::applyPeerClassFilter()
         f.add_rule(lt::make_address("::1"), lt::make_address("::1"), local);
     }
     m_ses->set_peer_class_filter(f);
+    // [net-3] the upload slots (bt/maxUploads, bt/maxUploadsPerTorrent) count LAN peers too: libtorrent's
+    // local class ignores unchoke slots by default, which let any number of LAN peers download at once
+    lt::peer_class_info local_info = m_ses->get_peer_class(lt::session::local_peer_class_id);
+    if (local_info.ignore_unchoke_slots) {
+        local_info.ignore_unchoke_slots = false;
+        m_ses->set_peer_class(lt::session::local_peer_class_id, local_info);
+    }
 }
 
 void Worker::goOnline(const Config &cfg)
@@ -694,6 +703,105 @@ void Worker::mergeTrackers(const QString &id, const std::vector<std::string> &tr
     for (const std::string &u : trackers)
         t->h.add_tracker(lt::announce_entry(u));
     t->resumeDirty = true;
+}
+
+void Worker::endUploads(const QString &id, const QString &why)
+{
+    QList<TransferInfo> changed;
+    QStringList finished;
+    for (auto it = m_up.begin(); it != m_up.end();) {
+        if (it->second.info.hashes.btih.toHex() != id.toLatin1()) {
+            ++it;
+            continue;
+        }
+        TransferInfo fin = it->second.info;
+        fin.rateUpBps = 0;
+        fin.etaSec = -1;
+        fin.state = TransferState::Error;
+        fin.statusText = why;
+        if (!fin.sources.isEmpty()) {
+            fin.sources.first().rateBps = 0;
+            fin.sources.first().statusText = why;
+        }
+        changed << fin;
+        finished << it->first;
+        it = m_up.erase(it);
+    }
+    if (!finished.isEmpty())
+        post([sink = m_sink, changed, finished] { sink->wUploads(changed, finished); });
+}
+
+namespace {
+QString canonicalFile(const QString &path)
+{
+    const QFileInfo fi(path);
+    const QString c = fi.canonicalFilePath();
+    return c.isEmpty() ? QDir::cleanPath(fi.absoluteFilePath()) : c;
+}
+} // namespace
+
+void Worker::applySharing(const QSet<QString> &sharedPaths)
+{
+    m_sharedPaths = sharedPaths;
+    m_haveSharing = true;
+    for (auto &kv : m_t) {
+        kv.second.sharingChecked = false;
+        checkSharing(kv.second);
+    }
+}
+
+void Worker::checkSharing(Torrent &t)
+{
+    if (!m_haveSharing || t.sharingChecked || !t.inSession || t.removing || !t.rec.seededPath.isEmpty() || !t.ti || !t.haveStatus)
+        return;
+    t.sharingChecked = true;
+    const QString save = qs(t.st.save_path);
+    const lt::file_storage &fs = t.ti->files();
+    QStringList current;
+    for (int i = 0; i < fs.num_files(); ++i) {
+        const lt::file_index_t fi(i);
+        if (fs.pad_file_at(fi) || (std::size_t(i) < t.filePrio.size() && t.filePrio[std::size_t(i)] == lt::dont_download))
+            continue;
+        current << canonicalFile(QDir(save).filePath(qs(fs.file_path(fi))));
+    }
+    bool dirty = false;
+    for (int i = int(t.rec.sharedFiles.size()) - 1; i >= 0; --i)   // moved or unwanted since: not this torrent's any more
+        if (!current.contains(t.rec.sharedFiles.at(i))) {
+            t.rec.sharedFiles.removeAt(i);
+            dirty = true;
+        }
+    if (t.st.is_finished || t.st.is_seeding)
+        for (const QString &p : std::as_const(current))
+            if (m_sharedPaths.contains(p) && !t.rec.sharedFiles.contains(p)) {
+                t.rec.sharedFiles << p;
+                dirty = true;
+            }
+    QString gone;
+    for (const QString &p : std::as_const(t.rec.sharedFiles))
+        if (!m_sharedPaths.contains(p)) {
+            gone = p;
+            break;
+        }
+    if (!gone.isEmpty() && !t.rec.notShared) {
+        t.rec.notShared = true;
+        dirty = true;
+        qCInfo(lcBt) << "not seeding" << t.id << "any more:" << QFileInfo(gone).fileName() << "is no longer shared";
+        endUploads(t.id, QStringLiteral("Stopped: the file is no longer shared"));
+        t.h.unset_flags(lt::torrent_flags::auto_managed);
+        t.h.pause();
+        t.resumeDirty = true;
+    } else if (gone.isEmpty() && t.rec.notShared) {
+        t.rec.notShared = false;
+        dirty = true;
+        if (m_cfg.seedCompleted && !t.rec.seedLimitReached) {
+            qCInfo(lcBt) << "seeding" << t.id << "again: its files are shared again";
+            t.h.set_flags(lt::torrent_flags::auto_managed);
+            t.h.resume();
+            t.resumeDirty = true;
+        }
+    }
+    if (dirty)
+        persistRecord(t);
 }
 
 void Worker::removeTorrent(const QString &id, bool deleteFiles)
@@ -1615,7 +1723,15 @@ void Worker::tick()
         Torrent &t = kv.second;
         if (!t.inSession || t.removing)
             continue;
+        // [net-3] libtorrent refreshes the status of a torrent only when it changes: an idle seed's seeding
+        // time would never reach bt/seedTimeLimitMin. Look at it every 10 s while such a limit is set
+        if (m_cfg.seedTimeLimitMin > 0 && t.haveStatus && t.st.is_seeding && !(t.st.flags & lt::torrent_flags::paused)
+            && now - t.lastSeedLookMs > 10000) {
+            t.lastSeedLookMs = now;
+            t.st = t.h.status(kStatusFlags);
+        }
         enforceSeedLimits(t);
+        checkSharing(t);   // [net-3] a torrent restored or finished since the last shared list
         if (t.rec.seedLimitReached && m_cfg.seedLimitAction == QLatin1String("remove") && t.haveStatus
             && t.st.is_seeding && t.rec.seededPath.isEmpty())
             toRemove << t.id;
@@ -2031,7 +2147,8 @@ TorrentSnapshot Worker::makeSnapshot(Torrent &t, bool withFiles)
         s.statusText = QStringLiteral("Checking %1%").arg(int(st.progress_ppm / 10000));
     } else if (userPaused) {
         s.state = s.finished ? TransferState::Completed : TransferState::Paused;
-        s.statusText = s.finished ? QStringLiteral("Completed") : QStringLiteral("Paused (%1%)").arg(pct);
+        s.statusText = s.finished ? (t.rec.notShared ? QStringLiteral("Completed, not seeding: no longer shared") : QStringLiteral("Completed"))
+                                  : QStringLiteral("Paused (%1%)").arg(pct);
     } else if (queued) {
         s.state = s.finished ? TransferState::Completed : TransferState::Queued;
         s.statusText = s.finished ? QStringLiteral("Completed (queued for seeding)") : QStringLiteral("Locally Queued");

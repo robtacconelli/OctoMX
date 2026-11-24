@@ -133,6 +133,8 @@ void OverlayPlugin::updateDisplayName()
 void OverlayPlugin::init(const PluginContext &ctx)
 {
     m_ctx = ctx;
+    m_slots = ctx.uploadSlots;   // [net-3]
+    if (m_slots) connect(m_slots, &UploadSlots::slotsFreed, this, [this] { if (m_running) { promoteQueue(); sendQueuePositions(); } });
     m_dataDir = ctx.dataDir.isEmpty() && !ctx.profileDir.isEmpty() ? ctx.profileDir + QStringLiteral("/overlay")
                                                                     : ctx.dataDir;
     m_screenName = ctx.screenName;
@@ -1089,6 +1091,35 @@ void OverlayPlugin::setHotlist(const QList<UserRef> &users)
     m_hotlist.clear();
     for (const UserRef &u : users)
         if (u.net == Net::Overlay && isHex(u.id, 64)) m_hotlist.insert(u.id.toLower());
+}
+
+// [net-3] an ignored user gets nothing from us: no browse list, no whois details, no upload. Ignoring
+// someone also ends what they are downloading from us and takes them out of the queue.
+void OverlayPlugin::setIgnored(const QList<UserRef> &users)
+{
+    m_ignoredIds.clear();
+    m_ignoredNames.clear();
+    for (const UserRef &u : users) {
+        if (u.net != Net::Overlay && u.net != Net::Unknown) continue;
+        if (isHex(u.id, 64)) m_ignoredIds.insert(u.id.toLower());
+        else if (!u.name.isEmpty() && (u.id.isEmpty() || u.id == u.name)) m_ignoredNames << u.name;
+    }
+    QList<UploadSession *> drop;
+    for (UploadSession *s : std::as_const(m_uploads))
+        if (isIgnoredUser(s->userId)) drop << s;
+    for (UploadSession *s : std::as_const(drop))
+        closeUpload(s, QStringLiteral("unavailable"), true, TransferState::Cancelled, tr("Stopped: the user is on your ignore list"));
+}
+
+bool OverlayPlugin::isIgnoredUser(const QString &userId) const
+{
+    if (userId.isEmpty()) return false;
+    if (m_ignoredIds.contains(userId.toLower())) return true;
+    if (m_ignoredNames.isEmpty()) return false;
+    const UserRef u = userRefFor(userId.toLower());
+    for (const QString &n : m_ignoredNames)
+        if (!u.name.isEmpty() && n.compare(u.name, Qt::CaseInsensitive) == 0) return true;
+    return false;
 }
 
 void OverlayPlugin::connectPeer(const QString &hostPort)

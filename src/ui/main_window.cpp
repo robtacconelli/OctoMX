@@ -233,7 +233,7 @@ void MainWindow::createChrome()
     m_helpBtn = new ThinButton(IconId::Help, tr("Help"), this);
     m_helpBtn->setObjectName(QStringLiteral("btnHelp"));
     // [ui-g] what each button does
-    m_ignoredBtn->setToolTip(tr("The users whose chat lines and messages you hide; add or remove them here"));
+    m_ignoredBtn->setToolTip(tr("The users you ignore: their chat lines and messages are hidden, and on the OctoMX Peer Network they cannot browse your files, see your whois details or download from you; add or remove them here"));
     m_settingsBtn->setToolTip(tr("All the options of OctoMX: connection, folders, sharing, chat, appearance. "
                                  "Right-click for the colour theme."));
     m_helpBtn->setToolTip(tr("About OctoMX (version, licence) and Check for Updates"));

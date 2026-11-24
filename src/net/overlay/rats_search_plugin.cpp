@@ -128,6 +128,21 @@ void RatsSearchPlugin::start()
     cfg.dataDir = m_dataDir;
     cfg.maxPeers = setting(ratskeys::MaxPeers, 30).toInt();
     cfg.peerTarget = cfg.maxPeers;
+    {   // [net-3] as the OctoMX network: instance tests and live runs on a shared host keep to the
+        // bootstrap peers (MX_OVERLAY_DISCOVERY=0: no DHT, no LAN discovery, no peer exchange);
+        // MX_RATS_DHT_ROUTERS="host:port,..." then runs the DHT with only these routers (tests)
+        const QByteArray disc = qgetenv("MX_OVERLAY_DISCOVERY").trimmed().toLower();
+        if (disc == "0" || disc == "off" || disc == "false") {
+            cfg.mdns = false;
+            cfg.pex = false;
+            cfg.reconnect = false;
+            const QString routers = QString::fromLocal8Bit(qgetenv("MX_RATS_DHT_ROUTERS")).trimmed();
+            cfg.dht = !routers.isEmpty();
+            if (cfg.dht) cfg.dhtBootstrap = routers.split(QLatin1Char(','), Qt::SkipEmptyParts);
+            cfg.stun = false;   // no public STUN servers either
+            qCInfo(lcRats) << "discovery off (MX_OVERLAY_DISCOVERY): bootstrap peers only" << (cfg.dht ? "and the DHT routers given" : "");
+        }
+    }
     // [diag-1] the core's port mapper forwards our ports when it can (PluginContext::coreMapsPorts)
     cfg.portMapping = !m_ctx.coreMapsPorts && m_ctx.settings && m_ctx.settings->b(QString(keys::connection::Upnp));
     m_wantPort = cfg.listenPort;

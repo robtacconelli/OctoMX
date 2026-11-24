@@ -123,6 +123,7 @@ void NetworkManager::initPlugins(const QString &profileDir, LibraryAccess *libra
         ctx.settings = m_settings;
         ctx.library = library;
         ctx.limiter = limiter;
+        ctx.uploadSlots = m_uploadSlots;   // [net-3] one total over the queued-upload networks
         ctx.profileDir = profileDir;
         const QString prefix = settingsPrefixForNet(p->net());
         ctx.dataDir = profileDir + QLatin1Char('/') + (prefix.isEmpty() ? QStringLiteral("net") : prefix);

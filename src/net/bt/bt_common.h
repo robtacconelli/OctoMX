@@ -10,6 +10,7 @@
 #include <QtCore/QStringList>
 #include <QtCore/QVariantMap>
 
+#include <libtorrent/add_torrent_params.hpp>
 #include <libtorrent/info_hash.hpp>
 #include <libtorrent/settings_pack.hpp>
 #include <libtorrent/sha1_hash.hpp>
@@ -80,11 +81,19 @@ struct Record {
     int priority = 0;       // -1 / 0 / 1
     QString seededPath;     // seedLocalFile(): the local file this torrent shares
     bool seedLimitReached = false;
+    // [net-3] a downloaded torrent's files as the Library shared them: a file seen in the shared list
+    // and then taken out of it (unshared folder, rule, type, removed from Shared Files) stops the
+    // seeding (notShared) until every such file is shared again
+    QStringList sharedFiles;
+    bool notShared = false;
     QVariantMap toVariant() const;
     static Record fromVariant(const QVariantMap &m);
 };
 
-QString hexId(const lt::info_hash_t &ih);          // v1 hex, else truncated v2 hex
+QString hexId(const lt::info_hash_t &ih);
+// [net-3] bt/webSeeds off: a torrent is added without its web seeds (url-list / httpseeds), so
+// libtorrent never asks them (removing them after the torrent was added came too late)
+void stripWebSeeds(lt::add_torrent_params &atp, bool webSeedsOn);          // v1 hex, else truncated v2 hex
 QString toHex(const lt::sha1_hash &h);
 QString endpointString(const QString &host, int port);
 bool parseHostPort(const QString &s, QString *host, int *port, int defaultPort);

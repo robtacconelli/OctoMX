@@ -93,9 +93,21 @@ int GnutellaPlugin::maxUltrapeers() const { return qBound(1, setting(QString(key
 int GnutellaPlugin::uploadSlots() const
 {
     // "gnutella/uploadSlots" (wanted key) → transfers/maxUploads → 4
+    if (mx::UploadSlots *p = slotPool()) return p->total();   // [net-3] the one total (0: no uploads)
     int n = setting(QStringLiteral("gnutella/uploadSlots"), 0).toInt();
     if (n <= 0) n = setting(QString(keys::transfers::MaxUploads), 4).toInt();
     return qBound(1, n <= 0 ? 4 : n, 100);
+}
+
+mx::UploadSlots *GnutellaPlugin::slotPool() const
+{
+    return m_ctx.uploadSlots && setting(QStringLiteral("gnutella/uploadSlots"), 0).toInt() <= 0 ? m_ctx.uploadSlots : nullptr;
+}
+
+bool GnutellaPlugin::slotsBusy() const
+{
+    if (mx::UploadSlots *p = slotPool()) return p->used() >= p->total();
+    return m_slotHolders.size() >= uploadSlots();
 }
 
 int GnutellaPlugin::connectTimeoutMs() const
@@ -203,6 +215,7 @@ void GnutellaPlugin::stop()
 {
     if (!m_started) return;
     m_started = false;
+    if (m_ctx.uploadSlots) m_ctx.uploadSlots->setWaiting(mx::Net::Gnutella, 0, 1000);   // [net-3] nobody waits here now
     m_maintainTimer.stop();
     m_saveTimer.stop();
     m_searchTimer.stop();

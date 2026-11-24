@@ -9,6 +9,7 @@
 #include "kad/kad_wire.h"
 
 #include "mx/plugin.h"
+#include "mx/upload_slots.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
@@ -102,6 +103,9 @@ public:
     bool cryptRequired() const { return m_cryptRequired; }
     bool allowLan() const { return m_allowLan; }
     int uploadSlots() const;
+    // [net-3] the shared upload slots (transfers/maxUploads over the OctoMX network, eD2k and
+    // Gnutella) while ed2k/uploadSlots is 0 and the core gives a pool; null: uploadSlots() is eD2k's own
+    mx::UploadSlots *slotPool() const;
     QNetworkAccessManager *nam();
     qint64 nowMs() const { return m_clock.elapsed(); }
 

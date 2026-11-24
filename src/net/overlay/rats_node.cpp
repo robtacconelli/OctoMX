@@ -212,6 +212,7 @@ bool RatsNode::Shared::build(quint16 listenPort, QString *error)
     if (cfg.dht) {
         librats::DhtDiscovery::Config dc;
         dc.dht_port = cfg.dhtPort;
+        dc.discover_external_ip = cfg.stun;   // [net-3]
         dc.data_dir = cfg.dataDir.toStdString();
         dc.bind_address = cfg.bindAddress.toStdString();
         dc.search_interval = std::chrono::milliseconds(qMax(5000, cfg.dhtSearchIntervalMs));

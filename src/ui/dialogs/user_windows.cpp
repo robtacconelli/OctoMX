@@ -522,13 +522,13 @@ IgnoredWindow::IgnoredWindow(mx::Core *core, MainWindow *mw, QWidget *parent)
     setMinimumSize(SS(220, 140));
     m_add = new PushButton(tr("Add"), this);
     m_add->setObjectName(QStringLiteral("ignoredAdd"));
-    m_add->setToolTip(tr("Type the name of a user to ignore: their chat lines and private messages are not shown any more."));
+    m_add->setToolTip(tr("Type the name of a user to ignore: their chat lines and private messages are not shown any more, and on the OctoMX Peer Network they cannot browse your files, see your whois details or download from you."));
     m_whois = new PushButton(tr("Whois"), this);
     m_whois->setObjectName(QStringLiteral("ignoredWhois"));
     m_whois->setToolTip(tr("Open a Whois window for each selected user."));
     m_remove = new PushButton(tr("Remove"), this);
     m_remove->setObjectName(QStringLiteral("ignoredRemove"));
-    m_remove->setToolTip(tr("Stop ignoring the selected users: you see their chat lines and messages again."));
+    m_remove->setToolTip(tr("Stop ignoring the selected users: you see their chat lines and messages again, and they may browse, whois and download from you as your other settings allow."));
     m_model = new IgnoredModel(this);
     m_list = new MxListView(this);
     m_list->setObjectName(QStringLiteral("ignoredList"));

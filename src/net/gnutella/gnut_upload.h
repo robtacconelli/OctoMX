@@ -54,6 +54,8 @@ public:
     QString uploadId() const { return m_uploadId; }
     HostPort peer() const { return m_peer; }
     void cancel();                                      // abort (cancelUpload)
+    void stopNotShared();                               // [net-3] the file left the shares: stop, say why
+    const mx::SharedFile &file() const { return m_file; }   // [net-3] the file of the last request
     bool transferring() const { return m_remaining > 0; }
     const mx::TransferInfo &transferInfo() const { return m_info; }   // [glue-3] for queue rows
     QString slotKey() const { return m_slotKey; }                       // [glue-3] "ip/sha1" of the last request

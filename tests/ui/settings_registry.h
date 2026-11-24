@@ -43,28 +43,28 @@ inline const Proof kProofs[] = {
     {"bt/enabled", "test", "tests/core/tst_network.cpp", "lifecycle", ""},
     {"bt/listenPort", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/dht", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
-    {"bt/pex", "reader", "src/net/bt/bt_common.cpp", "bt::Pex", ""},
+    {"bt/pex", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "pexInTheExtensionHandshake", ""},   // [net-3]
     {"bt/lsd", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/utp", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/encryption", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "requiredEncryptionRefusesHeaderOnlyPeers", ""},   // [net-2]
     {"bt/maxConnections", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/maxConnectionsPerTorrent", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "randomPortsAndTorrentLimits", ""},   // [net-2]
     {"bt/maxUploads", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
-    {"bt/maxUploadsPerTorrent", "reader", "src/net/bt/bt_common.cpp", "bt::MaxUploadsPerTorrent", ""},
+    {"bt/maxUploadsPerTorrent", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "uploadSlotsPerTorrent", ""},   // [net-3]
     {"bt/maxActiveDownloads", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "randomPortsAndTorrentLimits", ""},   // [net-2]
     {"bt/maxActiveSeeds", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
-    {"bt/seedRatioLimit", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"bt/seedTimeLimitMin", "reader", "src/net/bt/bt_common.cpp", "bt::SeedTimeLimitMin", ""},
-    {"bt/seedLimitAction", "reader", "src/net/bt/bt_common.cpp", "bt::SeedLimitAction", ""},
-    {"bt/seedCompleted", "reader", "src/core/engine/download.cpp", "bt::SeedCompleted", ""},
-    {"bt/seedLibrary", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
+    {"bt/seedRatioLimit", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "seedRatioAndActionStopTheSeed", ""},   // [net-3]
+    {"bt/seedTimeLimitMin", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "seedTimeLimitStopsTheSeed", ""},   // [net-3]
+    {"bt/seedLimitAction", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "seedRatioAndActionStopTheSeed", ""},   // [net-3]
+    {"bt/seedCompleted", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "completedTorrentsSeedOrStop", ""},   // [net-3]
+    {"bt/seedLibrary", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "libraryFilesSeededAsTorrents", ""},   // [net-3]
     {"bt/announceToAllTrackers", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
-    {"bt/extraTrackers", "test", "tests/bt/bt_test_util.h", "create", ""},
+    {"bt/extraTrackers", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "extraTrackersAnnouncedTo", ""},   // [net-3]
     {"bt/dhtBootstrapNodes", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "adapterBindsPeersAndDht", ""},   // [net-2]
     {"bt/anonymousMode", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
-    {"bt/superSeeding", "reader", "src/net/bt/bt_common.cpp", "bt::SuperSeeding", ""},
-    {"bt/preallocate", "reader", "src/net/bt/bt_common.cpp", "bt::Preallocate", ""},
-    {"bt/webSeeds", "reader", "src/net/bt/bt_common.cpp", "bt::WebSeeds", ""},
+    {"bt/superSeeding", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "superSeedingRevealsPiecesOneByOne", ""},   // [net-3]
+    {"bt/preallocate", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "preallocateReservesTheFile", ""},   // [net-3]
+    {"bt/webSeeds", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "webSeedsUsedOrNot", ""},   // [net-3]
     {"bt/allowMultipleConnectionsPerIp", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/validateHttpsTrackers", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"ed2k/enabled", "test", "tests/core/tst_network.cpp", "lifecycle", ""},
@@ -76,71 +76,71 @@ inline const Proof kProofs[] = {
     {"ed2k/reconnect", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kServerAnnouncementsAndReconnect", ""},   // [net-2]
     {"ed2k/staticServersOnly", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
     {"ed2k/addServersFromServer", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kServerAnnouncementsAndReconnect", ""},   // [net-2]
-    {"ed2k/maxSourcesPerFile", "reader", "src/net/ed2k/ed2k_core.cpp", "\"ed2k/maxSourcesPerFile\"", ""},
+    {"ed2k/maxSourcesPerFile", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "ed2kSourcesPerDownload", ""},   // [net-3]
     {"ed2k/maxConnections", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
     {"ed2k/obfuscation", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kObfuscationChoices", ""},   // [net-2]
     {"ed2k/requireObfuscation", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kObfuscationChoices", ""},   // [net-2]
     {"ed2k/userHash", "internal", "src/net/ed2k/ed2k_core.cpp", "\"ed2k/userHash\"", "the eD2k user hash made at the first start (identity on eD2k)"},
-    {"ed2k/uploadSlots", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"ed2k/uploadSlots", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "ed2kOwnUploadSlots", ""},   // [net-3]
     {"ed2k/maxHalfOpen", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
     {"ed2k/maxConnectsPer5s", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
     {"ed2k/parallelServerConnects", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
-    {"ed2k/udpPing", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"ed2k/udpSearch", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"ed2k/udpSources", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"ed2k/udpPing", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "ed2kServerUdpSwitches", ""},   // [net-3]
+    {"ed2k/udpSearch", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "ed2kServerUdpSwitches", ""},   // [net-3]
+    {"ed2k/udpSources", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "ed2kServerUdpSwitches", ""},   // [net-3]
     {"ed2k/compressUploads", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kCompressUploads", ""},   // [net-2]
     {"kad/enabled", "test", "tests/core/tst_search.cpp", "managerFanOutAndMerge", ""},
-    {"kad/nodesDatUrl", "reader", "src/net/ed2k/kad/kad_plugin.cpp", "\"kad/nodesDatUrl\"", ""},
+    {"kad/nodesDatUrl", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "kadNodesDatFromTheUrl", ""},   // [net-3]
     {"kad/bootstrapNodes", "test", "tests/netpolicy/tst_netpolicy.cpp", "kadOffWithProxyAndBoundToAdapter", ""},   // [net-2]
     {"kad/autoBootstrap", "test", "tests/ed2k/tst_kad.cpp", "simulatedNetwork", ""},
-    {"kad/storeIndex", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"kad/firewallChecks", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"kad/publish", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"kad/buddies", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"kad/maxPacketsPerSec", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"kad/storeIndex", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "kadStoreIndexOff", ""},   // [net-3]
+    {"kad/firewallChecks", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "kadPublishStoreFirewallBuddies", ""},   // [net-3]
+    {"kad/publish", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "kadPublishStoreFirewallBuddies", ""},   // [net-3]
+    {"kad/buddies", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "kadPublishStoreFirewallBuddies", ""},   // [net-3]
+    {"kad/maxPacketsPerSec", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "kadPacketRate", ""},   // [net-3]
     {"gnutella/enabled", "test", "tests/core/tst_network.cpp", "lifecycle", ""},
     {"gnutella/port", "test", "tests/netpolicy/tst_netsettings.cpp", "gnutellaPortUltrapeersAndCaches", ""},   // [net-2]
-    {"gnutella/maxUltrapeers", "reader", "src/net/gnutella/gnut_plugin.cpp", "gnutella::MaxUltrapeers", ""},
-    {"gnutella/gwebcaches", "reader", "src/net/gnutella/gnut_net.cpp", "gnutella::GWebCaches", ""},
+    {"gnutella/maxUltrapeers", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "gnutellaUltrapeerCount", ""},   // [net-3]
+    {"gnutella/gwebcaches", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "gnutellaUserCaches", ""},   // [net-3]
     {"gnutella/bootstrapHosts", "test", "tests/netpolicy/tst_netpolicy.cpp", "gnutellaThroughProxy", ""},   // [net-2]
     {"gnutella/browseHost", "test", "tests/gnutella/tst_gnutella_loopback.cpp", "browseDirect", ""},
-    {"gnutella/uploadSlots", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"gnutella/uploadQueueSize", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"gnutella/uploadQueuePollSec", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"gnutella/uploadSlots", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "gnutellaSlotsQueueAndPoll", ""},   // [net-3]
+    {"gnutella/uploadQueueSize", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "gnutellaSlotsQueueAndPoll", ""},   // [net-3]
+    {"gnutella/uploadQueuePollSec", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "gnutellaSlotsQueueAndPoll", ""},   // [net-3]
     {"gnutella/autoBootstrap", "test", "tests/netpolicy/tst_netsettings.cpp", "gnutellaPortUltrapeersAndCaches", ""},   // [net-2]
-    {"gnutella/udpHostCaches", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"gnutella/udpHostCaches", "test", "tests/netpolicy/tst_netsettings_p2p.cpp", "gnutellaUserCaches", ""},   // [net-3]
     {"gnutella/encryption", "test", "tests/gnutella/tst_gnutella_loopback.cpp", "tlsRequireRefusesPlain", ""},   // [net-2]
-    {"http/enabled", "test", "tests/ui/tst_settings_dialog.cpp", "wizardRecommended", ""},
+    {"http/enabled", "test", "tests/netpolicy/tst_netsettings_web.cpp", "httpEnabledInTheCore", ""},   // [net-3]
     {"http/maxConnectionsPerServer", "test", "tests/http/tst_http.cpp", "perHostCap", ""},   // [net-2]
-    {"http/timeoutSec", "reader", "src/net/http/http_util.cpp", "http::TimeoutSec", ""},
+    {"http/timeoutSec", "test", "tests/netpolicy/tst_netsettings_web.cpp", "httpTimeoutAndRetryDelay", ""},   // [net-3]
     {"http/userAgent", "test", "tests/http/tst_http.cpp", "probeBasic", ""},
-    {"http/verifyTls", "reader", "src/net/http/http_util.cpp", "http::VerifyTls", ""},
-    {"http/connectionsPerSource", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"http/allowInsecureRedirect", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
+    {"http/verifyTls", "test", "tests/netpolicy/tst_netsettings_web.cpp", "httpCertificatesAndRedirects", ""},   // [net-3]
+    {"http/connectionsPerSource", "test", "tests/netpolicy/tst_netsettings_web.cpp", "httpPartsPerSource", ""},   // [net-3]
+    {"http/allowInsecureRedirect", "test", "tests/netpolicy/tst_netsettings_web.cpp", "httpCertificatesAndRedirects", ""},   // [net-3]
     {"http/stallTimeoutSec", "test", "tests/http/tst_http.cpp", "stallRetry", ""},   // [net-2]
     {"http/maxRetries", "test", "tests/http/tst_http.cpp", "transient5xxGivesUp", ""},   // [net-2]
-    {"http/retryBaseMs", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"overlay/enabled", "test", "tests/ui/tst_settings_dialog.cpp", "wizardRecommended", ""},
+    {"http/retryBaseMs", "test", "tests/netpolicy/tst_netsettings_web.cpp", "httpTimeoutAndRetryDelay", ""},   // [net-3]
+    {"overlay/enabled", "test", "tests/overlay/tst_netsettings_ovl.cpp", "enabledSwitchesStartAndStop", ""},   // [net-3]
     {"overlay/bootstrapPeers", "test", "tests/overlay/tst_overlay_misc.cpp", "bootstrapPeersFromSettings", ""},
-    {"overlay/maxPeers", "reader", "src/net/overlay/overlay_plugin.cpp", "overlay::MaxPeers", ""},
-    {"overlay/relay", "reader", "src/net/overlay/overlay_plugin.cpp", "overlay::Relay", ""},
-    {"overlay/shareHashLinks", "reader", "src/net/overlay/overlay_search.cpp", "overlay::ShareHashLinks", ""},
-    {"web/enabled", "test", "tests/ui/tst_settings_dialog.cpp", "wizardRecommended", ""},
-    {"web/maxResults", "reader", "src/net/web/web_plugin.cpp", "web::MaxResults", ""},
-    {"web/userAgent", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
+    {"overlay/maxPeers", "test", "tests/overlay/tst_netsettings_ovl.cpp", "overlayMaxPeersCapsInboundLinks", ""},   // [net-3]
+    {"overlay/relay", "test", "tests/overlay/tst_netsettings_ovl.cpp", "overlayRelayServesCircuits", ""},   // [net-3]
+    {"overlay/shareHashLinks", "test", "tests/overlay/tst_netsettings_ovl.cpp", "overlayShareHashLinksAnswersAndGossip", ""},   // [net-3]
+    {"web/enabled", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webEnabledInTheNetworkManager", ""},   // [net-3]
+    {"web/maxResults", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webResultsAdultWordsAndTrackers", ""},   // [net-3]
+    {"web/userAgent", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webUserAgentAndSearchTimeout", ""},   // [net-3]
     {"web/providerEnabled", "internal", "src/net/web/web_search_plugin.h", "\"web/providerEnabled\"", "per web index on/off, set from the Networks page"},
-    {"web/adultKeywords", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"web/timeoutSec", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"web/probeOnStart", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"web/trackers", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"rats/enabled", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
+    {"web/adultKeywords", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webResultsAdultWordsAndTrackers", ""},   // [net-3]
+    {"web/timeoutSec", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webUserAgentAndSearchTimeout", ""},   // [net-3]
+    {"web/probeOnStart", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webIndexCheckAtStart", ""},   // [net-3]
+    {"web/trackers", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webResultsAdultWordsAndTrackers", ""},   // [net-3]
+    {"rats/enabled", "test", "tests/overlay/tst_netsettings_ovl.cpp", "enabledSwitchesStartAndStop", ""},   // [net-3]
     {"rats/protocol", "internal", "src/net/overlay/overlay_plugin.h", "\"rats/protocol\"", "rats-search protocol id (compatibility with other clients)"},
-    {"rats/listenPort", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"rats/dhtPort", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"rats/safeSearch", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"rats/maxPeers", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"rats/bootstrapPeers", "reader", "src/net/overlay/rats_search_plugin.cpp", "\"rats/bootstrapPeers\"", ""},
-    {"rats/maxResults", "reader", "src/net/overlay/rats_search_plugin.cpp", "\"rats/maxResults\"", ""},
+    {"rats/listenPort", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsListenPortAndBootstrapPeers", ""},   // [net-3]
+    {"rats/dhtPort", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsDhtPortIsTheDhtSource", ""},   // [net-3]
+    {"rats/safeSearch", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsSafeSearchAndMaxResults", ""},   // [net-3]
+    {"rats/maxPeers", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsMaxPeersCapsInboundLinks", ""},   // [net-3]
+    {"rats/bootstrapPeers", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsListenPortAndBootstrapPeers", ""},   // [net-3]
+    {"rats/maxResults", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsSafeSearchAndMaxResults", ""},   // [net-3]
     {"other/defaultLogin", "test", "tests/ed2k/tst_ed2k.cpp", "helloRoundTrip", ""},
     {"messages/allowPrivateMessages", "test", "tests/core/tst_set1_core.cpp", "messagePrivacy", ""},
     {"messages/allowBrowse", "test", "tests/overlay/tst_overlay_net.cpp", "browseHotlistOnly", ""},
@@ -239,20 +239,20 @@ inline const Proof kProofs[] = {
     {"queue/changeSpeedWhenBusy", "test", "tests/overlay/tst_set1_overlay.cpp", "othersSeeTheConnectionTypeAtOnce", ""},
     {"queue/changeSpeedThreshold", "test", "tests/overlay/tst_set1_overlay.cpp", "othersSeeTheConnectionTypeAtOnce", ""},
     {"queue/changedSpeed", "test", "tests/overlay/tst_set1_overlay.cpp", "othersSeeTheConnectionTypeAtOnce", ""},
-    {"bandwidth/downLimitKBs", "test", "tests/core/bw_limit_probe.cpp", "poll", ""},
-    {"bandwidth/upLimitKBs", "test", "tests/core/bw_limit_probe.cpp", "poll", ""},
+    {"bandwidth/downLimitKBs", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},   // [net-3] was a live probe tool
+    {"bandwidth/upLimitKBs", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},   // [net-3] was a live probe tool
     {"bandwidth/scheduleEnabled", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},
     {"bandwidth/scheduleStart", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},
     {"bandwidth/scheduleEnd", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},
     {"bandwidth/scheduleDays", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},
     {"bandwidth/scheduleDownKBs", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},
     {"bandwidth/scheduleUpKBs", "test", "tests/core/tst_ratelimiter.cpp", "settingsAndSchedule", ""},
-    {"bandwidth/limitLan", "test", "tests/bt/bt_test_util.h", "create", ""},
+    {"bandwidth/limitLan", "test", "tests/netpolicy/tst_netsettings_bt.cpp", "lanPeersLimitedOrNot", ""},   // [net-3]
     {"diag/portCheckUrl", "test", "tests/core/tst_set1_core.cpp", "portCheckAddress", ""},
     {"diag/hideAddresses", "test", "tests/ui/tst_uih.cpp", "connectionTestHidesAddressesInTheWindow", ""},
     {"diag/answerProbes", "test", "tests/overlay/tst_overlay_probe.cpp", "twoNodeProbe", ""},
-    {"bandwidth/lastDownLimitKBs", "test", "tests/core/bw_limit_probe.cpp", "poll", ""},
-    {"bandwidth/lastUpLimitKBs", "test", "tests/core/bw_limit_probe.cpp", "poll", ""},
+    {"bandwidth/lastDownLimitKBs", "test", "tests/ui/tst_bw1.cpp", "rowAndSettingsInStep", ""},   // [net-3] was a live probe tool
+    {"bandwidth/lastUpLimitKBs", "test", "tests/ui/tst_bw1.cpp", "rowAndSettingsInStep", ""},   // [net-3] was a live probe tool
     {"bandwidth/graphAverageSec", "test", "tests/ui/tst_uib_bandwidth.cpp", "historyIsSplitIntoSeries", ""},
     {"launch/useOsDefault", "test", "tests/ui/tst_uih.cpp", "launchEntriesAndCommands", ""},
     {"launch/audioCommand", "test", "tests/ui/tst_uih.cpp", "launchEntriesAndCommands", ""},

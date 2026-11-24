@@ -15,6 +15,8 @@
 #include "gnut_upload.h"
 #include "gnutella_plugin.h"
 
+#include "mx/upload_slots.h"
+
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QPointer>
@@ -126,6 +128,9 @@ private:
     int maxUltrapeers() const;
     quint32 ourSpeedKbps() const;   // [core-5] speed field of our hits, from identity/connection
     int uploadSlots() const;
+    // [net-3] the shared upload slots while gnutella/uploadSlots is 0 and the core gives a pool
+    mx::UploadSlots *slotPool() const;
+    bool slotsBusy() const;
     // gnut_net.cpp
     void maintain();
     void startConnection(const HostPort &h, bool manual = false);
@@ -256,6 +261,7 @@ private:
         QString uploadId; mx::TransferInfo info; int priority = 0; bool forced = false; int reportedRank = -1;
     };
     void reportUploadQueue();            // [glue-3]
+    void dropUnshared();                 // [net-3] stop uploads / queue places of files no longer shared
     void sortUploadQueue();
     QHash<QString, qint64> m_uploadBlocked;   // [glue-3] slot key (ip/file) → refused until (s) after a local cancel
     QList<QueueEntry> m_uploadQueue;

@@ -125,6 +125,8 @@ void BtPlugin::init(const PluginContext &ctx)
             if (key.startsWith(QLatin1String("bt/")) || key.startsWith(QLatin1String("connection/"))
                 || key.startsWith(QLatin1String("bandwidth/")))
                 m_cfgTimer.start();
+            if (key == keys::bt::SeedLibrary && m_haveShared)   // [net-3] on: seed them; off: stop at once
+                QTimer::singleShot(0, this, [this] { setSharedFiles(m_lastShared); });
         });
     }
     m_changedTimer.start();
@@ -348,14 +350,44 @@ void BtPlugin::connectServer(const QString &id)
 
 void BtPlugin::setSharedFiles(const QList<SharedFile> &files)
 {
+    m_lastShared = files;
+    m_haveShared = true;
     const bool seedLibrary = m_ctx.settings && m_ctx.settings->value(QString(keys::bt::SeedLibrary)).toBool();
+    QSet<QString> paths;
+    for (const SharedFile &f : files)
+        if (f.size > 0)
+            paths.insert(canonicalPath(f.path));
+    // [net-3] a library file seeded as a torrent that is no longer shared (or every one of them, with
+    // bt/seedLibrary off) stops being offered at once: its peers' rows end with the reason, the torrent
+    // goes; a file still being hashed for it is dropped when the hash is done
+    QList<QPair<QString, QString>> drop;
+    for (auto it = m_seedPathToId.cbegin(); it != m_seedPathToId.cend(); ++it)
+        if (!seedLibrary || !paths.contains(it.key()))
+            drop << qMakePair(it.key(), it.value());
+    const QString why = seedLibrary ? QStringLiteral("Stopped: the file is no longer shared")
+                                    : QStringLiteral("Stopped: shared files are not offered on BitTorrent any more");
+    for (const auto &d : std::as_const(drop)) {
+        qCInfo(lcBt) << "not seeding" << d.first << "any more:" << why;
+        Worker *w = m_worker;
+        const QString id = d.second;
+        toWorker([w, id, why] { w->endUploads(id, why); });
+        removeTorrent(id, false);
+    }
+    m_seedWanted = seedLibrary ? paths : QSet<QString>();
+    for (auto it = m_libraryDupes.begin(); it != m_libraryDupes.end();)   // the download went, or its file
+        it = paths.contains(it.key()) && m_snap.contains(it.value()) ? std::next(it) : m_libraryDupes.erase(it);
+    // finished downloads whose shared files left the list stop seeding (the worker knows their files)
+    {
+        Worker *w = m_worker;
+        toWorker([w, paths] { w->applySharing(paths); });
+    }
     if (!seedLibrary)
         return;
     for (const SharedFile &f : files) {
         if (f.size <= 0)
             continue;
         const QString c = canonicalPath(f.path);
-        if (m_seedPathToId.contains(c) || m_hashing.contains(c))
+        if (m_seedPathToId.contains(c) || m_hashing.contains(c) || m_libraryDupes.contains(c))
             continue;
         QString err;
         seedLocalFile(f.path, &err);
@@ -485,6 +517,7 @@ QString BtPlugin::addParams(std::shared_ptr<lt::add_torrent_params> atp, Record 
     atp->storage_mode = m_cfg.preallocate ? lt::storage_mode_allocate : lt::storage_mode_sparse;
     atp->max_connections = m_cfg.maxConnectionsPerTorrent;
     atp->max_uploads = m_cfg.maxUploadsPerTorrent;
+    stripWebSeeds(*atp, m_cfg.webSeeds);   // [net-3]
     if (!wanted.isEmpty()) {
         int n = 0;
         if (atp->ti)
@@ -782,6 +815,11 @@ bool BtPlugin::seedLocalFile(const QString &path, QString *error)
 void BtPlugin::onSeedHashed(const QString &path, const QByteArray &torrent, const QString &error)
 {
     m_hashing.remove(path);
+    if (m_haveShared && !m_seedWanted.contains(path)) {   // [net-3] unshared while it was hashed
+        qCInfo(lcBt) << "not seeding" << path << ": no longer shared";
+        emit m_events->seedFailed(path, QStringLiteral("no longer shared"));
+        return;
+    }
     QString err = error;
     if (err.isEmpty()) {
         auto atp = std::make_shared<lt::add_torrent_params>();
@@ -795,6 +833,15 @@ void BtPlugin::onSeedHashed(const QString &path, const QByteArray &torrent, cons
             Record rec;
             rec.savePath = QFileInfo(path).absolutePath();
             rec.seededPath = path;
+            // [net-3] the same torrent is already here (a finished download lying in a shared folder):
+            // it stays the user's download, seeded under bt/seedCompleted and stopped when its file
+            // leaves the shares, never taken over (and later removed) as a library seed
+            const QString existing = hexId(atp->ti->info_hashes());
+            if (m_snap.contains(existing) && !m_seedPathToId.values().contains(existing)) {
+                m_libraryDupes.insert(path, existing);
+                emit m_events->seedReady(path, existing);
+                return;
+            }
             const QString id = addParams(atp, rec, torrent, {}, &err);
             if (!id.isEmpty()) {
                 m_seedPathToId.insert(path, id);

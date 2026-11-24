@@ -62,6 +62,9 @@ private slots:
 
     void bundlePaths()
     {
+#ifdef Q_OS_WIN
+        QSKIP("tests macOS paths (/Applications, /Volumes): on Windows they become drive paths");
+#endif
         QCOMPARE(paths::bundleOf(QStringLiteral("/Applications/OctoMX.app/Contents/MacOS")), QStringLiteral("/Applications/OctoMX.app"));
         QCOMPARE(paths::bundleOf(QStringLiteral("/Users/u/Desktop/Octo MX copy.app/Contents/MacOS/")), QStringLiteral("/Users/u/Desktop/Octo MX copy.app"));
         QVERIFY(paths::bundleOf(QStringLiteral("/opt/OctoMX/bin")).isEmpty());
@@ -98,6 +101,9 @@ private slots:
 
     void packageNames()
     {
+#ifdef Q_OS_WIN
+        QSKIP("tests macOS paths (/Applications, /Volumes): on Windows they become drive paths");
+#endif
         const QString tag = QStringLiteral("macos-universal");
         QCOMPARE(upd::archiveName(QStringLiteral("5.2.0"), tag), QStringLiteral("OctoMX-5.2-macos-universal.zip"));
         QCOMPARE(upd::packageDirName(QStringLiteral("5.3.1"), tag), QStringLiteral("OctoMX-5.3-macos-universal"));
@@ -133,6 +139,9 @@ private slots:
 
     void stagedMacTree()
     {
+#ifdef Q_OS_WIN
+        QSKIP("tests a staged macOS package (its program file and Unix permissions): not checked on Windows");
+#endif
         // a staged macOS package: the program must be a Mach-O file
         const QString stage = m_root + QStringLiteral("/stage");
         const QString top = stage + QStringLiteral("/OctoMX-5.2-macos-universal");

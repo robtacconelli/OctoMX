@@ -115,6 +115,7 @@ private slots:
     }
 
     // the row and the Settings page show and write the same settings, live, both ways
+    // ("bandwidth/lastDownLimitKBs", "bandwidth/lastUpLimitKBs": the value a ticked limit takes)
     void rowAndSettingsInStep()
     {
         SpeedLimitRow *row = page()->limitRow();

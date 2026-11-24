@@ -52,6 +52,12 @@ void UploadSession::cancel()
     closeNow();
 }
 
+void UploadSession::stopNotShared()
+{
+    endUpload(mx::TransferState::Error, QStringLiteral("Stopped: the file is no longer shared"));
+    closeNow();
+}
+
 void UploadSession::closeNow()
 {
     if (m_done) return;

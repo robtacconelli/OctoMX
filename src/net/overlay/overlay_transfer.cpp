@@ -375,7 +375,7 @@ void OverlaySource::onSlot(const QString &st, int pos, const QString &reason, co
         setState(Connecting);
         sendOpen();
     } else {
-        fail(st == QLatin1String("missing") ? tr("File not shared") :
+        fail(st == QLatin1String("missing") ? (reason == QLatin1String("unavailable") ? tr("Not available") : tr("File not shared")) :
              reason == QLatin1String("busy") ? tr("No upload slots") :
              reason == QLatin1String("hotlist") ? tr("Denied: uploads only to users on their Hotlist") : tr("Denied by user"));
     }
@@ -574,14 +574,48 @@ void OverlayPlugin::onDataFrame(const QString &nodeId, const QByteArray &frame)
 // ================================================================================== serve side
 int OverlayPlugin::totalSlots() const
 {
+    if (m_slots) return m_slots->total();   // [net-3] one total over the queued-upload networks
     return qBound(0, setting(QString(keys::transfers::MaxUploads), 8).toInt(), 200);
 }
 
 int OverlayPlugin::freeSlots() const
 {
+    if (m_slots) return qMax(0, m_slots->total() - m_slots->used());
     int active = 0;
     for (const UploadSession *s : m_uploads) active += s->active ? 1 : 0;
     return qMax(0, totalSlots() - active);
+}
+
+bool OverlayPlugin::slotFree()
+{
+    if (m_slots) return m_slots->available(Net::Overlay) > 0;
+    int active = 0;
+    for (const UploadSession *s : m_uploads) active += s->active ? 1 : 0;
+    return active < totalSlots();
+}
+
+void OverlayPlugin::takeSlot(UploadSession *s, bool forced)
+{
+    if (m_slots) m_slots->acquire(Net::Overlay, s->uploadId, forced);
+}
+
+void OverlayPlugin::giveBackSlot(UploadSession *s)
+{
+    if (m_slots) m_slots->release(s->uploadId);
+}
+
+// the queued requests that could take a slot now (their user is below the per-user limit)
+void OverlayPlugin::reportWaiting()
+{
+    if (!m_slots) return;
+    const int perUser = qBound(1, setting(QString(keys::transfers::MaxUploadsPerUser), 2).toInt(), 100);
+    QHash<QString, int> userActive;
+    for (const UploadSession *s : m_uploads)
+        if (s->active) ++userActive[s->userId];
+    int n = 0;
+    for (const UploadSession *s : m_uploadQueue)
+        if (userActive.value(s->userId) < perUser) ++n;
+    m_slots->setWaiting(Net::Overlay, n, 5000);   // a push network: it takes a free slot at once
 }
 
 namespace {
@@ -641,6 +675,8 @@ void OverlayPlugin::onGetOpen(const QString &nodeId, const QJsonObject &o)
         else sendSlot(this, s, QStringLiteral("queued"), m_uploadQueue.indexOf(s) + 1);
         return;
     }
+    // [net-3] an ignored user gets no upload and no queue place: "not available", as for a file we do not have
+    if (isIgnoredUser(uid)) return sendSlot(this, nodeId, sid, QStringLiteral("missing"), 0, QStringLiteral("unavailable"));
     const FileHashes h = hashesFromJson(jObj(o, "h"));
     const qint64 size = jInt(o, "size", 0);
     SharedFile file;
@@ -694,9 +730,12 @@ void OverlayPlugin::onGetOpen(const QString &nodeId, const QJsonObject &o)
     s->queuedMs = s->lastActivityMs = nowMs();
     s->serial = ++m_uploadSerial;
     const bool small = bypass > 0 && file.size <= bypass;
-    if (maxUp > 0 && ((active < maxUp && userActive < perUser) || (small && userActive < perUser))) {
+    Q_UNUSED(active)
+    const bool room = maxUp > 0 && slotFree();
+    if (maxUp > 0 && userActive < perUser && (room || small)) {
         s->active = true;
         s->startedMs = nowMs();
+        takeSlot(s, !room);   // [net-3] the small file bypass goes beyond the total
         m_uploads.insert(key, s);
         sendSlot(this, s, QStringLiteral("ready"));
         reportUpload(s, true);
@@ -718,6 +757,7 @@ void OverlayPlugin::onGetOpen(const QString &nodeId, const QJsonObject &o)
     m_uploadQueue.insert(at, s);
     sendQueuePositions();
     reportUpload(s, true);
+    reportWaiting();
 }
 
 void OverlayPlugin::sendQueuePositions()
@@ -741,10 +781,12 @@ void OverlayPlugin::promoteQueue()
     for (const UploadSession *s : m_uploads)
         if (s->active) { ++active; ++userActive[s->userId]; }
     bool changed = false;
-    for (int i = 0; i < m_uploadQueue.size() && active < maxUp;) {
+    reportWaiting();   // [net-3] the pool weighs who waits before it says whether a slot is ours
+    for (int i = 0; i < m_uploadQueue.size() && (m_slots ? maxUp > 0 && m_slots->available(Net::Overlay) > 0 : active < maxUp);) {
         UploadSession *s = m_uploadQueue[i];
         if (userActive.value(s->userId) >= perUser) { ++i; continue; }
         m_uploadQueue.removeAt(i);
+        takeSlot(s, false);
         s->active = true;
         s->startedMs = s->lastActivityMs = nowMs();
         ++active;
@@ -754,6 +796,7 @@ void OverlayPlugin::promoteQueue()
         changed = true;
     }
     if (changed) sendQueuePositions();
+    reportWaiting();
 }
 
 void OverlayPlugin::onGet(const QString &nodeId, const QJsonObject &o)
@@ -1061,6 +1104,8 @@ void OverlayPlugin::closeUpload(UploadSession *s, const QString &reason, bool no
     if (!s) return;
     m_uploads.remove(s->key);
     m_uploadQueue.removeAll(s);
+    giveBackSlot(s);   // [net-3]
+    reportWaiting();
     if (notifyPeer) sendSlot(this, s->nodeId, s->sid, QStringLiteral("closed"), 0, reason);
     qCInfo(lcOverlay) << "upload" << s->name << "to" << s->userName << "closed:" << reason << s->bytesSent << "bytes";
     // [up-1] the row's last word: how it ended, no rate any more, the bytes really handed to the link
@@ -1095,6 +1140,8 @@ bool OverlayPlugin::startUploadNow(const QString &uploadId)
         if (s->uploadId != uploadId) continue;
         m_uploadQueue.removeAll(s);
         s->active = true;
+        takeSlot(s, true);   // [net-3] beyond the total, counted
+        reportWaiting();
         s->startedMs = s->lastActivityMs = nowMs();
         sendSlot(this, s, QStringLiteral("ready"));
         reportUpload(s, true);

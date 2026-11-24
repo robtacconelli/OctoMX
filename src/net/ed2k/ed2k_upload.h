@@ -36,6 +36,10 @@ public:
     void peerConnected(PeerConnection *pc);      // handshake done (maybe a queued client came back)
     void peerClosed(PeerConnection *pc);
     void stop();
+    // [net-3] the shared files changed: a client asking for (or receiving) a file that is no longer
+    // shared is told "no such file" and leaves the queue; a running upload of it stops
+    void sharedFilesChanged();
+    void slotsFreed();   // [net-3] the shared pool has room again
 
     int activeUploads() const;
     int queueLength() const { return int(m_waiting.size()); }
@@ -89,6 +93,7 @@ private:
         int priority = 0;             // [glue-3] queue priority (-1, 0, 1)
         bool forced = false;          // [glue-3] "Start Transfer": slot regardless of the slot count
         int reportedRank = -1;        // [glue-3] last rank reported to the core
+        QString endText;              // [net-3] why the session ended (the row's last word), empty = finished
     };
     struct ReadJob { QString key; int counter = 0; Block block; };
     void startRead(Client &c, const Block &b);
@@ -104,6 +109,8 @@ private:
     void answerMultiPacket(PeerConnection *pc, const Packet &p);
     void sendNoFile(PeerConnection *pc, const QByteArray &hash);
     void process();
+    bool slotFree();          // [net-3] the shared pool, or eD2k's own slot count
+    void reportWaiting();     // [net-3] how many queued clients could start now (the pool's fairness)
     void startSession(Client &c);
     void countSentOn(Client &c);   // [up-1] the session's byte counter follows its connection
     void endSession(Client &c, const QString &why, bool requeue);

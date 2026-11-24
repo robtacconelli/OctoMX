@@ -119,6 +119,10 @@ private:
     QHash<QString, QByteArray> m_pieceHashes;
     QHash<QString, QString> m_seedPathToId;      // canonical path → id
     QSet<QString> m_hashing;                      // canonical paths being hashed
+    QList<SharedFile> m_lastShared;               // [net-3] the Library's last list
+    QSet<QString> m_seedWanted;                   // [net-3] canonical paths that may be seeded (bt/seedLibrary)
+    bool m_haveShared = false;
+    QHash<QString, QString> m_libraryDupes;       // [net-3] shared file -> the download torrent that is the same
     QSet<QString> m_confirmed;                    // ids the worker confirmed (torrentAdded emitted)
     QSet<QString> m_metaEmitted;
     bool m_restoring = false;

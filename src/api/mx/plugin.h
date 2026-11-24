@@ -21,6 +21,7 @@ namespace mx {
 
 class RangeSource;
 class RateLimiter;
+class UploadSlots;
 
 // ---------------------------------------------------------------- what the core gives a plugin
 class LibraryAccess {                       // read access to shared (and partially downloaded) files
@@ -58,6 +59,9 @@ struct PluginContext {
     // lists in diagnostics().bindings with mapByCore, so the plugin must not map ports itself
     // (libtorrent / librats mapping off). false (tests, old cores): plugins map as before.
     bool           coreMapsPorts = false;
+    // [net-3] the shared upload slots (transfers/maxUploads as one total over the OctoMX network, eD2k
+    // and Gnutella; mx/upload_slots.h). null (tests, old cores): each network counts its own.
+    UploadSlots   *uploadSlots = nullptr;
 };
 
 // ---------------------------------------------------------------- diagnostics [added by diag-1]
@@ -268,6 +272,10 @@ public:
     // The user's hotlist (presence tracking, "hotlist only" privacy choices). The core calls it once
     // after start() and whenever the hotlist changes.
     virtual void setHotlist(const QList<UserRef> &users) { Q_UNUSED(users) }
+    // [net-3] the user's ignore list (entries added by name only have id == name). The core calls it
+    // once after start() and whenever the list changes. The OctoMX network gives an ignored user no
+    // browse list, no whois details and no upload.
+    virtual void setIgnored(const QList<UserRef> &users) { Q_UNUSED(users) }
     // [added by ovl-2] the local user as this network's other users see it (the OctoMX overlay: id = the
     // user key, name = "<screen name>_<5 digits from the key>"), invalid when the network has no own
     // user identity. The core takes the one screen name from it and recognises own rows by id.

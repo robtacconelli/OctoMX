@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Net::Overlay: keyword search among OctoMX users, find-sources, hash-link registry.
 #include "overlay_plugin_impl.h"
+#include "overlay_transfer.h"   // [net-3] upload sessions of files that left the shares
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -71,6 +72,19 @@ void OverlayPlugin::setSharedFiles(const QList<SharedFile> &files)
     for (const SharedFile &f : m_shared)
         m_sharedLower << (f.name.isEmpty() ? QFileInfo(f.path).fileName() : f.name).toLower();
     m_haveSharedList = true;
+    // [net-3] a file that left the shares: its running uploads stop (the row says why, the downloader
+    // is told the slot closed and then finds it "not shared") and its queued requests leave the queue.
+    // A running download's verified part (partial) stays served as before.
+    QList<UploadSession *> gone;
+    for (UploadSession *s : std::as_const(m_uploads)) {
+        if (s->partial) continue;
+        bool kept = false;
+        for (const SharedFile &f : std::as_const(m_shared))
+            if (f.size == s->size && (f.path == s->path || f.hashes.matches(s->hashes))) { kept = true; break; }
+        if (!kept) gone << s;
+    }
+    for (UploadSession *s : std::as_const(gone))
+        closeUpload(s, QStringLiteral("unshared"), true, TransferState::Error, tr("Stopped: the file is no longer shared"));
     if (m_running && before != m_shared.size() && nowMs() - m_lastPresenceMs > 5000) announcePresence();
 }
 
@@ -149,6 +163,7 @@ void OverlayPlugin::onSearchEnvelope(const QString &uid, const QJsonObject &b)
 
     if (t == QLatin1String("q")) {
         Q_EMIT incomingSearches(1);   // [glue-2] SPM figure
+        if (isIgnoredUser(uid)) return;   // [net-3] an ignored user finds nothing of ours
         const QStringList words = queryWords(jStr(b, "text", 256));
         if (words.isEmpty()) return;
         const MediaType type = static_cast<MediaType>(qBound(qint64(0), jInt(b, "type", 0), qint64(7)));

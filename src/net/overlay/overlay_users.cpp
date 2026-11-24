@@ -473,7 +473,7 @@ void OverlayPlugin::onBrowseRequest(const QString &nodeId, const QJsonObject &o)
     const QString uid = m_nodeUser.value(nodeId);
     const QString rid = jStr(o, "rid", 64);
     if (!isHex(rid)) return;
-    if (!allowedBy(QString(keys::messages::AllowBrowse), uid)) {
+    if (!allowedBy(QString(keys::messages::AllowBrowse), uid) || isIgnoredUser(uid)) {   // [net-3] ignored: no list
         QJsonObject e;
         e[QStringLiteral("t")] = QStringLiteral("browse_err");
         e[QStringLiteral("v")] = kWireVersion;
@@ -612,7 +612,7 @@ void OverlayPlugin::onWhoisRequest(const QString &nodeId, const QJsonObject &o)
     QJsonObject a;
     a[QStringLiteral("v")] = kWireVersion;
     a[QStringLiteral("rid")] = rid;
-    if (!setting(QString(keys::messages::AllowWhois), true).toBool()) {
+    if (!setting(QString(keys::messages::AllowWhois), true).toBool() || isIgnoredUser(m_nodeUser.value(nodeId))) {   // [net-3]
         a[QStringLiteral("t")] = QStringLiteral("whois_err");
         sendRaw(nodeId, a);
         return;

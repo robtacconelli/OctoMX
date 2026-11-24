@@ -137,6 +137,7 @@ private:
     void indexEntryLocked(const Entry &e);
     void unindexLocked(const Entry &e);
     void scheduleUpdate();
+    void pushRemovalNow();   // [net-3] a file left the shares: every network hears it at once
     void emitProgress(const QString &current);
     void updateWatcher(const QStringList &dirs);
     QString findPathLocked(const FileHashes &h) const;

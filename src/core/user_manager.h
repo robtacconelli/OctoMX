@@ -49,6 +49,7 @@ private:
     NetworkPlugin *pluginFor(const UserRef &u, int capability) const;
     int indexOf(const UserRef &u) const;
     void pushHotlist();                        // NetworkPlugin::setHotlist on every plugin
+    void pushIgnored();                        // [net-3] NetworkPlugin::setIgnored on every plugin
 
     Settings *m_settings;
     NetworkManager *m_network;

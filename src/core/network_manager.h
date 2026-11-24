@@ -31,6 +31,7 @@ public:
 
     // Builds contexts and calls init() on every plugin (once). library/limiter may be null in tests.
     void initPlugins(const QString &profileDir, LibraryAccess *library, RateLimiter *limiter);
+    void setUploadSlots(UploadSlots *pool) { m_uploadSlots = pool; }   // [net-3] before initPlugins()
     // Starts the enabled plugins if network/connectOnStart (or force).
     void startNetworks(bool force = false);
     void stopAll();                                  // stop() on every running plugin (shutdown)
@@ -101,6 +102,7 @@ private:
     QList<NetworkPlugin *> m_plugins;
     QHash<NetworkPlugin *, bool> m_running;
     bool m_inited = false;
+    UploadSlots *m_uploadSlots = nullptr;   // [net-3]
     bool m_online = false;               // user wants to be connected (Connect pressed / auto)
     std::function<int()> m_sourceCounter;
     std::function<int()> m_secondaryCounter;

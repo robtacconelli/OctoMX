@@ -73,6 +73,7 @@ void UserManager::start()
 {
     if (!m_dao) {
         pushHotlist();
+        pushIgnored();
         return;
     }
     m_hotlist = m_dao->hotlist();
@@ -80,6 +81,13 @@ void UserManager::start()
     emit hotlistChanged();
     emit ignoredChanged();
     pushHotlist();
+    pushIgnored();
+}
+
+void UserManager::pushIgnored()
+{
+    if (!m_network) return;
+    for (NetworkPlugin *p : m_network->plugins()) p->setIgnored(m_ignored);
 }
 
 void UserManager::pushHotlist()
@@ -202,6 +210,7 @@ void UserManager::ignore(const UserRef &u, bool on)
     if (on) m_ignored << r;
     else m_ignored.removeAt(idx);
     if (m_dao) m_dao->setIgnored(r, on);
+    pushIgnored();
     emit ignoredChanged();
 }
 
