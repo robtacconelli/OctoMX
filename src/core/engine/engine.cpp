@@ -827,6 +827,11 @@ DownloadEngine::DownloadEngine(const EngineContext &ctx, QObject *parent)
     d->threadPool.setExpiryTimeout(30000);
     d->tickTimer.setInterval(250);
     connect(&d->tickTimer, &QTimer::timeout, this, [this] { d->tick(); });
+    // a changed "maximum downloads at once" applies now, not at the next finished download
+    if (ctx.settings)
+        connect(ctx.settings, &Settings::changed, this, [this](const QString &key, const QVariant &) {
+            if (key == keys::transfers::MaxDownloads) d->requestRebalance();
+        });
 }
 
 DownloadEngine::~DownloadEngine()

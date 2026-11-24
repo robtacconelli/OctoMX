@@ -105,7 +105,9 @@ private slots:
         QCOMPARE(activeCount(), 1);
         QCOMPARE(env.info(ids.at(2)).statusText, transferStateText(TransferState::Queued));
         env.settings.setValue(QString(keys::transfers::MaxDownloads), 3);
-        QTRY_COMPARE_WITH_TIMEOUT(activeCount(), 3, 10000);
+        // at once: long before the first file (ten seconds at this rate) could finish and free a slot
+        QTRY_COMPARE_WITH_TIMEOUT(activeCount(), 3, 3000);
+        for (const QString &id : ids) QVERIFY(env.info(id).state != TransferState::Completed);
     }
 
     // transfers/verifyCompleted: a file whose parts were all checked against the eD2k part hashes is
@@ -150,7 +152,7 @@ private slots:
                  env.info(id).diagnosis.contains(QStringLiteral("disk space"), Qt::CaseInsensitive), qPrintable(env.info(id).statusText));
         env.settings.setValue(QString(keys::transfers::MinFreeSpaceMB), 0);
         env.engine->resume(id);
-        QVERIFY(env.waitDone(id, 30000));
+        QVERIFY(env.waitDone(id, 120000));   // 4 MB at the mock's 200 KB/s, slower on a loaded machine
     }
 
     // transfers/maxSourcesPerDownload

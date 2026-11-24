@@ -6,8 +6,10 @@
 // shows it (how the table below was made, then checked by hand against the Appearance pages).
 #include <QtCore/QTemporaryDir>
 #include <QtGui/QImage>
+#include <QtGui/QPainter>
 #include <QtTest/QtTest>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QTreeView>
 
 #include "mx/diagnostics.h"
@@ -172,6 +174,35 @@ class TstSet1Colors : public QObject {
         emit m_app.core->chat()->messageReceived(m);
     }
 
+    // Every row of a list, also the ones below the visible part (a small screen makes the main
+    // window short): the viewport page by page, stacked into one picture.
+    static QImage grabAllRows(MxListView *lv)
+    {
+        QScrollBar *sb = lv->verticalScrollBar();
+        const int keep = sb->value();
+        QList<QImage> parts;
+        for (int v = sb->minimum();; v += qMax(1, sb->pageStep())) {
+            sb->setValue(qMin(v, sb->maximum()));
+            QCoreApplication::processEvents();
+            parts << lv->viewport()->grab().toImage();
+            if (v >= sb->maximum()) break;
+        }
+        sb->setValue(keep);
+        QCoreApplication::processEvents();
+        if (parts.size() == 1) return parts.first();
+        int h = 0;
+        for (const QImage &p : std::as_const(parts)) h += p.height();
+        QImage all(parts.first().width(), h, QImage::Format_ARGB32);
+        all.fill(parts.first().pixelColor(0, 0));
+        QPainter pt(&all);
+        int y = 0;
+        for (const QImage &p : std::as_const(parts)) {
+            pt.drawImage(0, y, p);
+            y += p.height();
+        }
+        return all;
+    }
+
     QImage render(Scene s)
     {
         QWidget *w = nullptr;
@@ -245,7 +276,7 @@ class TstSet1Colors : public QObject {
         }
         if (!w) return {};
         QCoreApplication::processEvents();
-        if (auto *lv = qobject_cast<MxListView *>(w)) return lv->viewport()->grab().toImage();
+        if (auto *lv = qobject_cast<MxListView *>(w)) return grabAllRows(lv);
         return w->grab().toImage();
     }
 
