@@ -7,9 +7,9 @@
 // at most once a day unless updates/mode is "off", stays quiet unless a newer version that was not
 // skipped exists, and logs one line otherwise. What a newer release does depends on updates/mode:
 //   auto   (default) download it quietly, check the signature, unpack and check it next to the
-//          program, then the box "OctoMX 5.5 is ready to install" with Restart Now / Later / Skip
+//          program, then the box "OctoMX 5.6 is ready to install" with Restart Now / Later / Skip
 //          This Version (Later: installed when OctoMX is closed, a tray balloon says so once)
-//   ask    the box "OctoMX 5.5 is available" with Update Now (progress bar, then the same restart
+//   ask    the box "OctoMX 5.6 is available" with Update Now (progress bar, then the same restart
 //          question) / Remind Me Later / Skip This Version and the download page as a link
 //   notify the classic message box: Open Download Page / Remind Me Later / Skip This Version
 //   off    no check at start; Help ▸ Check for Updates... still asks
@@ -19,7 +19,7 @@
 // The install itself runs when OctoMX closes (finishOnExit(), called by main.cpp after the core has
 // shut down); after Restart Now the new version is started with the same options. At the next start
 // startupRecovery() finishes or undoes an interrupted swap and removes the old files; the first
-// start after an update shows "Updated to OctoMX 5.5" with a What's New link.
+// start after an update shows "Updated to OctoMX 5.6" with a What's New link.
 //
 // Network policy (tests and scripted runs never contact GitHub): the app sets On for a real core with
 // a user profile, IfUrlSet for a test or scripted run (MX_OS_ROOT is set), Off for
@@ -63,8 +63,8 @@ public:
     enum class State { Idle, Checking, Downloading, Preparing, Ready };
     struct Offer {
         Kind kind = Kind::Notify;
-        QString version;   // "5.5"
-        QString current;   // "5.4"
+        QString version;   // "5.6"
+        QString current;   // "5.5"
         QString notes;     // plain text excerpt
         QString pageUrl;   // what Open Download Page / What's New opens
         QString reason;    // why there is no automatic install (Notify), empty otherwise
@@ -88,11 +88,11 @@ public:
     bool startCheckDue() const;
     void scheduleStartCheck(int delayMs = -1);
     bool isChecking() const;
-    QString currentVersion() const;   // MX_VERSION_FULL, e.g. "5.4.0"
+    QString currentVersion() const;   // MX_VERSION_FULL, e.g. "5.5.0"
     QString mode() const;             // updates/mode: auto | ask | notify | off
     State state() const { return m_state; }
     QString readyVersion() const;     // the prepared update (State::Ready)
-    // one line for the About box: "OctoMX 5.4 is up to date" / "OctoMX 5.5 is available" / ...
+    // one line for the About box: "OctoMX 5.5 is up to date" / "OctoMX 5.6 is available" / ...
     QString statusLine() const;
 
     // show what a check with this answer would show (manual = the answers of Help ▸ Check for

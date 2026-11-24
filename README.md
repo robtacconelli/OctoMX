@@ -36,7 +36,7 @@ responsibility; the authors are not responsible for the content exchanged with i
 start the program asks you to accept these terms before it connects to any network. See
 [Legal](#legal).
 
-Version 5.4 for Windows 10/11 (64-bit) and Linux (x86_64). Project page:
+Version 5.5 for Windows 10/11 (64-bit), Linux (x86_64) and macOS 14.4 or newer. Project page:
 https://github.com/robtacconelli/OctoMX
 
 > **Licence:** OctoMX is free software under the **GNU General Public License v3.0 or later**
@@ -88,9 +88,9 @@ built-in demo data:
 
 | | |
 |---|---|
-| **Windows** | Unzip `OctoMX-5.4-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
-| **Linux** | `tar xf OctoMX-5.4-linux-x86_64.tar.xz` and run `OctoMX-5.4-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
-| **macOS** | Unzip `OctoMX-5.4-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
+| **Windows** | Unzip `OctoMX-5.5-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
+| **Linux** | `tar xf OctoMX-5.5-linux-x86_64.tar.xz` and run `OctoMX-5.5-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
+| **macOS** | Unzip `OctoMX-5.5-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
 
 `SHA256SUMS` next to the archives has their checksums.
 
@@ -181,6 +181,24 @@ the internet: either leave **UPnP / NAT-PMP** on (the default; your router must 
 or forward the ports on your router yourself and allow them in your firewall (Windows Firewall,
 ufw, firewalld). The Gnutella module does not map its port itself.
 
+### Proxy and VPN adapter
+
+Settings > Internet Connection applies to the whole program, and it fails closed:
+
+* **Proxy** (SOCKS5 or HTTP): BitTorrent, eD2k, Gnutella, HTTP downloads, the web indexes and the
+  update check go through it. What cannot go through a proxy does not run while one is set and
+  says so on the Networks page: Kad, the OctoMX network, rats-search, the UDP parts of eD2k and
+  Gnutella, listening for incoming connections and port mapping. Nothing connects directly.
+  BitTorrent's DHT, uTP and UDP trackers work only through a SOCKS5 proxy that relays UDP.
+* **Network adapter** (Connection Options, for example a VPN adapter): every network keeps to that
+  adapter. When it disappears (VPN down), every network stops within about two seconds and
+  starts again by itself when the adapter is back; nothing falls back to another adapter. The
+  OctoMX network and rats-search run with a chosen adapter only while the system's internet
+  route goes through it. Name lookups use the system's DNS.
+
+Both were tested on Linux with local proxies, a second local address and a network namespace,
+not yet with a commercial VPN or a public proxy: check your own setup with an address test.
+
 ## Command line
 
 ```
@@ -219,12 +237,11 @@ Plainly, from the status reports of the people who built it:
   are not published to Kad.
 * **Gnutella:** no out-of-band results / GUESS, no TLS, IPv6 or Mojito DHT; no XML metadata, so
   bitrate and length of Gnutella hits stay unknown.
-* **HTTP:** proxy support (HTTP / SOCKS5) is implemented but untested; SOCKS4 is not supported
-  (Qt), FTP is not supported.
+* **HTTP:** FTP is not supported. **Proxy:** SOCKS4 is not supported; see "Proxy and VPN adapter"
+  for what is switched off while a proxy is set.
 * **OctoMX network:** two OctoMX users behind the same home router cannot connect to each other
   over the internet (no NAT hairpinning; on the same LAN they find each other through mDNS);
-  chat rooms have no moderators; partial-file sharing is not implemented; it is designed for a
-  small network.
+  chat rooms have no moderators; it is designed for a small network.
 * **Web index sites** change domains and block clients from time to time; a broken site needs a
   `providers.json` update.
 * **Downloads:** a torrent whose metadata never arrives does not fall back to the other networks.
