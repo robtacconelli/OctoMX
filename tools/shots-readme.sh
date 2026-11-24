@@ -13,7 +13,7 @@
 #   --keep       keep the work folder (build/shots-readme/run: profiles, logs, full screen grabs)
 #
 # Every picture is the Windows build running under wine with the real Win32 window frame (title bar
-# with the program icon and "OctoMX v5.3 ..."), cropped exactly to the window, 100 %, no scaling:
+# with the program icon and "OctoMX v5.4 ..."), cropped exactly to the window, 100 %, no scaling:
 # wine in its own prefix (build/shots-readme/wineprefix, Windows 2000 standard colours, a 1280x1024
 # virtual desktop) on its own Xvnc. Nothing is written to the real HOME, ~/.wine or ~/Downloads:
 # HOME points into the work folder, every run has its own --profile and MX_OS_ROOT, downloads go
@@ -73,7 +73,7 @@ any_wanted() { local s; for s in "$@"; do wanted "$s" && return 0; done; return 
 # material (and domain-like texts in general, checked separately).
 BLOCKLIST='yts|yify|rarbg|eztv|ettv|1337x|piratebay|pirate bay|tpb|uindex|tfile|rutracker|kinozal|torrentgalaxy|tgx|limetorrents|glodls|nyaa|anidub|rutor|nnmclub|torrent9|cpasbien|ytsmx|megapeer|zamunda|bitru'
 FILM="big buck bunny"                         # the open film searched for
-EXCLUDE="-frostwire -frostclick -usenet -mecanoscrit"             # file names that carry a site name, filtered out before anything is opened
+EXCLUDE="-frostwire -frostclick -usenet -mecanoscrit -exploradoresp2p"             # file names that carry a site name, filtered out before anything is opened
 FILTERS=("big buck bunny $EXCLUDE" "big buck bunny surround $EXCLUDE" "big buck bunny avi $EXCLUDE" "big buck bunny 1080p $EXCLUDE" "big buck bunny mp4 $EXCLUDE")   # tried in this order, first clean one wins
 MERGED=${MERGED:-BT+eD2k}                     # text of the merged row's Network column to open and download
 DL_ROW=${DL_ROW:-BT+HTTP}                      # text of the Network column of the row that is downloaded for the Transfers pictures
