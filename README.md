@@ -21,6 +21,9 @@ chat rooms, hotlist, the lot), plugged into the networks that are alive today.
 * **Verify File, Restart Download.** A finished or paused download can be checked again on the
   disk (right-click it, Verify File): only the blocks that are damaged are downloaded again, the
   file stays where it is. Restart Download throws away what was received and starts from zero.
+* **Careful with your files.** Closing waits until every download is written to the disk, an
+  update never interrupts a write, and after a crash or a power cut the unfinished downloads are
+  checked before they continue.
 * **Its own network for the social part.** Chat rooms, private messages, browsing a friend's
   shared files and direct transfers run over a new, serverless OctoMX peer network.
 * **Looks like 2001, runs on 2026 hardware.** Native Qt 6 application for Windows 10/11 and
@@ -39,7 +42,7 @@ responsibility; the authors are not responsible for the content exchanged with i
 start the program asks you to accept these terms before it connects to any network. See
 [Legal](#legal).
 
-Version 5.5 for Windows 10/11 (64-bit), Linux (x86_64) and macOS 14.4 or newer. Project page:
+Version 5.6 for Windows 10/11 (64-bit), Linux (x86_64) and macOS 14.4 or newer. Project page:
 https://github.com/robtacconelli/OctoMX
 
 > **Licence:** OctoMX is free software under the **GNU General Public License v3.0 or later**
@@ -91,9 +94,9 @@ built-in demo data:
 
 | | |
 |---|---|
-| **Windows** | Unzip `OctoMX-5.5-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
-| **Linux** | `tar xf OctoMX-5.5-linux-x86_64.tar.xz` and run `OctoMX-5.5-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
-| **macOS** | Unzip `OctoMX-5.5-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
+| **Windows** | Unzip `OctoMX-5.6-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
+| **Linux** | `tar xf OctoMX-5.6-linux-x86_64.tar.xz` and run `OctoMX-5.6-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
+| **macOS** | Unzip `OctoMX-5.6-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
 
 `SHA256SUMS` next to the archives has their checksums.
 
