@@ -217,10 +217,17 @@ bool SearchManager::acceptHit(const SearchQuery &q, const SearchHit &h) const
     for (const QString &b : m_settings->sl(keys::search::BlockedExtensions))
         if (!b.isEmpty() && ext == b.toLower().remove(QLatin1Char('.'))) return false;
     if (m_settings->b(keys::search::AdultFilter)) {
+        // [set-1] the words of the Web Search page ("Adult filter keywords") count for the results of
+        // every network, as its tool tip says; empty = the built-in list (they were read for web
+        // results only)
+        QStringList list;
+        for (const QString &k : m_settings->sl(keys::web::AdultKeywords))
+            if (!k.trimmed().isEmpty()) list << SearchMerger::normalizedName(k.trimmed());
+        const QStringList &adult = list.isEmpty() ? adultWords() : list;
         const QStringList words = SearchMerger::normalizedName(h.fileName).split(QRegularExpression(QStringLiteral("[ .]")),
                                                                                  Qt::SkipEmptyParts);
         for (const QString &w : words)
-            if (adultWords().contains(w)) return false;
+            if (adult.contains(w)) return false;
     }
     if (m_settings->b(keys::search::FakeFilter)) {
         // "song.mp3.exe", "movie.avi.scr": a media extension followed by an executable one

@@ -167,6 +167,8 @@ void Download::restoreState(const QByteArray &blob)
     m_partPath = m.value(QStringLiteral("partPath")).toString();
     m_fallbackTorrent = m.value(QStringLiteral("fallbackTorrent")).toString();
     m_deadEnd = m.value(QStringLiteral("deadEnd")).toBool();
+    // [set-1] stored before 5.5: a dead end was a mismatch unless its text says the sources failed
+    m_deadEndBanned = m_deadEnd && m.value(QStringLiteral("deadEndBanned"), !m_rec.errorText.startsWith(QLatin1String("File/User Unavailable"))).toBool();
     for (const QVariant &v : m.value(QStringLiteral("ed2kParts")).toList())
         if (v.toByteArray().size() == 16) m_ed2kParts << v.toByteArray();
     m_ed2kProvisional = !m_ed2kParts.isEmpty() && m.value(QStringLiteral("ed2kProvisional")).toBool();
@@ -255,6 +257,7 @@ QByteArray Download::saveState() const
     if (!m_partPath.isEmpty()) m.insert(QStringLiteral("partPath"), m_partPath);
     if (!m_fallbackTorrent.isEmpty()) m.insert(QStringLiteral("fallbackTorrent"), m_fallbackTorrent);
     if (m_deadEnd) m.insert(QStringLiteral("deadEnd"), true);
+    if (m_deadEnd) m.insert(QStringLiteral("deadEndBanned"), m_deadEndBanned);   // [set-1]
     QVariantList parts, leaves;
     for (const QByteArray &b : m_ed2kParts) parts << b;
     for (const QByteArray &b : m_tthLeaves) leaves << b;
@@ -623,6 +626,7 @@ void Download::retry()
 {
     if (isFinished()) return;
     m_deadEnd = false;
+    m_deadEndBanned = false;
     if (m_errorState || m_userPaused) {
         m_errorState = false;
         m_userPaused = false;
@@ -3048,7 +3052,7 @@ void Download::onUrlTorrentFailed(const QString &url, const QString &error)
 
 void Download::tick(qint64 now)
 {
-    if (m_errorState && !m_deadEnd && !isFinished() && m_host->settings() && m_host->settings()->b(keys::transfers::AutoRetry)) {
+    if (m_errorState && !(m_deadEnd && m_deadEndBanned) && !isFinished() && m_host->settings() && m_host->settings()->b(keys::transfers::AutoRetry)) {
         const qint64 interval = qint64(qMax(5, m_host->settings()->i(keys::transfers::RetryIntervalSec))) * 1000;
         const int maxAttempts = m_host->settings()->i(keys::transfers::RetryMaxAttempts);
         if (!m_errorAtMs) m_errorAtMs = now;
@@ -3315,8 +3319,12 @@ bool Download::checkDeadEnd(qint64 now)
     }
     if (considered == 0) return false;
     const bool allBanned = banned == considered;
-    if (!allBanned && now - qMax(m_lastDataMs, m_activatedMs) < 5 * 60 * 1000) return false;
-    m_deadEnd = true;
+    if (!allBanned && now - qMax(m_lastDataMs, m_activatedMs) < m_host->tuning().deadEndMs) return false;
+    // [set-1] only a download whose every source sent the wrong file stays stopped; one whose sources
+    // all failed is tried again by "Automatically retry failed downloads" too (sources come back
+    // online), so Retry every / Retry attempts mean something (they applied to torrent errors only)
+    m_deadEnd = true;            // new sources revive it
+    m_deadEndBanned = allBanned;
     qCWarning(lcEngine) << m_rec.id << "giving up:" << banned << "sources banned," << dead << "failed repeatedly";
     setError(allBanned ? QStringLiteral("File Mismatch: every source sent bad data or the wrong file")
                        : QStringLiteral("File/User Unavailable: every source failed"), false);

@@ -533,6 +533,19 @@ void TstGnutellaLoopback::browseDirect()
     QTRY_VERIFY_WITH_TIMEOUT(!m_a->browseError.isEmpty() || m_a->browseFinished, 15000);
     QVERIFY(m_a->browseError.contains(QLatin1String("403")));
     m_b->settings.setValue(QStringLiteral("gnutella/browseHost"), true);
+    // [set-1] Settings > Private Messages "Allow browsing my files": Gnutella users are anonymous, so
+    // "Only users on my Hot List" and "Nobody" both refuse them
+    for (const char *who : {"hotlist", "nobody"}) {
+        m_b->settings.setValue(QStringLiteral("messages/allowBrowse"), QString::fromLatin1(who));
+        m_a->browseError.clear();
+        m_a->browseFinished = false;
+        m_a->browsed.clear();
+        m_a->plugin->browse(3, u);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_a->browseError.isEmpty() || m_a->browseFinished, 15000);
+        QVERIFY2(m_a->browseError.contains(QLatin1String("403")), who);
+        QVERIFY(m_a->browsed.isEmpty());
+    }
+    m_b->settings.setValue(QStringLiteral("messages/allowBrowse"), QStringLiteral("everyone"));
 }
 
 void TstGnutellaLoopback::downloadViaPush()

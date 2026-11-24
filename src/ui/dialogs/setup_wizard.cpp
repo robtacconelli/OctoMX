@@ -432,18 +432,27 @@ QWizardPage *SetupWizard::makeNetworks()
     for (const auto &n : nets) {
         auto *c = new QCheckBox(tr(n.t));
         c->setObjectName(QStringLiteral("wizNet_") + QString(n.key).section(QLatin1Char('/'), 0, 0));
-        c->setChecked(true);   // recommended: everything on
+        // [set-1] the state the Settings pages show (on in a new profile); "Recommended" turns every one on
+        c->setChecked(s->b(n.key));
         c->setToolTip(tr("Search, download and share on this network too. Untick it to leave it out completely; "
                          "its page in Settings can turn it on again."));
-        Q_UNUSED(s)
         lay->addWidget(c);
         m_nets << qMakePair(QString(n.key), c);
     }
     lay->addSpacing(S(8));
     m_assoc = new QCheckBox(tr("Open magnet:, ed2k:// links and .torrent files with OctoMX"));
     m_assoc->setObjectName(QStringLiteral("wizAssoc"));
-    m_assoc->setChecked(true);
-    m_assoc->setToolTip(tr("Clicking such a link in the web browser or opening a .torrent file starts the download in OctoMX."));
+    {   // [set-1] as on Settings > System Integration; partly checked when only some of the three are on
+        const int on = int(s->b(misc::AssociateMagnet)) + int(s->b(misc::AssociateEd2k)) + int(s->b(misc::AssociateTorrent));
+        if (on > 0 && on < 3) {
+            m_assoc->setTristate(true);
+            m_assoc->setCheckState(Qt::PartiallyChecked);
+        } else {
+            m_assoc->setChecked(on == 3);
+        }
+    }
+    m_assoc->setToolTip(tr("Clicking such a link in the web browser or opening a .torrent file starts the download in OctoMX. "
+                           "Partly checked: as set on Settings > System Integration."));
     lay->addWidget(m_assoc);
     m_autostart = new QCheckBox(tr("Start OctoMX when the computer starts (hidden in the tray)"));
     m_autostart->setObjectName(QStringLiteral("wizAutostart"));
@@ -519,10 +528,12 @@ void SetupWizard::applySettings()
         s->setValue(transfers::IncomingDir, in);
     for (const auto &n : std::as_const(m_nets))
         s->setValue(n.first, rec || n.second->isChecked());
-    const bool assoc = rec || m_assoc->isChecked();
-    s->setValue(misc::AssociateMagnet, assoc);
-    s->setValue(misc::AssociateEd2k, assoc);
-    s->setValue(misc::AssociateTorrent, assoc);
+    if (rec || m_assoc->checkState() != Qt::PartiallyChecked) {   // [set-1] partly checked: left as they are
+        const bool assoc = rec || m_assoc->isChecked();
+        s->setValue(misc::AssociateMagnet, assoc);
+        s->setValue(misc::AssociateEd2k, assoc);
+        s->setValue(misc::AssociateTorrent, assoc);
+    }
     s->setValue(misc::StartWithOs, !rec && m_autostart->isChecked() ? true : (rec ? s->b(misc::StartWithOs) : false));
     s->setValue(network::ConnectOnStart, m_connectNow->isChecked() || rec);
     s->setValue(internal::WizardDone, true);

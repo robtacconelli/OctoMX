@@ -57,6 +57,15 @@ QString normPath(const QString &p)
     return QDir::cleanPath(QDir::fromNativeSeparators(QFileInfo(p).absoluteFilePath()));
 }
 
+// [set-1] the length of a minute for "Rescan shared folders every ... minutes"; MX_TEST_MINUTE_MS
+// shortens it in the tests
+int minuteMs()
+{
+    bool ok = false;
+    const int t = qEnvironmentVariableIntValue("MX_TEST_MINUTE_MS", &ok);
+    return ok && t > 0 ? t : 60 * 1000;
+}
+
 bool isUnder(const QString &path, const QString &dir)
 {
     if (dir.isEmpty()) return false;
@@ -126,7 +135,7 @@ Library::Library(Settings *settings, Database *db, QObject *parent)
             startScan();
         } else if (key == keys::library::RescanIntervalMin) {
             const int min = m_settings->i(keys::library::RescanIntervalMin);
-            if (min > 0) m_rescanTimer.start(min * 60 * 1000);
+            if (min > 0) m_rescanTimer.start(min * minuteMs());
             else m_rescanTimer.stop();
         } else if (key == keys::library::HashThreads) {
             m_hashPool.setMaxThreadCount(qBound(1, m_settings->i(keys::library::HashThreads), 8));
@@ -164,13 +173,11 @@ void Library::start()
     // seed the in-memory list from the cache so plugins get the share list immediately
     {
         QWriteLocker l(&m_lock);
-        const QList<SharedFolder> folders = effectiveFolders();
+        const QList<QRegularExpression> patterns = compilePatterns(m_settings->sl(keys::library::ExcludePatterns));
         for (const LibraryRecord &r : m_dao->all()) {
-            bool under = false;
-            for (const SharedFolder &f : folders) {
-                if (isUnder(r.path, f.path)) { under = true; break; }
-            }
-            if (!under || r.hashes.ed2k.isEmpty()) continue;
+            // [set-1] the same rules as the scan (it used to take every cached file under a shared
+            // folder: an excluded, hidden or no longer shared type was offered until the scan ended)
+            if (r.hashes.ed2k.isEmpty() || !isUnderSharedFolder(r.path, &patterns)) continue;
             Entry e;
             e.file.path = r.path;
             e.file.name = QFileInfo(r.path).fileName().normalized(QString::NormalizationForm_C);   // [mac-1] NFC (macOS: NFD names)
@@ -192,7 +199,7 @@ void Library::start()
         }
     }
     const int min = m_settings->i(keys::library::RescanIntervalMin);
-    if (min > 0) m_rescanTimer.start(min * 60 * 1000);
+    if (min > 0) m_rescanTimer.start(min * minuteMs());
     scheduleUpdate();
     startScan();
 }
@@ -253,13 +260,29 @@ QList<SharedFolder> Library::effectiveFolders() const
     return out;
 }
 
-bool Library::isUnderSharedFolder(const QString &path) const
+bool Library::isUnderSharedFolder(const QString &path, const QList<QRegularExpression> *patterns) const
 {
-    if (!typeAllowed(QFileInfo(path).fileName())) return false;   // [glue-3] Shared File Types
+    // [set-1] every rule of the scan, also for files that arrive another way (a completed download
+    // hashed on request, the hash cache at start): the Shared File Types, "Never share files
+    // matching", hidden files and folders, unshared files and folders
+    const QFileInfo fi(path);
+    if (!typeAllowed(fi.fileName())) return false;   // [glue-3] Shared File Types
+    const QList<QRegularExpression> own = patterns ? QList<QRegularExpression>() : compilePatterns(m_settings->sl(keys::library::ExcludePatterns));
+    for (const QRegularExpression &re : patterns ? *patterns : own)
+        if (re.match(fi.fileName()).hasMatch()) return false;
+    const bool hidden = m_settings->b(keys::library::ShareHidden);
     for (const SharedFolder &f : effectiveFolders()) {
-        if (f.recursive ? isUnder(path, f.path) : QFileInfo(path).absolutePath() == f.path) {
+        if (f.recursive ? isUnder(path, f.path) : fi.absolutePath() == f.path) {
             for (const QString &ex : m_excluded)
                 if (isUnder(path, ex)) return false;
+            if (!hidden) {
+                // the file and every folder between the shared folder and the file, as the scan
+                // skips them (dot names count as hidden on every platform)
+                for (QString p = path; p.size() > f.path.size() && isUnder(p, f.path); p = QFileInfo(p).absolutePath()) {
+                    const QFileInfo pi(p);
+                    if (pi.fileName().startsWith(QLatin1Char('.')) || pi.isHidden()) return false;
+                }
+            }
             return true;
         }
     }
@@ -775,7 +798,13 @@ void Library::pumpHashQueue()
             hash::MultiHasher h(hash::MultiHasher::Default);
             QString err;
             ++m_hashRuns;
+            {   // [set-1] files hashed at the same time (library/hashThreads), for the tests
+                const int now = ++m_hashingNow;
+                int peak = m_hashPeak.load();
+                while (now > peak && !m_hashPeak.compare_exchange_weak(peak, now)) {}
+            }
             r.ok = hash::MultiHasher::hashFile(path, h, cancel, {}, &err);
+            --m_hashingNow;
             if (r.ok) {
                 const QFileInfo after(path);
                 if (after.size() != r.size || after.lastModified().toMSecsSinceEpoch() != r.mtimeMs) {

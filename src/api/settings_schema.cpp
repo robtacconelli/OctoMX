@@ -493,7 +493,7 @@ QList<SettingDef> buildSchema()
     B.b(transfers::AutoRetry, true, "Automatically retry failed downloads");
     B.i(transfers::RetryIntervalSec, 60, 5, 86400, "Retry interval (seconds)");
     B.i(transfers::RetryMaxAttempts, 0, 0, 10000, "Retry attempts (0 = forever)");
-    B.i(transfers::SourceSearchIntervalMin, 10, 1, 1440, "Look for more sources every (minutes)");
+    B.i(transfers::SourceSearchIntervalMin, 10, 1, 1440, "Look for more sources every (minutes)"); B.hide();   // [set-1] nothing reads it: Search > Auto Find Sources (search/autoFindSourcesMin) sets it
     B.i(transfers::StallTimeoutSec, 300, 30, 86400, "Consider a download stalled after (seconds)"); B.hide();   // [ui-h] nothing reads it: off the UI
     B.i(transfers::MetadataTimeoutSec, 90, 1, 86400, "Torrent metadata timeout before using other sources (seconds)");
     B.b(transfers::AutoClearCompleted, false, "Clear complete downloads");
@@ -535,7 +535,7 @@ QList<SettingDef> buildSchema()
     B.i(queue::MaxPerUser, 10, 1, 1000, "Maximum queued files per user");
     B.b(queue::HotlistPriority, true, "Hot List users skip the queue");
     B.b(queue::SendPosition, true, "Tell users their queue position");
-    B.i(queue::TimeoutMin, 60, 1, 1440, "Drop queued users after (minutes) of inactivity");
+    B.i(queue::TimeoutMin, 60, 2, 1440, "Drop queued users after (minutes) of inactivity");   // [set-1] 2: a waiting client asks every minute
     B.i(queue::SmallFileBypassKB, 128, 0, 1048576, "Files below this size skip the queue (KB)");
     B.b(queue::ChangeSpeedWhenBusy, false, "Change reported connection speed when busy");
     B.i(queue::ChangeSpeedThreshold, 2, 1, 100, "When there are this many uploads or more");
@@ -604,7 +604,7 @@ QList<SettingDef> buildSchema()
                                       "Thumbs.db", ".DS_Store", "*.lnk"}),
          "Never share files matching");
     B.b(library::ShareIncomplete, true, "Share verified parts of incomplete downloads");
-    B.sl(library::FileTypes, availableFileTypes(), "Available file types");   // [ui-f] from the type table
+    B.sl(library::FileTypes, availableFileTypes(), "Available file types"); B.hide();   // [ui-f] from the type table; [set-1] nothing reads the value (the Library page shows the table itself)
     B.sl(library::SharedTypes, sharedTypeIds(), "Shared file types");          // [ui-f] audio video pictures ...
     B.s(library::OtherExtensions, QString(), "Other shared file extensions (separate with spaces)"); B.hide();   // [ui-h] nothing reads it: off the UI
     B.b(library::ShareUnlistedTypes, true, "Also share files of types not listed above");
@@ -636,7 +636,8 @@ QList<SettingDef> buildSchema()
     B.i(misc::LogKeepFiles, 5, 1, 100, "Old log files kept");
     B.e(misc::MainThreadPriority, QStringLiteral("normal"), L({"low", "normal", "high"}), "Main thread priority",
         L({"Low", "Normal (Recommended)", "High"})); B.hide();   // [ui-h] nothing reads it: off the UI
-    add(B, misc::LanguageFile, SettingType::Path, QString(), "Language file");
+    // [set-1] windows opened later use it at once, the main window only after a restart
+    B.add(misc::LanguageFile, SettingType::Path, QString(), "Language file", true);
 
     // ---- UI state
     B.bytes(ui::Geometry, "Main window geometry");
@@ -696,14 +697,14 @@ QList<SettingDef> buildSchema()
     B.c(colors::SpeedFast, "#00ff00", "Fast connection (Cable, DSL, T1, T3)");
     B.c(colors::Available, "#00ff00", "Slots / seeds available");
     B.c(colors::Unavailable, "#ffffff", "No slots available");
-    B.c(colors::PingGood, "#00ff00", "Ping: fast");
-    B.c(colors::PingMedium, "#ffff00", "Ping: medium");
-    B.c(colors::PingBad, "#ff0000", "Ping: slow");
+    B.c(colors::PingGood, "#00ff00", "Connection Test: OK");
+    B.c(colors::PingMedium, "#ffff00", "Connection Test: warning");
+    B.c(colors::PingBad, "#ff0000", "Connection Test: problem");
     B.c(colors::MatchIncomplete, "#ffff00", "Matches incomplete local file");
     B.c(colors::CanJoinDownload, "#80ffff", "Can be added to running multi-point download");
     B.c(colors::CurrentlyDownloading, "#004080", "Currently downloading");
     B.c(colors::AlreadyShared, "#808080", "Already in my shared files"); B.hide();   // [ui-h] nothing reads it: off the UI
-    B.c(colors::NetworkLabel, "#c0c0c0", "Network name in source rows");
+    B.c(colors::NetworkLabel, "#c0c0c0", "Network name in the source rows of Transfers");
     B.c(colors::SlotOne, "#ff8040", "Exactly one slot free");
     B.c(colors::ChannelName, "#ffffff", "Channel list: channel");
     B.c(colors::ChannelUsers, "#ffffff", "Channel list: users");

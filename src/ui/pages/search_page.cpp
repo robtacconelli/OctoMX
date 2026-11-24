@@ -58,12 +58,10 @@ bool looksLikeDirectLink(const QString &s)
            (s.endsWith(QLatin1String(".torrent"), Qt::CaseInsensitive) && QFileInfo(s).isFile());
 }
 
+// [set-1] one list for every warning (download from Search or Browse, opening a file)
 bool dangerous(const QString &name)
 {
-    static const QStringList ext = {QStringLiteral("exe"), QStringLiteral("scr"), QStringLiteral("com"), QStringLiteral("bat"),
-                                    QStringLiteral("pif"), QStringLiteral("vbs"), QStringLiteral("cmd"), QStringLiteral("msi"),
-                                    QStringLiteral("zip"), QStringLiteral("rar")};
-    return ext.contains(QFileInfo(name).suffix().toLower());
+    return launcher::isDangerousFile(name);
 }
 
 // Keyword edit: Enter starts the search (the completer must not swallow it).
@@ -99,6 +97,9 @@ SearchTab::SearchTab(mx::Core *core, MainWindow *mw, QWidget *parent) : QWidget(
     buildControls();
 
     m_model = new SearchModel(this);
+    // [set-1] a new tab shows the paths when the setting is on (the button was latched, the list
+    // showed names only)
+    m_model->setShowFullPaths(m_fullPaths->isChecked());
     m_proxy = new SearchProxy(this);
     m_proxy->setSourceModel(m_model);
     m_list = new MxListView(this);
@@ -321,6 +322,7 @@ void SearchTab::buildControls()
         m_model->setShowFullPaths(on);
         m_core->settings()->setValue(keys::search::ShowFullPaths, on);
     });
+
     connect(m_stop, &QPushButton::clicked, this, &SearchTab::stopSearch);
     connect(m_close, &QPushButton::clicked, this, &SearchTab::closeRequested);
     connect(m_pingScreen, &QPushButton::clicked, this, [this] { ping(false); });
@@ -426,6 +428,10 @@ void SearchTab::buildControls()
             m_model->setFlagSuspects(v.toBool());
         else if (k == keys::search::HideSuspects)
             m_proxy->setHideSuspects(v.toBool());
+        else if (k == keys::search::ShowFullPaths && m_fullPaths->isChecked() != v.toBool())
+            m_fullPaths->setChecked(v.toBool());   // [set-1] from the Settings dialog: every tab
+        else if (k == keys::search::AutoComplete)
+            updateCompleter();                     // [set-1] at once, not at the next search
     });
 
     m_legend << new LegendItem(QString(keys::colors::MatchIncomplete), tr("Matches incomplete local file"), this)

@@ -2433,8 +2433,10 @@ public:
         net(Net::Overlay, DiagLevel::Ok, QStringLiteral("Works, reachable from the internet"),
             {it("octomx.state", "State", DiagLevel::Ok, QStringLiteral("Connected"), QStringLiteral("5 peers")),
              it("octomx.reach.tcp", "Reachable from the internet (TCP)", DiagLevel::Ok, QStringLiteral("Yes"), QStringLiteral("other OctoMX users connected to us over TCP"))});
-        net(Net::Web, DiagLevel::Ok, QStringLiteral("Works"),
-            {it("web.state", "State", DiagLevel::Ok, QStringLiteral("Connected"), QStringLiteral("3 index sources"))});
+        // [set-1] one index that does not answer: the demo shows every level of the Connection Test colours
+        net(Net::Web, DiagLevel::Limited, QStringLiteral("Works, one index does not answer"),
+            {it("web.state", "State", DiagLevel::Ok, QStringLiteral("Connected"), QStringLiteral("3 index sources")),
+             it("web.index.3", "Index 3 (demo)", DiagLevel::Broken, QStringLiteral("Not answering"), QStringLiteral("timed out after 20 s"))});
         for (const TransferInfo &t : m_tr->downloads()) {
             if (t.diagnosis.isEmpty()) continue;
             DiagGroup d;

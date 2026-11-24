@@ -244,6 +244,11 @@ PrivateMessageWindow::PrivateMessageWindow(mx::Core *core, MainWindow *mw, const
     m_out = new ChatOutput(this);
     m_out->setObjectName(QStringLiteral("pmOutput"));
     m_out->setFont(chatFont(core->settings()));
+    // [set-1] Settings > Chat Options: an open window follows the chat font at once, as the rooms do
+    connect(core->settings(), &Settings::changed, this, [this, core](const QString &k) {
+        if (k == QLatin1String(keys::chat::FontFamily) || k == QLatin1String(keys::chat::FontSize))
+            m_out->setFont(chatFont(core->settings()));
+    });
     m_input = new ChatInput(this);
     m_input->setObjectName(QStringLiteral("pmInput"));
     m_input->setToolTip(tr("Type a message to this user and press Enter."));
@@ -312,11 +317,11 @@ void PrivateMessageWindow::setDelivery(const QString &msgId, int status, const Q
     if (detail.isEmpty())
         return;
     if (st == PmDelivery::NotDelivered)
-        m_out->appendLine(tr("Not delivered: %1").arg(detail), color(keys::colors::ChatError));
+        m_out->appendLine(tr("Not delivered: %1").arg(detail), keys::colors::ChatError);
     else if (st == PmDelivery::Refused)
-        m_out->appendLine(tr("Not delivered: %1").arg(detail), color(keys::colors::ChatError));
+        m_out->appendLine(tr("Not delivered: %1").arg(detail), keys::colors::ChatError);
     else if (st == PmDelivery::Delivered)
-        m_out->appendLine(tr("Message delivered now."), color(keys::colors::ChatSystem));
+        m_out->appendLine(tr("Message delivered now."), keys::colors::ChatSystem);
 }
 
 void PrivateMessageWindow::submit(const QString &raw)
@@ -451,8 +456,12 @@ void PrivateChatHub::onMessage(const ChatMessage &m)
         w = open(partner, false);
     }
     if (!own) {
-        if (m_core->settings()->b(keys::messages::FlashOnMessage))
-            QApplication::alert(w ? static_cast<QWidget *>(w) : static_cast<QWidget *>(m_main));
+        if (m_core->settings()->b(keys::messages::FlashOnMessage)) {
+            if (MainWindow::s_flashHook)   // [set-1] tests see the flash (offscreen has no taskbar)
+                MainWindow::s_flashHook();
+            else
+                QApplication::alert(w ? static_cast<QWidget *>(w) : static_cast<QWidget *>(m_main));
+        }
         // [ui-h] Settings > Incoming Msgs & Privacy, Incoming Message Alert (was a beep for every mode)
         sound::alert(m_core->settings(), sound::Event::Message);
     }

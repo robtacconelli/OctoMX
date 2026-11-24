@@ -1777,3 +1777,20 @@ Fidelity checks must treat these as intentional (the classic forms stay reachabl
   source rows does not (so `-eD2k -Kad` or `-debian` alone filter; before, a source row without the word
   kept its parent on the list). Source rows of eD2k / Kad say `4 sources (2 complete)`, never `seeds` and
   `peers` (BitTorrent rows keep `2 seeds, 2 peers`).
+* **[set-1] Every setting checked by its effect** (docs/status/set-1.md has the key-by-key table). Changes a
+  user sees:
+  * Appearance: the three `Ping` colours of the Search Window page colour the Connection Test results:
+    they moved to the Main Window page as `Connection Test: OK / Warning / Problem`; `Network Name` moved
+    from the Search Window page to the Transfers Window page, where it is used (the network a source row names).
+    Lines already in a chat room, a message window or Server Messages take a changed colour at once.
+  * Networks page, Connection Type: the texts say what the choice changes (the status line and the Host
+    button); the OctoMX Peer Network has no primary / secondary roles. Peer Network Options:
+    `Primary connection (full status, host chat rooms)`.
+  * Upload Queue: `Only upload to users on my Hotlist (OctoMX Peer Network)`; Downloads: the `Look for
+    sources every` row is gone (Auto Find Sources on the Search page sets it, nothing else read it).
+  * Every setting that waits for the next start says `Takes effect after a restart.` in its tool tip, the
+    language file too (windows opened later use it at once).
+  * The Setup Wizard's network and association boxes show the current settings (they were always ticked);
+    a mixed set of associations shows partly checked and is left as it is.
+  * The Browse window asks before downloading a program, script or archive, like Search (one list of
+    risky types for Search, Browse and opening a file).

@@ -185,7 +185,7 @@ static QString checkTip(const QString &key)
         {QString(queue::HotlistPriority), QT_TR_NOOP("On the OctoMX Peer Network, users on your Hotlist are put in front of the upload queue.")},
         {QString(transfers::UploadsToHotlistOnly), QT_TR_NOOP("On the OctoMX Peer Network, only users on your Hotlist may download from you; everyone else is refused.")},
         {QString(messages::IgnoreHotlistOnly), QT_TR_NOOP("Chat lines and private messages from users who are not on your Hotlist are not shown.")},
-        {QString(library::ShareIncomplete), QT_TR_NOOP("Other users may download the parts of a running download that are already checked, before the whole file is complete.")},
+        {QString(library::ShareIncomplete), QT_TR_NOOP("Other users may download the parts of a running download that are already checked, before the whole file is complete. A running torrent always shares its pieces with its BitTorrent peers.")},
         {QString(bt::SuperSeeding), QT_TR_NOOP("When you are the first seed of a new torrent, hand out each piece to one peer only, so the torrent spreads faster with less upload.")},
         {QString(bt::AnonymousMode), QT_TR_NOOP("Do not tell trackers and peers which client and version you run. Some private trackers refuse such clients.")},
         {QString(bt::Lsd), QT_TR_NOOP("Find BitTorrent peers on your own local network, for example another computer at home with the same torrent.")},
@@ -472,7 +472,7 @@ void buildPeerNetworkPages(SettingsDialog *d)
         f.group(QObject::tr("Identity"));
         QLineEdit *name = f.editRow(identity::ScreenName, QObject::tr("Screen name"), 90);
         name->setMaxLength(40);
-        f.check(identity::PrimaryConnection, QObject::tr("Primary connection (accept incoming, route for others)"));
+        f.check(identity::PrimaryConnection, QObject::tr("Primary connection (full status, host chat rooms)"));
         f.endGroup();
         f.group(QObject::tr("OctoMX Peer Network"));
         f.check(overlay::Enabled, QObject::tr("Enable the OctoMX peer network"));

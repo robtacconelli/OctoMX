@@ -12,6 +12,8 @@
 // unfinished request is cancelled. Geometry and columns persist.
 #pragma once
 
+#include <functional>
+
 #include <QtCore/QSet>
 #include <QtWidgets/QWidget>
 
@@ -43,6 +45,7 @@ public:
     mx::UserRef user() const { return m_user; }
     void refresh();                         // (re)request the list
     void downloadSelected();
+    void downloadEntries(const QList<int> &entries) { download(entries); }   // [set-1] entries of model()
     bool isLoading() const { return m_request != 0; }
     MxListView *list() const { return m_list; }
     BrowseModel *model() const { return m_model; }
@@ -51,6 +54,8 @@ public:
     static QString windowTitleFor(const mx::UserRef &u);
     // build the SearchHit a download of `e` hands to TransferService::downloadHit
     static mx::SearchHit hitFor(const mx::UserRef &u, const mx::BrowseEntry &e);
+    // [set-1] the dangerous file type question (tests answer it): QMessageBox::Yes downloads them
+    static std::function<int(const QString &text)> s_askHook;
 
 protected:
     void resizeEvent(QResizeEvent *) override;

@@ -3,7 +3,8 @@
 // JSON object of "key": value (keys are the slash paths of mx/settings_keys.h). Only values that
 // were explicitly set are written; unknown keys found in the file are preserved. Writes are atomic
 // (QSaveFile) and debounced (500 ms after the last change); sync() writes immediately.
-// A corrupt file is renamed to settings.json.bad and defaults are used.
+// A corrupt file is renamed to settings.json.bad; [set-1] every entry that still parses is kept, the
+// others come from settings.json.bak (the last file that loaded fine), else their defaults.
 #pragma once
 
 #include <QtCore/QTimer>
@@ -27,6 +28,7 @@ protected:
     void scheduleSave() override;
 
 private:
+    static QVariantMap salvageEntries(const QByteArray &raw);   // [set-1]
     QString m_path;
     QTimer m_timer;
     bool m_dirty = false;

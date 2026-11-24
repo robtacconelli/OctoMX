@@ -13,6 +13,8 @@
 // * LibraryAccess methods are thread-safe (plugins may call read() from their own threads).
 #pragma once
 
+#include <QtCore/QRegularExpression>
+
 #include <QtCore/QFileSystemWatcher>
 #include <QtCore/QFutureWatcher>
 #include <QtCore/QHash>
@@ -90,6 +92,7 @@ public:
                    const QList<QByteArray> &aichParts);
     // Number of files actually read + hashed by this Library (cache hits not counted). For tests.
     int hashRuns() const { return m_hashRuns.load(); }
+    int peakParallelHashes() const { return m_hashPeak.load(); }   // [set-1] most files hashed at once (tests)
     void recordUpload(const FileHashes &h, qint64 bytes);   // per-file statistics
     // The engine can expose the verified part of running downloads for serving:
     using PartialFinder = std::function<bool(const FileHashes &, SharedFile *)>;
@@ -125,7 +128,7 @@ private:
     struct HashResult;
 
     QList<SharedFolder> effectiveFolders() const;
-    bool isUnderSharedFolder(const QString &path) const;
+    bool isUnderSharedFolder(const QString &path, const QList<QRegularExpression> *patterns = nullptr) const;
     void startScan();
     void onScanDone();
     void pumpHashQueue();
@@ -168,6 +171,7 @@ private:
     QString m_current;
     std::atomic<bool> m_cancel{false};
     std::atomic<int> m_hashRuns{0};
+    std::atomic<int> m_hashingNow{0}, m_hashPeak{0};   // [set-1]
     bool m_started = false;
     bool m_stopped = false;
 

@@ -37,6 +37,7 @@ struct Tuning {
     int     provisionalGraceMs = 45000;
     int     nameSearchDelayMs = 3000;      // first background size+name search after activation
     int     afsMinuteMs = 60000;           // one "minute" of Auto Find Sources (tests shrink it)
+    int     deadEndMs = 5 * 60 * 1000;     // [set-1] no data for this long and every source failed: an error
     // [merge-1] sources matched only by name and size (candidates) of a network that no verified unit
     // confirmed yet: at most this many units of the judge in flight / unverified at once (the waste
     // cap), and that network is dropped from the download after this many different sources failed

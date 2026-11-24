@@ -670,7 +670,7 @@ void OverlayPlugin::onGetOpen(const QString &nodeId, const QJsonObject &o)
         if (s->userId == uid) (s->active ? userActive : userQueued)++;
     }
     const int maxUp = totalSlots();
-    const int perUser = qBound(1, setting(QString(keys::transfers::MaxUploadsPerUser), 2).toInt(), 20);
+    const int perUser = qBound(1, setting(QString(keys::transfers::MaxUploadsPerUser), 2).toInt(), 100);
     const qint64 bypass = setting(QString(keys::queue::SmallFileBypassKB), 128).toLongLong() * 1024;
     auto *s = new UploadSession;
     s->key = key;
@@ -735,7 +735,7 @@ void OverlayPlugin::sendQueuePositions()
 void OverlayPlugin::promoteQueue()
 {
     const int maxUp = totalSlots();
-    const int perUser = qBound(1, setting(QString(keys::transfers::MaxUploadsPerUser), 2).toInt(), 20);
+    const int perUser = qBound(1, setting(QString(keys::transfers::MaxUploadsPerUser), 2).toInt(), 100);
     int active = 0;
     QHash<QString, int> userActive;
     for (const UploadSession *s : m_uploads)
@@ -1132,7 +1132,13 @@ void OverlayPlugin::dropPeerUploads(const QString &nodeId)
 void OverlayPlugin::uploadsTick()
 {
     const qint64 now = nowMs();
-    const qint64 queueTimeout = qMax<qint64>(1, setting(QString(keys::queue::TimeoutMin), 60).toLongLong()) * 60000;
+    // [set-1] "Drop queued users after ... minutes of inactivity": the time set (it was capped at 5
+    // minutes); at least 2 minutes, so a waiting client that asks again every minute keeps its place.
+    // MX_TEST_MINUTE_MS shortens the minute in the tests.
+    bool testMinute = false;
+    const int t = qEnvironmentVariableIntValue("MX_TEST_MINUTE_MS", &testMinute);
+    const qint64 minute = testMinute && t > 0 ? qint64(t) : qint64(60000);
+    const qint64 queueTimeout = qMax<qint64>(2, setting(QString(keys::queue::TimeoutMin), 60).toLongLong()) * minute;
     const QList<UploadSession *> all = m_uploads.values();
     for (UploadSession *s : all) {
         if (s->rateWindowStart == 0) s->rateWindowStart = now;
@@ -1146,7 +1152,7 @@ void OverlayPlugin::uploadsTick()
             continue;
         }
         if (s->partial) refreshPartial(s, false);   // [up-1]
-        if (!s->active && now - s->lastActivityMs > qMin<qint64>(queueTimeout, 5 * 60000)) {
+        if (!s->active && now - s->lastActivityMs > queueTimeout) {
             // queued clients re-open every 60 s; silence means they are gone
             closeUpload(s, QStringLiteral("queue timeout"), true);
             continue;

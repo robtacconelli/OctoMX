@@ -483,7 +483,7 @@ void ChatRoomView::addMessage(const ChatMessage &m)
 
 void ChatRoomView::system(const QString &text, bool error)
 {
-    m_out->appendLine(text, color(error ? keys::colors::ChatError : keys::colors::ChatSystem));
+    m_out->appendLine(text, error ? keys::colors::ChatError : keys::colors::ChatSystem);
 }
 
 void ChatRoomView::logLine(const QString &plain)
@@ -1046,7 +1046,7 @@ void ChatPage::onLeft(const QString &roomId)
         return;
     if (core()->settings()->value(chatkeys::HoldOpenAfterPart).toBool()) {
         v->setJoined(false);
-        v->output()->appendLine(tr("You have left the channel."), color(keys::colors::ChatPart));
+        v->output()->appendLine(tr("You have left the channel."), keys::colors::ChatPart);
         persistOpenRooms();
         return;
     }

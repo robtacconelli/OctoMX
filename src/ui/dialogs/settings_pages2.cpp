@@ -715,7 +715,6 @@ void buildTransferPages(SettingsDialog *d)
         f.check(transfers::AutoRetry);
         f.spin(transfers::RetryIntervalSec, QObject::tr("Retry every"), QObject::tr("seconds"), 150);
         f.spin(transfers::RetryMaxAttempts, QObject::tr("Retry attempts"), QObject::tr("(0 = forever)"), 150);
-        f.spin(transfers::SourceSearchIntervalMin, QObject::tr("Look for sources every"), QObject::tr("minutes"), 150);
         f.spin(transfers::MaxSourcesPerDownload, QObject::tr("Max sources per download"), QString(), 150);
         f.spin(transfers::MetadataTimeoutSec, QObject::tr("Torrent metadata timeout"), QObject::tr("seconds"), 150);
         f.spin(transfers::MinFreeSpaceMB, QObject::tr("Pause when free space below"), QObject::tr("MB"), 150);
@@ -748,7 +747,7 @@ void buildTransferPages(SettingsDialog *d)
         f.check(queue::HotlistPriority);
         f.check(queue::SendPosition);
         f.endGroup();
-        f.check(transfers::UploadsToHotlistOnly);
+        f.check(transfers::UploadsToHotlistOnly, QObject::tr("Only upload to users on my Hotlist (OctoMX Peer Network)"));
     }
     // ---- Bandwidth Throttle [obs: settings_bandwidth_throttle.png]
     {

@@ -43,6 +43,7 @@ public:
     // one line (block); text segments are scanned for http(s):// links
     void appendSegments(const QList<Segment> &segs);
     void appendLine(const QString &text, const QColor &c);
+    void appendLine(const QString &text, QLatin1StringView colorKey);   // [set-1] follows the colour setting
     void setMaxLines(int n);
     int lineCount() const;
     QString plainText() const { return toPlainText(); }

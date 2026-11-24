@@ -149,6 +149,35 @@ private slots:
         QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QLatin1Char('\n'))));
     }
 
+    // [set-1] the settings of these groups are proven by a behaviour test each (no "reader" smoke
+    // check), never by a test that only stores, migrates or round-trips the value
+    void ownedGroupsHaveBehaviourTests()
+    {
+        static const QStringList groups = {"identity", "ui", "colors", "chat", "messages", "hotlist", "library", "search",
+                                           "transfers", "queue", "launch", "misc", "diag", "updates", "other"};
+        // test functions that store, migrate, coerce or reset a value: they prove no effect
+        static const QStringList weak = {"schemaIsConsistent", "coercion", "jsonRoundTrip", "debouncedSave", "roundTrip",
+                                         "resetDefaults", "hiddenSchemaEntries", "schemaHasTheBatch", "specDefaults",
+                                         "legacyKeysMigrated", "profileMigratedOnce", "connectionTypeMigration",
+                                         "searchPageWritesCanonicalKeys", "defaultSummaryParsesTitle", "wizardRecommended",
+                                         "connectionDefaultsFollowTheType", "firstRun", "poll", "create", "moveTorrentStorage"};
+        QStringList errors;
+        int n = 0;
+        for (const mxreg::Proof &p : mxreg::kProofs) {
+            const QString key = QString::fromLatin1(p.key), kind = QString::fromLatin1(p.kind);
+            if (!groups.contains(key.section(QLatin1Char('/'), 0, 0)) || kind == QLatin1String("internal"))
+                continue;
+            ++n;
+            if (kind != QLatin1String("test"))
+                errors << QStringLiteral("%1: only a reader proof; add a behaviour test").arg(key);
+            else if (weak.contains(QString::fromLatin1(p.what)))
+                errors << QStringLiteral("%1: %2 only stores or migrates the value").arg(key, QString::fromLatin1(p.what));
+        }
+        errors.sort();
+        QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QLatin1Char('\n'))));
+        QVERIFY(n > 240);
+    }
+
     // a key taken off the UI stays off it; every key of a page has a hand-written tool tip
     void hiddenKeysStayOffThePages()
     {

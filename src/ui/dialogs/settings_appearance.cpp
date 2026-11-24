@@ -277,7 +277,8 @@ void buildAppearancePages(SettingsDialog *d)
         lang->setButtonGeometry(QRect(0, 0, 0, 0), QRect(0, 0, w, 23));
         lang->setFilter(QObject::tr("Qt Translation Files (*.qm);;All Files (*)"));
         lang->setObjectName(PageKit::nameFor(misc::LanguageFile));
-        lang->setToolTip(QObject::tr("The translation file (.qm) OctoMX shows its texts in. Empty: English."));
+        lang->setToolTip(QObject::tr("The translation file (.qm) OctoMX shows its texts in. Empty: English. Windows opened from now "
+                                     "on use it at once, every text after a restart."));
         lang->button()->setToolTip(QObject::tr("Show the texts of OctoMX in another language: choose a Qt translation "
                                                "file (.qm). Windows opened from now on use it; restart OctoMX to see every "
                                                "text in the new language."));
@@ -301,7 +302,11 @@ void buildAppearancePages(SettingsDialog *d)
     listPage(d, QStringLiteral("appearance/main"), QObject::tr("Main Window"),
              {{QT_TR_NOOP("News Bar Background"), ckeys::NewsBackground}, {QT_TR_NOOP("News Bar Text"), ckeys::NewsText},
               {QT_TR_NOOP("News Bar Link"), ckeys::NewsLink}, {QT_TR_NOOP("List Header Text"), colors::ListHeaderText},
-              {QT_TR_NOOP("List Grid Lines"), colors::ListGrid}, {QT_TR_NOOP("Inactive Text"), colors::InactiveText}});
+              {QT_TR_NOOP("List Grid Lines"), colors::ListGrid}, {QT_TR_NOOP("Inactive Text"), colors::InactiveText},
+              // [set-1] the three "Ping" colours of the Search Window page colour the Connection Test's results
+              // (the search results never used them)
+              {QT_TR_NOOP("Connection Test: OK"), colors::PingGood}, {QT_TR_NOOP("Connection Test: Warning"), colors::PingMedium},
+              {QT_TR_NOOP("Connection Test: Problem"), colors::PingBad}});
     listPage(d, QStringLiteral("appearance/wpn"), QObject::tr("OctoMX Network Window"),
              {{QT_TR_NOOP("Status: Ready"), colors::StatusLedOn}, {QT_TR_NOOP("Status: Connecting"), colors::StatusLedConnecting},
               {QT_TR_NOOP("Status: Failed"), colors::StatusLedError}, {QT_TR_NOOP("Status: Off"), colors::StatusLedOff}});
@@ -368,9 +373,11 @@ void buildAppearancePages(SettingsDialog *d)
         for (int i = 0; i < scale->count(); ++i)
             scale->setItemText(i, scaleChoiceLabel(scale->itemData(i).toString()));
         // [qa-2] tool tips on the new controls
-        scale->setToolTip(QObject::tr("How large OctoMX draws its windows, text and icons. A size too large for the screen is reduced."));
+        scale->setToolTip(QObject::tr("How large OctoMX draws its windows, text and icons. A size too large for the screen is reduced. "
+                                      "Takes effect after a restart (OctoMX asks when you close Settings)."));
         f.combo(keys::ui::SmoothFonts, QObject::tr("Smooth font edges:"), 110, 150)
-            ->setToolTip(QObject::tr("Antialiased text. Automatic: on above 100 %, off at 100 % (the classic look)."));
+            ->setToolTip(QObject::tr("Antialiased text. Automatic: on above 100 %, off at 100 % (the classic look). "
+                                     "Takes effect after a restart."));
         f.text(QObject::tr("Automatic follows the display's scale setting (Windows: Settings > Display > "
                            "Scale). Changes take effect when OctoMX is restarted."), 3);
         f.endGroup();
@@ -394,11 +401,9 @@ void buildAppearancePages(SettingsDialog *d)
               {QT_TR_NOOP("ISDN Speed"), colors::SpeedMedium}, {QT_TR_NOOP("Fast Speed"), colors::SpeedFast},
               {QT_TR_NOOP("Partial File"), colors::PartialText}, {QT_TR_NOOP("Suspected Fake"), ckeys::SuspectText},
               {QT_TR_NOOP("Slots Free"), colors::Available}, {QT_TR_NOOP("1 Slot Free"), colors::SlotOne},
-              {QT_TR_NOOP("No Slots Free"), colors::Unavailable}, {QT_TR_NOOP("Ping Fast"), colors::PingGood},
-              {QT_TR_NOOP("Ping Medium"), colors::PingMedium}, {QT_TR_NOOP("Ping Slow"), colors::PingBad},
+              {QT_TR_NOOP("No Slots Free"), colors::Unavailable},
               {QT_TR_NOOP("Incomplete Match"), colors::MatchIncomplete}, {QT_TR_NOOP("Can Join DL"), colors::CanJoinDownload},
-              {QT_TR_NOOP("Downloading"), colors::CurrentlyDownloading},
-              {QT_TR_NOOP("Network Name"), colors::NetworkLabel}});
+              {QT_TR_NOOP("Downloading"), colors::CurrentlyDownloading}});
     listPage(d, QStringLiteral("appearance/hotlist"), QObject::tr("Hotlist"),
              {{QT_TR_NOOP("Background"), colors::ListBackground}, {QT_TR_NOOP("Section Headers"), colors::HotlistHeader},
               {QT_TR_NOOP("Temporary"), colors::HotlistTemporary}, {QT_TR_NOOP("Online"), colors::UserOnline},
@@ -430,7 +435,10 @@ void buildAppearancePages(SettingsDialog *d)
               {QT_TR_NOOP("Busy"), colors::TransferBusy}, {QT_TR_NOOP("Cancelled"), colors::TransferCancelled},
               {QT_TR_NOOP("Progress Bar"), colors::ProgressBar}, {QT_TR_NOOP("Progress Background"), colors::ProgressBackground},
               {QT_TR_NOOP("Parts Arriving Now"), colors::ProgressActive},
-              {QT_TR_NOOP("Partial File"), colors::PartialText}, {QT_TR_NOOP("Selection"), colors::ListSelectedBackground}});
+              {QT_TR_NOOP("Partial File"), colors::PartialText}, {QT_TR_NOOP("Selection"), colors::ListSelectedBackground},
+              // [set-1] the network a source row names in its Speed column (listed on the Search Window page before,
+              // where nothing used it)
+              {QT_TR_NOOP("Network Name"), colors::NetworkLabel}});
 
     // ---- Bandwidth Window [obs: settings_appearance_bandwidth_window_colors.png]
     {

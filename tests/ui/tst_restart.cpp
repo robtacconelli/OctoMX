@@ -143,8 +143,8 @@ private slots:
                          QStringLiteral("setvalue set_connection_tcpPort 16699"),
                          QStringLiteral("settings search"),
                          QStringLiteral("setvalue set_search_autoFindSourcesMin 30"),
-                         QStringLiteral("settings library"),
-                         QStringLiteral("setvalue set_library_fileTypes Audio (.mp3); Video (.avi)"),
+                         QStringLiteral("settings library/sharing"),   // [set-1] library/fileTypes is hidden (nothing reads it)
+                         QStringLiteral("setvalue set_library_excludePatterns *.part; diary*"),
                          QStringLiteral("settings throttle"),
                          QStringLiteral("setvalue set_bandwidth_lastUpLimitKBs 42"),
                          QStringLiteral("setvalue set_bandwidth_upLimitKBs on"),
@@ -177,7 +177,7 @@ private slots:
                      QStringLiteral("expect-setting misc/closeAction tray"),
                      QStringLiteral("expect-setting connection/tcpPort 16699"),
                      QStringLiteral("expect-setting search/autoFindSourcesMin 30"),
-                     QStringLiteral("expect-setting library/fileTypes Audio (.mp3); Video (.avi)"),
+                     QStringLiteral("expect-setting library/excludePatterns *.part; diary*"),
                      QStringLiteral("expect-setting bandwidth/upLimitKBs 42"),
                      QStringLiteral("expect-setting misc/logKeepFiles 9"),
                      // the dialog opens on the last page and its controls show the values
@@ -234,6 +234,7 @@ private slots:
     // minimises to the taskbar, "Always start minimized" too; X follows misc/closeAction only
     void minimiseAndCloseAfterRestart()
     {
+        // [set-1] the behaviour proof of misc::StartMinimized and misc::CloseAction (settings_registry.h)
         QString log;
         int rc = run({QStringLiteral("set misc/minimizeToTray true"), QStringLiteral("set misc/closeAction tray"),
                       QStringLiteral("set misc/startMinimized true"), QStringLiteral("set misc/confirmExit false")},

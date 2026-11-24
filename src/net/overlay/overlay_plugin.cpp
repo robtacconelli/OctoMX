@@ -149,6 +149,8 @@ void OverlayPlugin::init(const PluginContext &ctx)
                 }
             } else if (key == QLatin1String(keys::identity::Connection) && m_running) {
                 announcePresence();
+                for (Room &r : m_rooms) if (r.joined) roomHeartbeat(r);   // [set-1] the room lists too
+                m_announcedConn = connectionLabel();
             }
         });
     }
@@ -1184,6 +1186,17 @@ void OverlayPlugin::tick()
     // presence: soon after the first peer, then every presenceMs
     if (havePeers && (m_lastPresenceMs == 0 ? m_startedAt.elapsed() > 1000 : now - m_lastPresenceMs >= m_t.presenceMs))
         announcePresence();
+    // [set-1] the connection type others see changed by itself (Settings > Queuing: another type while
+    // this many uploads run): told at once, not at the next announcement a minute later
+    if (const QString conn = connectionLabel(); conn != m_announcedConn) {
+        const bool first = m_announcedConn.isEmpty();
+        m_announcedConn = conn;
+        if (!first && havePeers) {
+            announcePresence();
+            for (Room &r : m_rooms)
+                if (r.joined) roomHeartbeat(r);
+        }
+    }
     if (now - m_lastHeartbeatMs >= m_t.heartbeatMs) {
         m_lastHeartbeatMs = now;
         for (Room &r : m_rooms)

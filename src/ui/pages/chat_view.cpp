@@ -39,44 +39,49 @@ QList<Segment> chatSegments(const ChatMessage &m, const ChatFormat &f)
     QList<Segment> segs;
     if (f.timestamps && m.time.isValid())
         segs << Segment{QLatin1Char('[') + m.time.toLocalTime().toString(f.timestampFormat) + QStringLiteral("] "),
-                        color(keys::colors::ChatTimestamp)};
+                        color(keys::colors::ChatTimestamp), QString(keys::colors::ChatTimestamp)};
     const QString nick = m.from.name.isEmpty() ? m.from.id : m.from.name;
     switch (m.kind) {
     case ChatKind::Message:
     case ChatKind::Private: {
         const bool own = !f.ownName.isEmpty() && nick == f.ownName;
         segs << Segment{QLatin1Char('<') + nick + QLatin1Char('>'),
-                        color(own ? keys::colors::ChatOwnName : keys::colors::ChatOtherName)};
-        segs << Segment{QLatin1Char(' ') + m.text, color(keys::colors::ChatText)};
+                        color(own ? keys::colors::ChatOwnName : keys::colors::ChatOtherName),
+                        QString(own ? keys::colors::ChatOwnName : keys::colors::ChatOtherName)};
+        segs << Segment{QLatin1Char(' ') + m.text, color(keys::colors::ChatText), QString(keys::colors::ChatText)};
         break;
     }
     case ChatKind::Action:
-        segs << Segment{QStringLiteral("* %1 %2").arg(nick, m.text), color(keys::colors::ChatAction)};
+        segs << Segment{QStringLiteral("* %1 %2").arg(nick, m.text), color(keys::colors::ChatAction), QString(keys::colors::ChatAction)};
         break;
     case ChatKind::Join:
-        segs << Segment{m.text.isEmpty() ? QObject::tr("%1 has entered").arg(nick) : m.text, color(keys::colors::ChatJoin)};
+        segs << Segment{m.text.isEmpty() ? QObject::tr("%1 has entered").arg(nick) : m.text, color(keys::colors::ChatJoin), QString(keys::colors::ChatJoin)};
         break;
     case ChatKind::Part:
-        segs << Segment{m.text.isEmpty() ? QObject::tr("%1 has left").arg(nick) : m.text, color(keys::colors::ChatPart)};
+        segs << Segment{m.text.isEmpty() ? QObject::tr("%1 has left").arg(nick) : m.text, color(keys::colors::ChatPart), QString(keys::colors::ChatPart)};
         break;
     case ChatKind::Topic:
-        segs << Segment{m.text, color(keys::colors::ChatTopic)};
+        segs << Segment{m.text, color(keys::colors::ChatTopic), QString(keys::colors::ChatTopic)};
         break;
     case ChatKind::Motd:
-        segs << Segment{m.text, color(keys::colors::ChatMotd)};
+        segs << Segment{m.text, color(keys::colors::ChatMotd), QString(keys::colors::ChatMotd)};
         break;
     case ChatKind::Error:
-        segs << Segment{m.text, color(keys::colors::ChatError)};
+        segs << Segment{m.text, color(keys::colors::ChatError), QString(keys::colors::ChatError)};
         break;
     case ChatKind::System:
     default:
-        segs << Segment{m.text, color(keys::colors::ChatSystem)};
+        segs << Segment{m.text, color(keys::colors::ChatSystem), QString(keys::colors::ChatSystem)};
         break;
     }
     return segs;
 }
 
 // ------------------------------------------------------------------------------------ ChatOutput
+
+namespace {
+constexpr int kColorKeyProp = QTextFormat::UserProperty + 7;   // [set-1] QString: the colour setting
+}
 
 ChatOutput::ChatOutput(QWidget *parent) : QTextBrowser(parent)
 {
@@ -105,6 +110,22 @@ void ChatOutput::applyColors()
     p.setColor(QPalette::Base, color(keys::colors::ChatBackground));
     p.setColor(QPalette::Text, color(keys::colors::ChatText));
     setPalette(p);
+    // [set-1] the lines already shown take a changed colour too ("used at once in every window"):
+    // every piece of text keeps the key of its colour
+    for (QTextBlock b = document()->begin(); b.isValid(); b = b.next()) {
+        for (auto it = b.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fr = it.fragment();
+            const QString key = fr.charFormat().property(kColorKeyProp).toString();
+            if (key.isEmpty() || fr.charFormat().foreground().color() == color(key))
+                continue;
+            QTextCursor c(document());
+            c.setPosition(fr.position());
+            c.setPosition(fr.position() + fr.length(), QTextCursor::KeepAnchor);
+            QTextCharFormat f;
+            f.setForeground(color(key));
+            c.mergeCharFormat(f);
+        }
+    }
     viewport()->setAutoFillBackground(true);
     viewport()->update();
 }
@@ -129,7 +150,12 @@ void ChatOutput::clearView()
 
 void ChatOutput::appendLine(const QString &text, const QColor &c)
 {
-    appendSegments({Segment{text, c}});
+    appendSegments({Segment{text, c, QString()}});
+}
+
+void ChatOutput::appendLine(const QString &text, QLatin1StringView colorKey)
+{
+    appendSegments({Segment{text, color(colorKey), QString(colorKey)}});
 }
 
 void ChatOutput::appendSegments(const QList<Segment> &segs)
@@ -154,6 +180,7 @@ void ChatOutput::appendSegments(const QList<Segment> &segs)
     for (const Segment &s : segs) {
         QTextCharFormat cf;
         cf.setForeground(s.color.isValid() ? s.color : color(keys::colors::ChatText));
+        cf.setProperty(kColorKeyProp, s.key.isEmpty() && !s.color.isValid() ? QString(keys::colors::ChatText) : s.key);
         int pos = 0;
         QRegularExpressionMatchIterator it = link.globalMatch(s.text);
         while (it.hasNext()) {
@@ -165,6 +192,7 @@ void ChatOutput::appendSegments(const QList<Segment> &segs)
                 url.chop(1);
             QTextCharFormat lf = cf;
             lf.setForeground(color(keys::colors::ChatLink));
+            lf.setProperty(kColorKeyProp, QString(keys::colors::ChatLink));
             lf.setFontUnderline(true);
             lf.setAnchor(true);
             lf.setAnchorHref(url.startsWith(QLatin1String("www."), Qt::CaseInsensitive) ? QStringLiteral("http://") + url : url);

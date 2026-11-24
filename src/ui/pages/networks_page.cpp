@@ -166,19 +166,21 @@ void NetworksPage::buildWpn()
     m_primary = new QRadioButton(tr("Make a primary connection to the network"), m_typeBox);
     m_primary->setObjectName(QStringLiteral("radioPrimary"));
     // [ui-h] tips on every control
-    m_secondary->setToolTip(tr("Search, chat and download without passing anything on for others. For slow, mobile or metered lines."));
-    m_primary->setToolTip(tr("Also accept incoming connections and pass searches and chat on for other users. Best on a fast line (the default)."));
+    // [set-1] what the choice really changes: the OctoMX Peer Network has no primary / secondary roles,
+    // every user connects alike; passing connections on for others is "Act as a relay" (Settings)
+    m_secondary->setToolTip(tr("A shorter status line (only the time online) and no Host button for chat rooms. Searching, "
+                               "chat and downloads work the same."));
+    m_primary->setToolTip(tr("The status line counts your connections and searches per minute, and the Chat page offers Host "
+                             "for new rooms (the default)."));
     m_secondaryText = new WrapLabel(QString(), m_typeBox);
     m_secondaryText->setText(tr(
-        "Choose this on a slow, mobile or metered line, or when your computer cannot accept incoming "
-        "connections (a LAN or a firewall whose ports you cannot open).  Your searches and your list of shared "
-        "files then pass through another user who has a primary connection."));
+        "On the OctoMX Peer Network every user connects the same way.  This choice only changes what OctoMX shows: "
+        "the time online instead of the connection counts, and no Host button for chat rooms."));
     m_primaryText = new WrapLabel(QString(), m_typeBox);
     m_primaryText->setText(tr(
-        "Best on a fast line (DSL, cable, fibre).  The connection is steadier and works best, and in return it "
-        "keeps using a little bandwidth and processor time to help run the network.  If your computer is behind "
-        "a firewall or on a LAN, your line has little upload bandwidth or a busy network, or OctoMX is online "
-        "only for short times, a secondary connection usually works better."));
+        "The status line counts your connections and searches per minute, and you can host chat rooms.  Passing "
+        "connections on for users who cannot accept incoming ones is set in Settings > Peer Network Options "
+        "(\"Act as a relay for other users\"); limits for your line are on the Bandwidth Throttle page."));
     const bool primary = core()->settings()->b(keys::identity::PrimaryConnection);
     (primary ? m_primary : m_secondary)->setChecked(true);
     connect(m_primary, &QRadioButton::toggled, this, [this](bool on) {

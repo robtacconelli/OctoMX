@@ -29,6 +29,7 @@ mx_engine_test(tst_engine_map)       # [ui-i] the map of the file for the Transf
 mx_engine_test(tst_engine_join)      # [eng-1] torrents that hold the same file: ranking, no file list, restart, row
 mx_engine_test(tst_engine_remove)    # [ui-j] removing a download: keep the file (and resume it) or delete it
 mx_engine_test(tst_engine_serve)     # [up-1] serving files still downloading, hash-set rules, close reasons
+mx_engine_test(tst_set1_engine)      # [set-1] the File Transfers settings, each with its effect
 if(TARGET mxnet_bt)
     mx_engine_test(tst_engine_bt)
     target_link_libraries(tst_engine_bt PRIVATE mxnet_bt)

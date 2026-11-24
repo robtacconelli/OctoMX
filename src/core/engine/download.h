@@ -294,7 +294,8 @@ private:
     QString m_partPath;
     QString m_fallbackTorrent;                 // part file running beside a torrent that had no metadata
     bool m_metaStalled = false;
-    bool m_deadEnd = false;                    // gave up: every source banned / dead (no auto-retry)
+    bool m_deadEnd = false;                    // gave up: every source banned / dead
+    bool m_deadEndBanned = false;              // [set-1] ... every source sent the wrong file (no auto-retry)
     QString m_torrentUrlHint;                  // extra["torrentUrl"] of a BitTorrent source
     bool m_triedTorrentUrl = false;                        // persisted once the part file exists
     QStringList m_trackers;                    // from BitTorrent sources' magnets

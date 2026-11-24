@@ -49,6 +49,7 @@ enum ItemRole : int {
 struct Segment {
     QString text;
     QColor color;
+    QString key;   // [set-1] the colour setting it was drawn with: chat lines follow a changed colour
 };
 
 QVariant makeSegments(const QList<Segment> &segs);

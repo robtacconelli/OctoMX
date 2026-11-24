@@ -39,3 +39,10 @@ target_link_libraries(rats_probe PRIVATE mxnet_overlay mxapi Qt6::Core)
 add_executable(overlay_probe overlay_probe.cpp)
 target_link_libraries(overlay_probe PRIVATE mxnet_overlay mxapi Qt6::Core Qt6::Network)
 target_include_directories(overlay_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src/net/overlay)
+
+# [set-1] settings between real nodes: what is left out of sharing stays out of search, browse and
+# hash requests (the core's Library), the connection type others see, the upload queue, the log
+mx_overlay_test(tst_set1_overlay)
+if(TARGET tst_set1_overlay AND TARGET mxcore)
+    target_link_libraries(tst_set1_overlay PRIVATE mxcore)
+endif()

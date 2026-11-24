@@ -46,7 +46,7 @@ ServerMessagesWindow::ServerMessagesWindow(mx::Core *core, Net net, const QStrin
         if (wants(m))
             append(m);
     if (m_count == 0)
-        m_out->appendLine(tr("No messages from this server yet."), color(keys::colors::ChatTimestamp));
+        m_out->appendLine(tr("No messages from this server yet."), keys::colors::ChatTimestamp);
     connect(core->network(), &NetworkService::serverMessageReceived, this, [this](const ServerMessage &m) {
         if (wants(m))
             append(m);
@@ -68,10 +68,10 @@ void ServerMessagesWindow::append(const ServerMessage &m)
     QList<Segment> segs;
     // servers send their MOTD in one burst: the time tells old from new lines
     const QDateTime t = m.time.isValid() ? m.time.toLocalTime() : QDateTime::currentDateTime();
-    segs << Segment{t.toString(QStringLiteral("[hh:mm] ")), color(keys::colors::ChatTimestamp)};
+    segs << Segment{t.toString(QStringLiteral("[hh:mm] ")), color(keys::colors::ChatTimestamp), QString(keys::colors::ChatTimestamp)};
     if (m_serverId.isEmpty() && !m.serverName.isEmpty())
-        segs << Segment{QStringLiteral("%1: ").arg(m.serverName), color(keys::colors::ChatSystem)};
-    segs << Segment{m.text, color(keys::colors::ChatMotd)};
+        segs << Segment{QStringLiteral("%1: ").arg(m.serverName), color(keys::colors::ChatSystem), QString(keys::colors::ChatSystem)};
+    segs << Segment{m.text, color(keys::colors::ChatMotd), QString(keys::colors::ChatMotd)};
     m_out->appendSegments(segs);
     updateStatus();
 }

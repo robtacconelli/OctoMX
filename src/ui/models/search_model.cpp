@@ -688,15 +688,15 @@ QVariant SearchModel::hitData(const SearchHit &h, int col, int role) const
     case SegmentsRole:
         if (col == Speed) {
             const int a = torrent ? seeds : fast, b = torrent ? leechers : slow;
-            return makeSegments({{QString::number(a), color(keys::colors::SpeedFast)},
-                                 {QStringLiteral(" + "), white},
-                                 {QString::number(b), color(keys::colors::SpeedSlow)}});
+            return makeSegments({{QString::number(a), color(keys::colors::SpeedFast), {}},
+                                 {QStringLiteral(" + "), white, {}},
+                                 {QString::number(b), color(keys::colors::SpeedSlow), {}}});
         }
         if (col == Status && !torrent && availFast + availSlow > 0)
-            return makeSegments({{QString::number(availFast), color(keys::colors::SpeedFast)},
-                                 {QStringLiteral(" + "), white},
-                                 {QString::number(availSlow), color(keys::colors::SpeedSlow)},
-                                 {tr(" available users"), color(keys::colors::Available)}});
+            return makeSegments({{QString::number(availFast), color(keys::colors::SpeedFast), {}},
+                                 {QStringLiteral(" + "), white, {}},
+                                 {QString::number(availSlow), color(keys::colors::SpeedSlow), {}},
+                                 {tr(" available users"), color(keys::colors::Available), {}}});
         return {};
     case Qt::ForegroundRole:
         if (col == User)
@@ -826,9 +826,9 @@ QVariant SearchModel::sourceData(const SearchHit &h, const SearchSource &s, int 
         }
     case SegmentsRole:
         if (col == Speed && torrentSrc)
-            return makeSegments({{QString::number(qMax(0, s.seeds)), color(keys::colors::SpeedFast)},
-                                 {QStringLiteral(" + "), white},
-                                 {QString::number(qMax(0, s.peers)), color(keys::colors::SpeedSlow)}});
+            return makeSegments({{QString::number(qMax(0, s.seeds)), color(keys::colors::SpeedFast), {}},
+                                 {QStringLiteral(" + "), white, {}},
+                                 {QString::number(qMax(0, s.peers)), color(keys::colors::SpeedSlow), {}}});
         return {};
     case Qt::ForegroundRole:
         switch (col) {

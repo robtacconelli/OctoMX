@@ -390,6 +390,7 @@ private:
     QTimer m_tick;
     int m_tickCount = 0;
     qint64 m_lastPresenceMs = 0, m_lastHeartbeatMs = 0, m_lastDirectoryMs = 0, m_lastBootstrapMs = 0;
+    QString m_announcedConn;   // [set-1] the connection type last told (presence, room lists)
 
     QHash<QString, PeerState> m_peers;        // librats node id → state
     QHash<QString, UserInfo> m_users;         // user id → info

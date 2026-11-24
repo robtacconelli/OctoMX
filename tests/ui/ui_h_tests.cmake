@@ -6,3 +6,6 @@ if(TARGET tst_settings_registry)
     # the registry check reads the source tree (the files the proofs point at)
     target_compile_definitions(tst_settings_registry PRIVATE MX_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
+# [set-1] every setting does what its label says: behaviour tests of the windows' settings, the colours
+mx_ui_test(tst_set1)
+mx_ui_test(tst_set1_colors)

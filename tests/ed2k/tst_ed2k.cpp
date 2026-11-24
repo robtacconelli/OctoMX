@@ -593,6 +593,15 @@ void TstEd2k::helloRoundTrip()
     QVERIFY(PeerConnection::parseHelloPayload(ans, true, &i));
     QVERIFY(!PeerConnection::parseHelloPayload(ans, false, &i));   // missing hash-size byte
     QVERIFY(!PeerConnection::parseHelloPayload(hello.left(30), false, &i));
+    // [set-1] Settings > Other Networks "Default login": the name servers and clients see (empty: the
+    // screen name)
+    s.setValue(QStringLiteral("other/defaultLogin"), QStringLiteral("BunnyFan"));
+    PeerInfo j;
+    QVERIFY(PeerConnection::parseHelloPayload(PeerConnection::buildHelloPayload(&core, false), false, &j));
+    QCOMPARE(j.name, QStringLiteral("BunnyFan"));
+    s.setValue(QStringLiteral("other/defaultLogin"), QString());
+    QVERIFY(PeerConnection::parseHelloPayload(PeerConnection::buildHelloPayload(&core, false), false, &j));
+    QCOMPARE(j.name, QStringLiteral("OctoMX-test"));
 }
 
 // ---------------------------------------------------------------- fuzz

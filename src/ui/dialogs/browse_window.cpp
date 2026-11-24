@@ -14,10 +14,12 @@
 #include "mx/settings_keys.h"
 #include "ui/kit/format.h"
 #include "ui/kit/icons.h"
+#include "ui/kit/launcher.h"
 #include "ui/kit/list_view.h"
 #include "ui/kit/status_bar.h"
 #include "ui/kit/widgets.h"
 #include "ui/kit/scale.h"
+#include "ui/kit/session.h"
 #include "ui/main_window.h"
 #include "ui/models/browse_model.h"
 
@@ -312,12 +314,48 @@ void BrowseWindow::downloadSelected()
     download(entries);
 }
 
+std::function<int(const QString &)> BrowseWindow::s_askHook;
+
 void BrowseWindow::download(const QList<int> &entries)
 {
     if (entries.isEmpty())
         return;
+    // [set-1] the dangerous file type warning, as for a download from the Search page (it was never
+    // asked here): programs, scripts and archives only when the user says yes, unless the warning is
+    // switched off (this session or for good, Settings > File Transfers)
+    QList<int> wanted = entries;
+    QStringList risky;
+    for (int e : entries)
+        if (launcher::isDangerousFile(m_model->entry(e).path.section(QLatin1Char('\\'), -1)))
+            risky << m_model->entry(e).path.section(QLatin1Char('\\'), -1);
+    if (!risky.isEmpty() && !Session::instance()->suppressDangerousWarning()
+        && !m_core->settings()->b(keys::transfers::SuppressDangerousWarning)) {
+        const QString text = tr("You are about to download\n\n    %1%2\n\nThis is a program or script, or a file that can hide one. "
+                                "Such files may carry a virus or other harmful code, so it is safer not to download it.\n\n"
+                                "Download it all the same?\n\n(This warning can be switched off for the rest of the session in "
+                                "the program settings.)")
+                                 .arg(risky.first(), risky.size() == 2 ? tr("\n    and 1 more of this kind")
+                                    : risky.size() > 2 ? tr("\n    and %1 more of this kind").arg(risky.size() - 1) : QString());
+        int answer;
+        if (s_askHook) {
+            answer = s_askHook(text);
+        } else {
+            QMessageBox box(QMessageBox::Warning, tr("OctoMX"), text, QMessageBox::Yes | QMessageBox::No, this);
+            box.setObjectName(QStringLiteral("browseWarning"));
+            box.setDefaultButton(QMessageBox::Yes);
+            answer = box.exec();
+        }
+        if (answer != QMessageBox::Yes) {
+            wanted.clear();
+            for (int e : entries)
+                if (!launcher::isDangerousFile(m_model->entry(e).path.section(QLatin1Char('\\'), -1)))
+                    wanted << e;
+            if (wanted.isEmpty())
+                return;
+        }
+    }
     int n = 0;
-    for (int e : entries) {
+    for (int e : wanted) {
         const QString id = m_core->transfers()->downloadHit(hitFor(m_user, m_model->entry(e)));
         if (!id.isEmpty())
             ++n;

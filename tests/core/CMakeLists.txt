@@ -32,6 +32,10 @@ mx_core_test(tst_chat)
 mx_core_test(tst_realcore)
 mx_core_test(tst_legacy_names)   # [ren-1] legacy profiles, database, download folder, settings
 mx_core_test(tst_upload_rows)    # [up-1] how an upload row ends: Complete only for the whole file
+mx_core_test(tst_set1_core)     # [set-1] the settings the core reads, each with its effect
+if(TARGET tst_set1_core)
+    target_link_libraries(tst_set1_core PRIVATE Qt6::Network)
+endif()
 # glue-2: schema batch + added service API + search hygiene
 mx_core_test(tst_glue2)
 if(TARGET tst_glue2)
