@@ -15,6 +15,8 @@
 #include <QtCore/QRegularExpression>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QHostInfo>
+
+#include "mx/net_policy.h"
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 
@@ -87,6 +89,13 @@ QStringList KadPlugin::bootstrapSetting() const
 void KadPlugin::start()
 {
     if (!m_inited || m_started) return;
+    {   // [net-2] Kad is UDP only: off while a proxy is set, and without the chosen adapter
+        const mx::netpolicy::Verdict v = mx::netpolicy::verdict(mx::Net::Kad, m_core->ctx().settings);
+        if (!v.allowed) {
+            emit logMessage(v.reason);
+            return;
+        }
+    }
     m_started = true;
     const Config &cfg = m_core->cfg();
     // [engine-3] both keys are (hidden) schema entries now, so a nested fallback would never apply

@@ -29,6 +29,7 @@
 #include "mock/mock_core.h"
 #include "mx/app_paths.h"
 #include "mx/legacy_names.h"
+#include "mx/net_policy.h"
 #include "mx/services.h"
 #include "mx/settings_keys.h"
 #include "mx/update_check.h"
@@ -247,6 +248,12 @@ void realPortTest(mx::Settings *s, int port, bool udp, bool mapPorts, QObject *c
         report(free, true);
         return;
     }
+    // [net-2] behind a proxy nobody can reach this computer, and the router is not asked
+    if (mx::netpolicy::fromSettings(s).proxy.active()) {
+        report(PT{true, free.message + QObject::tr(" A proxy is set: OctoMX does not listen and maps no ports then, "
+                                                   "incoming connections cannot arrive through a proxy.")}, true);
+        return;
+    }
     // hold the port while the router and the checker test it (busy = OctoMX itself uses it: done)
     auto *holder = new QObject(ctx);
     bool held = false;
@@ -267,6 +274,7 @@ void realPortTest(mx::Settings *s, int port, bool udp, bool mapPorts, QObject *c
     auto state = std::make_shared<QString>(free.message);
     auto done = std::make_shared<bool>(false);
     auto *mapper = new mx::diag::PortMapper(holder);
+    mapper->setAdapter(mx::netpolicy::fromSettings(s).bind);   // [net-2] the chosen adapter only
     auto finish = [holder, mapper, report, state, done](bool ok, const QString &more) {
         if (*done) return;
         *done = true;
@@ -283,6 +291,7 @@ void realPortTest(mx::Settings *s, int port, bool udp, bool mapPorts, QObject *c
         const QString host = QUrl(QString(tmpl).replace(QLatin1String("%1"), QString::number(port))).host();
         *state += QLatin1Char(' ') + mapped;
         auto *nam = new QNetworkAccessManager(holder);
+        mx::netpolicy::applyTo(nam, s);   // [net-2]
         mx::diag::publicPortCheck(holder, nam, tmpl, port, 15000, [finish, host](const mx::diag::CheckResult &r) {
             if (!r.answered) finish(true, QObject::tr("%1 gave no answer (%2), so reachability is unknown.").arg(host, r.error));
             else if (r.ok) finish(true, QObject::tr("%1 reached the port: incoming connections work.").arg(host));

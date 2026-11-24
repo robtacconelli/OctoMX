@@ -91,6 +91,7 @@ void GnutellaPlugin::startConnection(const HostPort &h, bool manual)
     cfg.browseHost = browseAllowed(HostPort());
     cfg.handshakeTimeoutMs = qMin(connectTimeoutMs(), 10000) + 5000;   // dead hosts are common: fail fast
     cfg.meter = m_ctx.limiter;   // [glue-3] ultrapeer traffic in the bandwidth graph
+    cfg.prepare = [this](QTcpSocket *s) { prepareSocket(s); };   // [net-2]
     // [enc-1] TLS to hosts known to take it (prefer) or to every host (require)
     if (tlsMode() != TlsMode::Off && ensureTls()) {
         cfg.tls = m_tls;
@@ -403,6 +404,7 @@ void GnutellaPlugin::pingUhc(const QString &hostPort)
     const QString host = hostPort.section(QLatin1Char(':'), 0, 0);
     const quint16 port = quint16(hostPort.section(QLatin1Char(':'), 1, 1).toUInt());
     if (host.isEmpty() || !port) return;
+    if (!m_udp) return;   // [net-2] no UDP (a proxy is set): no lookup for it either
     QPointer<GnutellaPlugin> self(this);
     QHostInfo::lookupHost(host, this, [self, hostPort, port](const QHostInfo &info) {
         if (!self || !self->m_udp) return;

@@ -3,6 +3,8 @@
 // deflate in both directions, descriptor framing, keep-alive pings, bounded output queue.
 #pragma once
 
+#include <functional>
+
 #include "gnut_headers.h"
 #include "gnut_message.h"
 #include "gnut_tls.h"
@@ -32,6 +34,8 @@ struct HandshakeConfig {
     std::shared_ptr<TlsEngine> tls;
     TlsSocket::Policy tlsPolicy = TlsSocket::Plain;
     bool advertiseTls = false;
+    // [net-2] proxy / chosen adapter for the link (mx/net_policy.h)
+    std::function<void(QTcpSocket *)> prepare;
 };
 
 class UltrapeerConnection : public QObject {

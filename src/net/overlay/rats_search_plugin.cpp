@@ -7,6 +7,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QJsonArray>
 
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 namespace mx::ovl {
@@ -106,6 +107,21 @@ void RatsSearchPlugin::start()
 {
     if (m_running) return;
     RatsNodeConfig cfg;
+    {   // [net-2] no Rats through a proxy; with a chosen adapter every socket is bound to it
+        const mx::netpolicy::Verdict v = mx::netpolicy::verdict(Net::Rats, m_ctx.settings);
+        bool ok = true;
+        QString why;
+        cfg.bindAddress = mx::netpolicy::bindAddressFor(m_ctx.settings, &ok, &why);
+        if (!v.allowed || !ok) {
+            m_lastError = v.allowed ? why : v.reason;
+            m_lastStatus.state = ConnState::Error;
+            m_lastStatus.statusText = m_lastError;
+            Q_EMIT statusChanged(m_lastStatus);
+            Q_EMIT logMessage(QStringLiteral("Rats: %1").arg(m_lastError));
+            return;
+        }
+        if (!mx::netpolicy::fromSettings(m_ctx.settings).bind.isEmpty()) cfg.mdns = false;   // no LAN multicast elsewhere
+    }
     cfg.protocol = setting(ratskeys::Protocol, QString::fromLatin1(kDefaultRatsProtocol)).toString();
     cfg.listenPort = static_cast<quint16>(setting(ratskeys::ListenPort, 4444).toInt());
     cfg.dhtPort = static_cast<quint16>(setting(ratskeys::DhtPort, 0).toInt());

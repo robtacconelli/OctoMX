@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/pinger.h"
+#include "mx/net_policy.h"
 #include "core/network_manager.h"
 
 #include <QtCore/QElapsedTimer>
@@ -113,6 +114,12 @@ void Pinger::startProbe(const Probe &p)
     connect(sock, &QTcpSocket::errorOccurred, this, [finish] { finish(-1); });
     QTimer::singleShot(m_timeoutMs, sock, [finish] { finish(-1); });
     timer->start();
+    // [net-2] through the proxy / from the chosen adapter, as the networks (else no ping at all)
+    QString why;
+    if (!netpolicy::prepareTcp(sock, m_network ? m_network->settings() : nullptr, &why)) {
+        QTimer::singleShot(0, this, [finish] { finish(-1); });
+        return;
+    }
     sock->connectToHost(p.host, p.port);
 }
 

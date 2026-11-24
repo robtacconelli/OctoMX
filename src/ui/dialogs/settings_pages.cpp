@@ -347,17 +347,24 @@ void buildConnectionPages(SettingsDialog *d)
         k.label(QObject::tr("Connection attempts timeout after"), 233, 33, 166);
         k.spin(connection::ConnectTimeoutSec, 400, 28, 61, 21);
         k.label(QObject::tr("seconds"), 466, 33, 50);
-        k.group(QObject::tr("Proxy Server"), 243, 63, 246, 238);
+        // [net-2] the proxy is for every network: SOCKS5 and HTTP (Qt has no SOCKS4 client; a stored
+        // SOCKS4 is used as SOCKS5 and shown so), no separate "peers too" choice any more
+        k.group(QObject::tr("Proxy Server"), 243, 63, 246, 258);
         k.radio(QObject::tr("Don't use a proxy server (connect directly)"), connection::ProxyType, QStringLiteral("none"), 258, 87, 226);
-        k.radio(QObject::tr("Use SOCKS4 proxy"), connection::ProxyType, QStringLiteral("socks4"), 258, 107, 110);
-        k.radio(QObject::tr("Use SOCKS5 proxy"), connection::ProxyType, QStringLiteral("socks5"), 258, 127, 110);
-        k.radio(QObject::tr("Use HTTP proxy"), connection::ProxyType, QStringLiteral("http"), 372, 127, 110);
-        StaticText *l1 = k.label(QObject::tr("Address  (if port not 1080, use ip:port format)"), 261, 155, 226);
-        auto *addr = k.place(new QLineEdit, 261, 168, 214, 20);
+        QRadioButton *socks5 = k.radio(QObject::tr("Use SOCKS5 proxy"), connection::ProxyType, QStringLiteral("socks5"), 258, 107, 110);
+        k.radio(QObject::tr("Use HTTP proxy"), connection::ProxyType, QStringLiteral("http"), 372, 107, 110);
+        k.b->bindCustom({}, {QString(connection::ProxyType)}, [socks5, s = k.s] {
+            if (s->s(connection::ProxyType) == QLatin1String("socks4")) {
+                QSignalBlocker bl(socks5);
+                socks5->setChecked(true);
+            }
+        });
+        StaticText *l1 = k.label(QObject::tr("Address  (if port not 1080, use ip:port format)"), 261, 135, 226);
+        auto *addr = k.place(new QLineEdit, 261, 148, 214, 20);
         addr->setToolTip(settingTip(connection::ProxyHost));
         bindProxyAddress(k, addr);
-        StaticText *l2 = k.label(QObject::tr("Proxy Login Name (if required by proxy server)"), 261, 191, 226);
-        auto *user = k.place(new QLineEdit, 261, 204, 214, 20);
+        StaticText *l2 = k.label(QObject::tr("Proxy Login Name (if required by proxy server)"), 261, 171, 226);
+        auto *user = k.place(new QLineEdit, 261, 184, 214, 20);
         user->setObjectName(QStringLiteral("set_connection_proxyUser"));
         user->setToolTip(settingTip(connection::ProxyUser));
         // the login name also switches authentication on/off (the original has no separate check)
@@ -369,18 +376,22 @@ void buildConnectionPages(SettingsDialog *d)
             b->commit(QString(connection::ProxyUser), user->text().trimmed(), user);
             b->commit(QString(connection::ProxyAuth), !user->text().trimmed().isEmpty(), user);
         });
-        StaticText *l3 = k.label(QObject::tr("Password (if required by proxy server)"), 261, 225, 226);
-        QLineEdit *pw = k.edit(connection::ProxyPassword, 261, 238, 214, 20);
+        StaticText *l3 = k.label(QObject::tr("Password (if required by proxy server)"), 261, 205, 226);
+        QLineEdit *pw = k.edit(connection::ProxyPassword, 261, 218, 214, 20);
         pw->setEchoMode(QLineEdit::Password);
-        QCheckBox *hn = k.check(QObject::tr("Push host names through SOCKS5 proxy"), connection::ProxyHostnames, 259, 266, 226);
-        QCheckBox *peers = k.check(QObject::tr("Also use the proxy for peer connections"), connection::ProxyPeers, 259, 282, 226);
+        QCheckBox *hn = k.check(QObject::tr("Push host names through SOCKS5 proxy"), connection::ProxyHostnames, 259, 244, 226);
+        WrapLabel *note = k.wrap(QObject::tr("Every network goes through the proxy. Off while it is set: Kad, the OctoMX network, "
+                                             "Rats and UDP; nobody can connect to you."),
+                                 261, 264, 222, 52);
+        note->setObjectName(QStringLiteral("set_connection_proxyCoverage"));
+        note->setToolTip(QObject::tr("What a proxy covers and what it switches off, network by network (the Connection Test says the same)."));
         // fields are disabled while "Don't use a proxy server" is selected (as the original)
-        QList<QWidget *> dep = {l1, addr, l2, user, l3, pw, hn, peers};
+        QList<QWidget *> dep = {l1, addr, l2, user, l3, pw, hn};
         k.b->bindCustom({}, {QString(connection::ProxyType)}, [dep, s = k.s] {
             const QString t = s->s(connection::ProxyType);
             for (QWidget *w : dep)
                 w->setEnabled(t != QLatin1String("none"));
-            dep.at(6)->setEnabled(t == QLatin1String("socks5"));
+            dep.at(6)->setEnabled(t == QLatin1String("socks5") || t == QLatin1String("socks4"));
         });
     }
     // ---- Incoming TCP Connections [obs: settings_incoming_tcp.png, ref4]
@@ -424,13 +435,15 @@ void buildConnectionPages(SettingsDialog *d)
         f.group(QObject::tr("Firewall"));
         f.combo(connection::Firewalled, QObject::tr("Incoming connections"), 110);
         f.endGroup();
-        f.group(QObject::tr("Network Interface"));
-        f.editRow(connection::BindInterface, QObject::tr("Interface (empty = all)"), 120);
-        f.check(connection::Ipv6);
+        f.group(QObject::tr("Network Adapter"));
+        f.editRow(connection::BindInterface, QObject::tr("Adapter (empty = all)"), 120);
+        f.check(connection::Ipv6, QObject::tr("Use IPv6 when available"));
         f.endGroup();
-        f.text(QObject::tr("These settings apply to every network. Each network has its own page below \"Other Networks\" "
-                           "for its ports and limits."),
-               3);
+        // [net-2] what the adapter choice really does, on every network
+        f.text(QObject::tr("Every network, web request, the update check and port mapping use only this adapter (a VPN "
+                           "adapter's name or address). When it is missing, every network stops until it is back. "
+                           "IPv6: BitTorrent, the OctoMX network, Rats and HTTP; eD2k, Kad and Gnutella are IPv4 only."),
+               5);
     }
 }
 
@@ -589,8 +602,8 @@ void buildOtherNetworkPages(SettingsDialog *d)
         Form f(k);
         f.group(QObject::tr("Kad Network (serverless eD2k)"));
         f.check(kad::Enabled, QObject::tr("Enable Kad"));
-        f.spin(kad::UdpPort, QObject::tr("UDP port"));
-        f.text(QObject::tr("Kad shares the eD2k UDP socket: use the same port as on the eD2k page."), 2);
+        // [net-2] Kad has no port of its own: it uses the eD2k UDP socket (kad/udpPort was read by nothing)
+        f.text(QObject::tr("Kad uses the eD2k UDP port (eD2k Servers page). Kad is off while a proxy is set: it works over UDP only."), 2);
         f.check(kad::AutoBootstrap);
         f.editRow(kad::NodesDatUrl, QObject::tr("nodes.dat URL"), 80);
         f.edit(kad::BootstrapNodes, QObject::tr("Bootstrap nodes (host:port; separated by ;)"));

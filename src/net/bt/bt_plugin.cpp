@@ -20,6 +20,7 @@
 #include <libtorrent/magnet_uri.hpp>
 #include <libtorrent/torrent_info.hpp>
 
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 namespace mx {
@@ -525,6 +526,7 @@ void BtPlugin::fetchUrl(const QString &url, const QString &saveDir, bool paused,
 {
     if (!m_nam)
         m_nam = new QNetworkAccessManager(this);
+    mx::netpolicy::applyTo(m_nam, m_ctx.settings);   // [net-2] .torrent files: through the proxy / the adapter
     QNetworkRequest req{QUrl(url)};
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("%1/%2").arg(m_cfg.clientName, m_cfg.clientVersion));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);

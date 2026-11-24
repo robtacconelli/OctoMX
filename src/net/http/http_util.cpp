@@ -9,6 +9,7 @@
 #include <chrono>
 
 #include "mx/services.h"
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 Q_LOGGING_CATEGORY(lcHttp, "mx.http")
@@ -53,37 +54,13 @@ HttpConfig HttpConfig::load(const Settings *s)
 
 QNetworkProxy proxyFromSettings(const Settings *s)
 {
-    if (!s) return QNetworkProxy(QNetworkProxy::NoProxy);
-    const QString type = s->value(keys::connection::ProxyType).toString().toLower();
-    const QString host = s->value(keys::connection::ProxyHost).toString().trimmed();
-    const int port = s->value(keys::connection::ProxyPort).toInt();
-    if (type.isEmpty() || type == QLatin1String("none") || host.isEmpty() || port <= 0)
-        return QNetworkProxy(QNetworkProxy::NoProxy);
-    QNetworkProxy p;
-    if (type == QLatin1String("http")) {
-        p.setType(QNetworkProxy::HttpProxy);
-    } else if (type == QLatin1String("socks5")) {
-        p.setType(QNetworkProxy::Socks5Proxy);
-        QNetworkProxy::Capabilities caps = p.capabilities();
-        caps.setFlag(QNetworkProxy::HostNameLookupCapability, s->value(keys::connection::ProxyHostnames).toBool());
-        p.setCapabilities(caps);
-    } else {
-        // Qt has no SOCKS4 client; use SOCKS5 (virtually every SOCKS4 proxy also speaks 5).
-        qCWarning(lcHttp) << "SOCKS4 proxy not supported by Qt, trying SOCKS5 on" << host << port;
-        p.setType(QNetworkProxy::Socks5Proxy);
-    }
-    p.setHostName(host);
-    p.setPort(quint16(port));
-    if (s->value(keys::connection::ProxyAuth).toBool()) {
-        p.setUser(s->value(keys::connection::ProxyUser).toString());
-        p.setPassword(s->value(keys::connection::ProxyPassword).toString());
-    }
-    return p;
+    // [net-2] one policy for every network (mx/net_policy.h)
+    return netpolicy::qtProxy(netpolicy::fromSettings(s).proxy);
 }
 
 void configureManager(QNetworkAccessManager *nam, const Settings *s)
 {
-    nam->setProxy(proxyFromSettings(s));
+    netpolicy::applyTo(nam, s);   // [net-2] the proxy, or the relay bound to the chosen adapter
     nam->setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
     nam->setAutoDeleteReplies(false);
     nam->setStrictTransportSecurityEnabled(false);

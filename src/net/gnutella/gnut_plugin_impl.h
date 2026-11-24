@@ -107,6 +107,8 @@ public:
                       const QList<PushLoc> &pushed, const QList<HostPort> &directTls = {}) override;
     void sourceLog(const QString &line) override;
     QTcpSocket *newSocket(bool peerTls, QObject *parent) override;   // [enc-1]
+    QTcpSocket *makeSocket(bool peerTls, QObject *parent);
+    void prepareSocket(QTcpSocket *s);   // [net-2] proxy / chosen adapter
 
     // ---- [enc-1] TLS (gnutella/encryption)
     TlsMode tlsMode() const;

@@ -13,7 +13,7 @@
 #include <QtCore/QTimer>
 #include <QtNetwork/QTcpSocket>
 
-namespace mx { class RateLimiter; }
+namespace mx { class RateLimiter; class Settings; }
 
 namespace mx::ed2k {
 
@@ -31,6 +31,8 @@ public:
     void setMaxPacket(quint32 maxPacket);
     void setIdleTimeoutMs(qint64 ms) { m_idleTimeoutMs = ms; }
     void setConnectTimeoutMs(qint64 ms) { m_connectTimeoutMs = ms; }
+    // [net-2] the settings whose proxy / adapter the outgoing connection follows (mx/net_policy.h)
+    void setPolicySettings(const mx::Settings *s) { m_policy = s; }
 
     // crypt setup: call before connectTo (outgoing) or right after construction (incoming)
     void useClientObfuscation(const QByteArray &targetUserHash);
@@ -90,6 +92,7 @@ private:
     PacketParser m_parser;
     mx::RateLimiter *m_limiter = nullptr;
     mx::RateLimiter *m_meter = nullptr;
+    const mx::Settings *m_policy = nullptr;
     qint64 m_bytesOutMetered = 0;
     QQueue<QPair<QByteArray, qint64>> m_dataQ;
     qint64 m_dataQueued = 0;

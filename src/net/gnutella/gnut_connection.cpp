@@ -41,6 +41,7 @@ void UltrapeerConnection::start()
 {
     if (m_cfg.tls && m_cfg.tlsPolicy != TlsSocket::Plain) m_sock = new TlsSocket(m_cfg.tls, m_cfg.tlsPolicy, this);
     else m_sock = new QTcpSocket(this);
+    if (m_cfg.prepare) m_cfg.prepare(m_sock);   // [net-2] through the proxy / bound to the adapter
     m_sock->setReadBufferSize(256 * 1024);
     connect(m_sock, &QTcpSocket::connected, this, &UltrapeerConnection::onConnected);
     connect(m_sock, &QTcpSocket::readyRead, this, &UltrapeerConnection::onReadyRead);

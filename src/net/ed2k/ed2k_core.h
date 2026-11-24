@@ -91,6 +91,7 @@ public:
     QString clientName() const;
     quint32 emuleVersionTag() const;            // CT_EMULE_VERSION value
     quint16 tcpPort() const { return m_tcpPort; }
+    qint64 peerConnectTimeoutMs() const;   // [net-2] connection/connectTimeoutSec
     bool listening() const { return m_listening; }
     QString tcpBindError() const { return m_tcpError; }   // [diag-1]
     QString udpBindError() const { return m_udpError; }

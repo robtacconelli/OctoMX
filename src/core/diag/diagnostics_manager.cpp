@@ -8,6 +8,7 @@
 #include "core/network_manager.h"
 
 #include "mx/bandwidth_limits.h"
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -111,6 +112,8 @@ DiagnosticsManager::DiagnosticsManager(Settings *settings, NetworkManager *netwo
     connect(m_mapper, &diag::PortMapper::mappingChanged, this, &DiagnosticsManager::onMappingChanged);
     connect(m_mapper, &diag::PortMapper::routerChanged, this, &DiagnosticsManager::scheduleReportChanged);
     m_nam = new QNetworkAccessManager(this);
+    netpolicy::applyTo(m_nam, m_settings);   // [net-2] port checker, web reachability: the proxy / the adapter
+    diag::setPolicySettings(m_settings);
     m_bindTimer.setInterval(2000);
     connect(&m_bindTimer, &QTimer::timeout, this, &DiagnosticsManager::syncBindings);
     m_verdictTimer.setInterval(5000);
@@ -126,7 +129,9 @@ DiagnosticsManager::DiagnosticsManager(Settings *settings, NetworkManager *netwo
     connect(&m_stepTimer, &QTimer::timeout, this, &DiagnosticsManager::testStep);
     if (m_settings) {
         connect(m_settings, &Settings::changed, this, [this](const QString &key, const QVariant &) {
-            if (key == keys::connection::Upnp || key == keys::connection::NatPmp) applyMapperConfig();
+            if (key == keys::connection::Upnp || key == keys::connection::NatPmp || key.startsWith(QLatin1String("connection/proxy"))
+                || key == keys::connection::BindInterface)
+                applyMapperConfig();
         });
     }
 }
@@ -141,7 +146,17 @@ void DiagnosticsManager::applyMapperConfig()
         scheduleReportChanged();
         return;
     }
-    m_mapper->setEnabled(m_settings->b(keys::connection::Upnp), m_settings->b(keys::connection::NatPmp));
+    // [net-2] no mapping while a proxy is set (nobody reaches us through it; the user asked for the
+    // proxy to hide the address); with a chosen adapter only on that adapter, none while it is missing
+    const netpolicy::Policy pol = netpolicy::fromSettings(m_settings);
+    m_mapper->setAdapter(pol.bind);
+    if (pol.proxy.active()) {
+        m_mapper->setEnabled(false, false, QStringLiteral("off while a proxy is set: nobody can connect to you through it"));
+    } else if (pol.bindWanted() && !netpolicy::resolveAdapter(pol.bind).present) {
+        m_mapper->setEnabled(false, false, QStringLiteral("off: the chosen network adapter is not there"));
+    } else {
+        m_mapper->setEnabled(m_settings->b(keys::connection::Upnp), m_settings->b(keys::connection::NatPmp));
+    }
     scheduleReportChanged();
 }
 
@@ -476,26 +491,30 @@ DiagGroup DiagnosticsManager::generalGroup(const QList<NetFacts> &nets) const
                         m_env.defaultAdapter.isEmpty() ? QStringLiteral("Through %1").arg(m_env.defaultSource)
                                                        : QStringLiteral("Through %1 (%2)").arg(m_env.defaultAdapter, m_env.defaultSource),
                         m_env.gateway.isNull() ? QString() : QStringLiteral("gateway %1").arg(m_env.gateway.toString()));
-    // proxy / bind interface
-    const QString proxy = m_settings->s(keys::connection::ProxyType);
-    if (proxy.isEmpty() || proxy == QLatin1String("none"))
+    // proxy / bind interface [net-2]: what they cover on every network, what is off, and why
+    const netpolicy::Policy pol = netpolicy::fromSettings(m_settings);
+    const netpolicy::Monitor *mon = netpolicy::Monitor::instance();
+    const netpolicy::Verdict general = netpolicy::verdict(Net::Unknown, m_settings);
+    if (!pol.proxy.active())
         g.items << item(QStringLiteral("general.proxy"), QStringLiteral("Proxy"), DiagLevel::Ok, QStringLiteral("None"));
     else
-        g.items << item(QStringLiteral("general.proxy"), QStringLiteral("Proxy"), DiagLevel::Limited,
-                        QStringLiteral("%1 %2:%3").arg(proxy.toUpper(), m_settings->s(keys::connection::ProxyHost)).arg(m_settings->i(keys::connection::ProxyPort)),
-                        m_settings->b(keys::connection::ProxyPeers) ? QStringLiteral("peer connections too") : QStringLiteral("servers and trackers only"),
-                        QStringLiteral("Connections go through a proxy: incoming connections are not possible through it, and a slow proxy slows every download."));
-    const QString bind = m_settings->s(keys::connection::BindInterface);
-    if (bind.isEmpty()) {
+        g.items << item(QStringLiteral("general.proxy"), QStringLiteral("Proxy"), general.allowed ? DiagLevel::Limited : DiagLevel::Broken,
+                        pol.proxy.describe(),
+                        QStringLiteral("every network's TCP connections; Kad, OctoMX network, Rats and UDP off"),
+                        netpolicy::proxyCoverageText()
+                            + QStringLiteral(" Incoming connections cannot arrive through a proxy, so you count as firewalled; a slow proxy slows every download."));
+    if (!pol.bindWanted()) {
         g.items << item(QStringLiteral("general.bind"), QStringLiteral("Bind interface"), DiagLevel::Ok, QStringLiteral("All adapters"));
     } else {
-        bool exists = false;
-        for (const diag::AdapterInfo &a : m_env.adapters)
-            if (a.ipv4.contains(bind) || a.ipv6.contains(bind) || a.name == bind || a.humanName == bind) exists = true;
-        g.items << item(QStringLiteral("general.bind"), QStringLiteral("Bind interface"), exists ? DiagLevel::Ok : DiagLevel::Broken, bind,
-                        exists ? QString() : QStringLiteral("not on this computer"),
-                        exists ? QStringLiteral("Only this adapter is used for BitTorrent.")
-                               : QStringLiteral("The bind interface %1 does not exist on this computer, so BitTorrent cannot listen or connect: clear it in Settings, Internet Connection.").arg(bind));
+        const netpolicy::Adapter a = mon ? mon->adapter() : netpolicy::resolveAdapter(pol.bind);
+        QStringList addrs;
+        for (const QHostAddress &h : a.addresses) addrs << h.toString();
+        g.items << item(QStringLiteral("general.bind"), QStringLiteral("Bind interface"), a.present && general.allowed ? DiagLevel::Ok : DiagLevel::Broken,
+                        pol.bind, a.present ? addrs.join(QStringLiteral(", ")) : QStringLiteral("not there now"),
+                        a.present ? (general.allowed ? netpolicy::adapterCoverageText() : general.reason)
+                                  : QStringLiteral("The adapter %1 is not there or has no address (a VPN that is down?): every network "
+                                                   "is stopped and nothing uses another adapter. They start again when it is back; "
+                                                   "or clear it in Settings, Internet Connection, Connection Options.").arg(pol.bind));
     }
     // router
     const diag::RouterInfo r = m_mapper->router();
@@ -586,7 +605,7 @@ DiagGroup DiagnosticsManager::generalGroup(const QList<NetFacts> &nets) const
                     QString(), nat.text);
     if (m_env.hasIpv6)
         g.items << item(QStringLiteral("general.ipv6"), QStringLiteral("IPv6"), DiagLevel::Ok, QStringLiteral("Available"),
-                        m_settings->b(keys::connection::Ipv6) ? QStringLiteral("used by BitTorrent") : QStringLiteral("switched off in the settings"));
+                        m_settings->b(keys::connection::Ipv6) ? QStringLiteral("used by BitTorrent, the OctoMX network, Rats and HTTP") : QStringLiteral("switched off in the settings: no network uses it"));
     // limits
     // [bw-1] the limits in force and why (schedule, or the user's limits during a schedule window)
     const bwlimit::InForce lim = bwlimit::inForce(m_settings);
@@ -1150,10 +1169,12 @@ void DiagnosticsManager::checkPortsOnline()
             break;
         }
     }
-    if (tmpl.isEmpty() || !tmpl.contains(QLatin1String("%1")) || ports.isEmpty()) {
+    // [net-2] nobody reaches us through a proxy: the checker would test the proxy's address
+    if (tmpl.isEmpty() || !tmpl.contains(QLatin1String("%1")) || ports.isEmpty() || netpolicy::fromSettings(m_settings).proxy.active()) {
         scheduleReportChanged();
         return;
     }
+    netpolicy::applyTo(m_nam, m_settings);
     m_portCheckRunning = true;
     const QString service = portCheckService();
     auto left = std::make_shared<int>(int(ports.size()));
@@ -1300,6 +1321,7 @@ void DiagnosticsManager::testStep()
             for (NetworkPlugin *p : m_network->plugins())
                 if ((p->net() == Net::Web || p->net() == Net::Http) && m_network->isRunning(p->net()))
                     for (const QString &h : p->diagnostics().hosts.mid(0, 4)) urls << qMakePair(p->net(), QStringLiteral("https://%1/").arg(h));
+            netpolicy::applyTo(m_nam, m_settings);   // [net-2] as the networks: the proxy / the adapter
             for (const auto &u : urls) {
                 if (u.second.isEmpty()) continue;
                 ++m_pending;

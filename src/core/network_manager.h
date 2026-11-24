@@ -21,6 +21,7 @@
 namespace mx {
 
 class Pinger;
+namespace netpolicy { class Monitor; }
 
 class NetworkManager : public NetworkService {
     Q_OBJECT
@@ -81,6 +82,10 @@ public:
     void setPinger(Pinger *p) { m_pinger = p; }
     void noteOwnSearch();                                    // SearchManager started a search (SPM)
     void checkSummary();                                     // emits summaryChanged if it changed
+    // [net-2] the connection policy (proxy, chosen adapter): why a network does not run now
+    netpolicy::Monitor *policyMonitor() const { return m_policy; }
+    Settings *settings() const { return m_settings; }
+    QString blockedReason(Net n) const;
 
 signals:
     void logMessage(mx::Net net, const QString &text);
@@ -90,6 +95,7 @@ private:
     void stopPlugin(NetworkPlugin *p);
     void onPluginStatus(NetworkPlugin *p);
     void emitOverallIfChanged();
+    void applyPolicy();                  // [net-2] stop / start / restart what the policy changed
 
     Settings *m_settings;
     QList<NetworkPlugin *> m_plugins;
@@ -108,6 +114,11 @@ private:
     Pinger *m_pinger = nullptr;
     QTimer m_summaryTimer;
     QString m_lastSummary;
+    // [net-2]
+    netpolicy::Monitor *m_policy = nullptr;
+    QHash<NetworkPlugin *, QString> m_blocked;   // not running because of the policy: why
+    QString m_policyPrint;
+    QTimer m_policyTimer;
 };
 
 } // namespace mx

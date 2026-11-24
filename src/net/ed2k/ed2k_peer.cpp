@@ -89,7 +89,7 @@ PeerConnection::PeerConnection(Ed2kCore *core, Ed2kConnection *conn, bool outgoi
     m_conn->setParent(this);
     m_conn->setLimiter(core->ctx().limiter);
     m_conn->setIdleTimeoutMs(45000);
-    m_conn->setConnectTimeoutMs(25000);
+    m_conn->setConnectTimeoutMs(core->peerConnectTimeoutMs());   // [net-2] was a fixed 25 s
     m_conn->setMaxPacket(1024 * 1024);
     connect(m_conn, &Ed2kConnection::packetReceived, this, &PeerConnection::onPacket);
     connect(m_conn, &Ed2kConnection::closed, this, &PeerConnection::onConnClosed);

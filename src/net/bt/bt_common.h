@@ -28,6 +28,9 @@ struct Config {
     int listenPort = 6881;          // 0 = let the OS pick
     bool randomizePorts = false;    // pick a random port in [20000, 60000) once per process start
     QString bindInterface;          // empty = all
+    // [net-2] the chosen adapter's addresses now (mx/net_policy.h); empty with bindInterface set:
+    // the adapter is missing, the session stays offline (nothing falls back to another adapter)
+    QStringList bindAddresses;
     bool ipv6 = true;
     bool dht = true, pex = true, lsd = true, utp = true, upnp = true, natpmp = true;
     bool coreMapsPorts = false;     // [diag-1] the core's PortMapper forwards our ports: libtorrent's UPnP / NAT-PMP off

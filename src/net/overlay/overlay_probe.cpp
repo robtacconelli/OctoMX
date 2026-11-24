@@ -21,6 +21,8 @@
 #include <QtNetwork/QTcpSocket>
 #include <QtNetwork/QUdpSocket>
 
+#include "mx/net_policy.h"
+
 #include <memory>
 
 namespace mx::ovl {
@@ -133,6 +135,21 @@ bool OverlayPlugin::probePorts(quint32 token, const QList<PortProbe> &ports)
     return true;
 }
 
+// [net-2] a probe datagram leaves from the chosen adapter only (or from any when none is chosen)
+static bool bindProbeUdp(QUdpSocket *u, const QHostAddress &to, const mx::Settings *s)
+{
+    const mx::netpolicy::Policy pol = mx::netpolicy::fromSettings(s);
+    if (pol.proxy.active()) return false;
+    const bool v6 = to.protocol() == QAbstractSocket::IPv6Protocol;
+    QHostAddress from = v6 ? QHostAddress(QHostAddress::AnyIPv6) : QHostAddress(QHostAddress::AnyIPv4);
+    if (pol.bindWanted()) {
+        const mx::netpolicy::Adapter a = mx::netpolicy::resolveAdapter(pol.bind);
+        from = v6 ? a.v6() : a.v4();
+    }
+    u->setProxy(QNetworkProxy::NoProxy);
+    return !from.isNull() && u->bind(from, 0);
+}
+
 void OverlayPlugin::onProbeRequest(const QString &nodeId, const QJsonObject &o)
 {
     const QString rid = jStr(o, "rid", 24);
@@ -206,6 +223,12 @@ void OverlayPlugin::onProbeRequest(const QString &nodeId, const QJsonObject &o)
             connect(s, &QTcpSocket::connected, this, [finish] { finish(true, QString()); });
             connect(s, &QTcpSocket::errorOccurred, this, [s, finish](QAbstractSocket::SocketError) { finish(false, s->errorString()); });
             QTimer::singleShot(kProbeTimeoutMs, s, [finish] { finish(false, QStringLiteral("no answer within 6 s")); });
+            QString why;   // [net-2] from the chosen adapter only
+            if (!mx::netpolicy::prepareTcp(s, m_ctx.settings, &why, ip.protocol() == QAbstractSocket::IPv6Protocol
+                                                                        ? QAbstractSocket::IPv6Protocol : QAbstractSocket::IPv4Protocol)) {
+                QTimer::singleShot(0, s, [finish, why] { finish(false, why); });
+                continue;
+            }
             s->connectToHost(ip, port);
         } else if (kind == QLatin1String("dht")) {
             auto *u = new QUdpSocket(this);
@@ -216,7 +239,7 @@ void OverlayPlugin::onProbeRequest(const QString &nodeId, const QJsonObject &o)
                 done(QStringLiteral("UDP"), port, ok ? QStringLiteral("yes") : QStringLiteral("no"), err);
                 u->deleteLater();
             };
-            u->bind(ip.protocol() == QAbstractSocket::IPv6Protocol ? QHostAddress::AnyIPv6 : QHostAddress::AnyIPv4, 0);
+            if (!bindProbeUdp(u, ip, m_ctx.settings)) { QTimer::singleShot(0, u, [finish] { finish(false, QStringLiteral("not on the chosen adapter")); }); continue; }
             connect(u, &QUdpSocket::readyRead, this, [u, finish] {
                 while (u->hasPendingDatagrams()) {
                     QByteArray d;
@@ -236,7 +259,7 @@ void OverlayPlugin::onProbeRequest(const QString &nodeId, const QJsonObject &o)
             QTimer::singleShot(kProbeTimeoutMs, u, [finish] { finish(false, QStringLiteral("no DHT answer within 6 s")); });
         } else if (kind == QLatin1String("datagram") && !nonce.isEmpty()) {
             auto *u = new QUdpSocket(this);
-            u->bind(ip.protocol() == QAbstractSocket::IPv6Protocol ? QHostAddress::AnyIPv6 : QHostAddress::AnyIPv4, 0);
+            if (!bindProbeUdp(u, ip, m_ctx.settings)) { u->deleteLater(); continue; }
             const QByteArray dg = probeDatagram(nonce, port);
             for (int i = 0; i < 3; ++i)
                 QTimer::singleShot(i * 400, u, [u, dg, ip, port] { u->writeDatagram(dg, ip, port); });

@@ -96,7 +96,11 @@ public:
     explicit PortMapper(QObject *parent = nullptr);
     ~PortMapper() override;
 
-    void setEnabled(bool upnp, bool natpmp);
+    // offReason: what the Off rows say (default: switched off in the settings)
+    void setEnabled(bool upnp, bool natpmp, const QString &offReason = QString());
+    // [net-2] the chosen adapter (connection/bindInterface): search, NAT-PMP and the router's
+    // control requests use only its address, and nothing runs while it is missing. Empty: all.
+    void setAdapter(const QString &wanted);
     bool upnpEnabled() const { return m_upnp; }
     bool natPmpEnabled() const { return m_natpmp; }
     // The complete set of ports to forward; ports no longer wanted are deleted on the router.
@@ -197,6 +201,7 @@ private:
     int m_failRounds = 0;
     QVariantMap m_cache;
     QList<QPair<QString, QHostAddress>> m_testAdapters;
+    QString m_adapter;   // [net-2]
     QHostAddress m_testSsdpTarget;
     quint16 m_testSsdpPort = 0;
     quint16 m_testNotifyPort = 0;

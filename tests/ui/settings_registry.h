@@ -23,77 +23,75 @@ inline const Proof kProofs[] = {
     {"identity/screenName", "test", "tests/core/tst_chat.cpp", "withBackend", ""},
     {"identity/connection", "test", "tests/overlay/tst_overlay_users.cpp", "presenceUpdates", ""},
     {"identity/primaryConnection", "test", "tests/core/tst_glue2.cpp", "defaultSummaryParsesTitle", ""},
-    {"connection/tcpPort", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"connection/randomizePorts", "reader", "src/net/bt/bt_common.cpp", "connection::RandomizePorts", ""},
-    {"connection/firewalled", "test", "tests/gnutella/tst_gnutella_glue3.cpp", "queueControlAndAccounting", ""},
-    {"connection/upnp", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"connection/natpmp", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"connection/ipv6", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"connection/bindInterface", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"connection/proxyType", "test", "tests/web/tst_web.cpp", "proxySettings", ""},
-    {"connection/proxyHost", "test", "tests/ui/tst_settings_dialog.cpp", "roundTrip", ""},
-    {"connection/proxyPort", "test", "tests/ui/tst_settings_dialog.cpp", "roundTrip", ""},
-    {"connection/proxyAuth", "test", "tests/ui/tst_settings_dialog.cpp", "roundTrip", ""},
-    {"connection/proxyUser", "reader", "src/net/bt/bt_common.cpp", "connection::ProxyUser", ""},
-    {"connection/proxyPassword", "reader", "src/net/bt/bt_common.cpp", "connection::ProxyPassword", ""},
-    {"connection/proxyPeers", "reader", "src/net/bt/bt_common.cpp", "connection::ProxyPeers", ""},
-    {"connection/proxyHostnames", "reader", "src/net/bt/bt_common.cpp", "connection::ProxyHostnames", ""},
-    {"connection/connectTimeoutSec", "reader", "src/net/gnutella/gnut_plugin.cpp", "connection::ConnectTimeoutSec", ""},
-    {"connection/acceptIncoming", "test", "tests/ui/tst_settings_dialog.cpp", "wizardRecommended", ""},
+    {"connection/tcpPort", "test", "tests/netpolicy/tst_netpolicy_netns.cpp", "overlayBoundWhenTheRouteIsTheAdapters", ""},   // [net-2]
+    {"connection/randomizePorts", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "randomPortsAndTorrentLimits", ""},   // [net-2]
+    {"connection/firewalled", "test", "tests/netpolicy/tst_netsettings.cpp", "gnutellaPortUltrapeersAndCaches", ""},   // [net-2]
+    {"connection/upnp", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"connection/natpmp", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"connection/ipv6", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"connection/bindInterface", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kOnAdapter", ""},   // [net-2]
+    {"connection/proxyType", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kThroughProxy", ""},   // [net-2]
+    {"connection/proxyHost", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kThroughProxy", ""},   // [net-2]
+    {"connection/proxyPort", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kThroughProxy", ""},   // [net-2]
+    {"connection/proxyAuth", "test", "tests/netpolicy/tst_netpolicy.cpp", "proxyNamesAndCredentials", ""},   // [net-2]
+    {"connection/proxyUser", "test", "tests/netpolicy/tst_netpolicy.cpp", "proxyNamesAndCredentials", ""},   // [net-2]
+    {"connection/proxyPassword", "test", "tests/netpolicy/tst_netpolicy.cpp", "proxyNamesAndCredentials", ""},   // [net-2]
+    {"connection/proxyHostnames", "test", "tests/netpolicy/tst_netpolicy.cpp", "proxyNamesAndCredentials", ""},   // [net-2]
+    {"connection/connectTimeoutSec", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
+    {"connection/acceptIncoming", "test", "tests/netpolicy/tst_netsettings.cpp", "gnutellaPortUltrapeersAndCaches", ""},   // [net-2]
     {"network/connectOnStart", "test", "tests/core/tst_network.cpp", "noAutoConnectAndNoPlugins", ""},
     {"bt/enabled", "test", "tests/core/tst_network.cpp", "lifecycle", ""},
-    {"bt/listenPort", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"bt/dht", "test", "tests/bt/bt_test_util.h", "create", ""},
+    {"bt/listenPort", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"bt/dht", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/pex", "reader", "src/net/bt/bt_common.cpp", "bt::Pex", ""},
-    {"bt/lsd", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"bt/utp", "reader", "src/net/bt/bt_common.cpp", "bt::Utp", ""},
-    {"bt/encryption", "test", "tests/core/tst_settings.cpp", "coercion", ""},
-    {"bt/maxConnections", "test", "tests/bt/tst_bt_transfer.cpp", "liveReconfigureAndServers", ""},
-    {"bt/maxConnectionsPerTorrent", "reader", "src/net/bt/bt_common.cpp", "bt::MaxConnectionsPerTorrent", ""},
-    {"bt/maxUploads", "reader", "src/net/bt/bt_common.cpp", "bt::MaxUploads", ""},
+    {"bt/lsd", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"bt/utp", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"bt/encryption", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "requiredEncryptionRefusesHeaderOnlyPeers", ""},   // [net-2]
+    {"bt/maxConnections", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"bt/maxConnectionsPerTorrent", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "randomPortsAndTorrentLimits", ""},   // [net-2]
+    {"bt/maxUploads", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/maxUploadsPerTorrent", "reader", "src/net/bt/bt_common.cpp", "bt::MaxUploadsPerTorrent", ""},
-    {"bt/maxActiveDownloads", "reader", "src/net/bt/bt_common.cpp", "bt::MaxActiveDownloads", ""},
-    {"bt/maxActiveSeeds", "reader", "src/net/bt/bt_common.cpp", "bt::MaxActiveSeeds", ""},
+    {"bt/maxActiveDownloads", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "randomPortsAndTorrentLimits", ""},   // [net-2]
+    {"bt/maxActiveSeeds", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/seedRatioLimit", "test", "tests/bt/bt_test_util.h", "create", ""},
     {"bt/seedTimeLimitMin", "reader", "src/net/bt/bt_common.cpp", "bt::SeedTimeLimitMin", ""},
     {"bt/seedLimitAction", "reader", "src/net/bt/bt_common.cpp", "bt::SeedLimitAction", ""},
     {"bt/seedCompleted", "reader", "src/core/engine/download.cpp", "bt::SeedCompleted", ""},
     {"bt/seedLibrary", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"bt/announceToAllTrackers", "reader", "src/net/bt/bt_common.cpp", "bt::AnnounceToAllTrackers", ""},
+    {"bt/announceToAllTrackers", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/extraTrackers", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"bt/dhtBootstrapNodes", "reader", "src/net/bt/bt_common.cpp", "bt::DhtBootstrapNodes", ""},
-    {"bt/anonymousMode", "reader", "src/net/bt/bt_common.cpp", "bt::AnonymousMode", ""},
+    {"bt/dhtBootstrapNodes", "test", "tests/netpolicy/tst_netpolicy_bt.cpp", "adapterBindsPeersAndDht", ""},   // [net-2]
+    {"bt/anonymousMode", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"bt/superSeeding", "reader", "src/net/bt/bt_common.cpp", "bt::SuperSeeding", ""},
     {"bt/preallocate", "reader", "src/net/bt/bt_common.cpp", "bt::Preallocate", ""},
     {"bt/webSeeds", "reader", "src/net/bt/bt_common.cpp", "bt::WebSeeds", ""},
-    {"bt/allowMultipleConnectionsPerIp", "test", "tests/bt/bt_test_util.h", "create", ""},
-    {"bt/validateHttpsTrackers", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
+    {"bt/allowMultipleConnectionsPerIp", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
+    {"bt/validateHttpsTrackers", "test", "tests/netpolicy/tst_netsettings.cpp", "btSessionSettingsReachLibtorrent", ""},   // [net-2]
     {"ed2k/enabled", "test", "tests/core/tst_network.cpp", "lifecycle", ""},
-    {"ed2k/tcpPort", "test", "tests/ed2k/tst_ed2k.cpp", "fuzzParsers", ""},
-    {"ed2k/udpPort", "test", "tests/ed2k/tst_ed2k.cpp", "fuzzParsers", ""},
-    {"ed2k/serverListUrl", "reader", "src/net/ed2k/ed2k_server.cpp", "\"ed2k/serverListUrl\"", ""},
-    {"ed2k/autoUpdateServerList", "test", "tests/ed2k/tst_ed2k.cpp", "fuzzParsers", ""},
-    {"ed2k/autoConnect", "test", "tests/ed2k/tst_ed2k.cpp", "fuzzParsers", ""},
-    {"ed2k/reconnect", "reader", "src/net/ed2k/ed2k_server.cpp", "\"ed2k/reconnect\"", ""},
-    {"ed2k/staticServersOnly", "reader", "src/net/ed2k/ed2k_server.cpp", "\"ed2k/staticServersOnly\"", ""},
-    {"ed2k/addServersFromServer", "reader", "src/net/ed2k/ed2k_server.cpp", "\"ed2k/addServersFromServer\"", ""},
+    {"ed2k/tcpPort", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
+    {"ed2k/udpPort", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
+    {"ed2k/serverListUrl", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kServerListDownload", ""},   // [net-2]
+    {"ed2k/autoUpdateServerList", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kServerListDownload", ""},   // [net-2]
+    {"ed2k/autoConnect", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
+    {"ed2k/reconnect", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kServerAnnouncementsAndReconnect", ""},   // [net-2]
+    {"ed2k/staticServersOnly", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
+    {"ed2k/addServersFromServer", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kServerAnnouncementsAndReconnect", ""},   // [net-2]
     {"ed2k/maxSourcesPerFile", "reader", "src/net/ed2k/ed2k_core.cpp", "\"ed2k/maxSourcesPerFile\"", ""},
-    {"ed2k/maxConnections", "reader", "src/net/ed2k/ed2k_core.cpp", "\"ed2k/maxConnections\"", ""},
-    {"ed2k/obfuscation", "test", "tests/ed2k/tst_ed2k.cpp", "fuzzParsers", ""},
-    {"ed2k/requireObfuscation", "reader", "src/net/ed2k/ed2k_core.cpp", "\"ed2k/requireObfuscation\"", ""},
+    {"ed2k/maxConnections", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
+    {"ed2k/obfuscation", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kObfuscationChoices", ""},   // [net-2]
+    {"ed2k/requireObfuscation", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kObfuscationChoices", ""},   // [net-2]
     {"ed2k/userHash", "internal", "src/net/ed2k/ed2k_core.cpp", "\"ed2k/userHash\"", "the eD2k user hash made at the first start (identity on eD2k)"},
     {"ed2k/uploadSlots", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"ed2k/maxHalfOpen", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"ed2k/maxConnectsPer5s", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"ed2k/parallelServerConnects", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"ed2k/maxHalfOpen", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
+    {"ed2k/maxConnectsPer5s", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kConnectionPacing", ""},   // [net-2]
+    {"ed2k/parallelServerConnects", "test", "tests/netpolicy/tst_netsettings.cpp", "ed2kPortsAndServerChoices", ""},   // [net-2]
     {"ed2k/udpPing", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"ed2k/udpSearch", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"ed2k/udpSources", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"ed2k/compressUploads", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"ed2k/compressUploads", "test", "tests/netpolicy/tst_netpolicy.cpp", "ed2kCompressUploads", ""},   // [net-2]
     {"kad/enabled", "test", "tests/core/tst_search.cpp", "managerFanOutAndMerge", ""},
-    {"kad/udpPort", "reader", "src/net/ed2k/ed2k_core.cpp", "\"kad/udpPort\"", ""},
     {"kad/nodesDatUrl", "reader", "src/net/ed2k/kad/kad_plugin.cpp", "\"kad/nodesDatUrl\"", ""},
-    {"kad/bootstrapNodes", "reader", "src/net/ed2k/kad/kad_plugin.cpp", "\"kad/bootstrapNodes\"", ""},
+    {"kad/bootstrapNodes", "test", "tests/netpolicy/tst_netpolicy.cpp", "kadOffWithProxyAndBoundToAdapter", ""},   // [net-2]
     {"kad/autoBootstrap", "test", "tests/ed2k/tst_kad.cpp", "simulatedNetwork", ""},
     {"kad/storeIndex", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"kad/firewallChecks", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
@@ -101,26 +99,26 @@ inline const Proof kProofs[] = {
     {"kad/buddies", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"kad/maxPacketsPerSec", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"gnutella/enabled", "test", "tests/core/tst_network.cpp", "lifecycle", ""},
-    {"gnutella/port", "test", "tests/gnutella/tst_gnutella_glue3.cpp", "queueControlAndAccounting", ""},
+    {"gnutella/port", "test", "tests/netpolicy/tst_netsettings.cpp", "gnutellaPortUltrapeersAndCaches", ""},   // [net-2]
     {"gnutella/maxUltrapeers", "reader", "src/net/gnutella/gnut_plugin.cpp", "gnutella::MaxUltrapeers", ""},
     {"gnutella/gwebcaches", "reader", "src/net/gnutella/gnut_net.cpp", "gnutella::GWebCaches", ""},
-    {"gnutella/bootstrapHosts", "test", "tests/gnutella/tst_gnutella_glue3.cpp", "queueControlAndAccounting", ""},
+    {"gnutella/bootstrapHosts", "test", "tests/netpolicy/tst_netpolicy.cpp", "gnutellaThroughProxy", ""},   // [net-2]
     {"gnutella/browseHost", "test", "tests/gnutella/tst_gnutella_loopback.cpp", "browseDirect", ""},
     {"gnutella/uploadSlots", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"gnutella/uploadQueueSize", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
     {"gnutella/uploadQueuePollSec", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"gnutella/autoBootstrap", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
+    {"gnutella/autoBootstrap", "test", "tests/netpolicy/tst_netsettings.cpp", "gnutellaPortUltrapeersAndCaches", ""},   // [net-2]
     {"gnutella/udpHostCaches", "test", "tests/core/tst_glue2.cpp", "schemaHasTheBatch", ""},
-    {"gnutella/encryption", "test", "tests/gnutella/tst_gnutella_loopback.cpp", "tlsUltrapeerLink", ""},
+    {"gnutella/encryption", "test", "tests/gnutella/tst_gnutella_loopback.cpp", "tlsRequireRefusesPlain", ""},   // [net-2]
     {"http/enabled", "test", "tests/ui/tst_settings_dialog.cpp", "wizardRecommended", ""},
-    {"http/maxConnectionsPerServer", "reader", "src/net/http/http_util.cpp", "http::MaxConnectionsPerServer", ""},
+    {"http/maxConnectionsPerServer", "test", "tests/http/tst_http.cpp", "perHostCap", ""},   // [net-2]
     {"http/timeoutSec", "reader", "src/net/http/http_util.cpp", "http::TimeoutSec", ""},
     {"http/userAgent", "test", "tests/http/tst_http.cpp", "probeBasic", ""},
     {"http/verifyTls", "reader", "src/net/http/http_util.cpp", "http::VerifyTls", ""},
     {"http/connectionsPerSource", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
     {"http/allowInsecureRedirect", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"http/stallTimeoutSec", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
-    {"http/maxRetries", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
+    {"http/stallTimeoutSec", "test", "tests/http/tst_http.cpp", "stallRetry", ""},   // [net-2]
+    {"http/maxRetries", "test", "tests/http/tst_http.cpp", "transient5xxGivesUp", ""},   // [net-2]
     {"http/retryBaseMs", "test", "tests/core/tst_settings.cpp", "schemaIsConsistent", ""},
     {"overlay/enabled", "test", "tests/ui/tst_settings_dialog.cpp", "wizardRecommended", ""},
     {"overlay/bootstrapPeers", "test", "tests/overlay/tst_overlay_misc.cpp", "bootstrapPeersFromSettings", ""},

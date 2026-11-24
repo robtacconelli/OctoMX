@@ -16,6 +16,7 @@
 #include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QNetworkReply>
 
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 #include "transforms.h"
 #include "web_search_plugin.h"
@@ -78,6 +79,7 @@ void WebSearchPlugin::init(const PluginContext &ctx)
     if (m_ctx.settings) {
         connect(m_ctx.settings, &Settings::changed, this, [this](const QString &key, const QVariant &) {
             if (key.startsWith(QLatin1String("connection/proxy")) || key == wkeys::UserAgent
+                || key == QLatin1String("connection/bindInterface") || key == QLatin1String("connection/ipv6")
                 || key == QLatin1String(keys::http::VerifyTls))
                 applyNetworkSettings();
         });
@@ -95,25 +97,8 @@ void WebSearchPlugin::applyNetworkSettings()
     const QVariant vt = s->value(keys::http::VerifyTls);
     m_env.verifyTls = vt.isValid() ? vt.toBool() : true;
 
-    const QString type = s->s(keys::connection::ProxyType).toLower();
-    QNetworkProxy proxy(QNetworkProxy::NoProxy);
-    if (type == QLatin1String("socks5") || type == QLatin1String("http")) {
-        proxy.setType(type == QLatin1String("http") ? QNetworkProxy::HttpProxy : QNetworkProxy::Socks5Proxy);
-        proxy.setHostName(s->s(keys::connection::ProxyHost));
-        proxy.setPort(quint16(s->i(keys::connection::ProxyPort)));
-        if (s->b(keys::connection::ProxyAuth)) {
-            proxy.setUser(s->s(keys::connection::ProxyUser));
-            proxy.setPassword(s->s(keys::connection::ProxyPassword));
-        }
-        QNetworkProxy::Capabilities caps = proxy.capabilities();
-        if (s->value(keys::connection::ProxyHostnames).toBool()) caps |= QNetworkProxy::HostNameLookupCapability;
-        else caps &= ~QNetworkProxy::HostNameLookupCapability;
-        proxy.setCapabilities(caps);
-        if (proxy.hostName().isEmpty()) proxy = QNetworkProxy(QNetworkProxy::NoProxy);
-    } else if (type == QLatin1String("socks4")) {
-        qCWarning(lcWeb) << "SOCKS4 proxies are not supported by Qt; web searches go direct";
-    }
-    m_nam->setProxy(proxy);
+    // [net-2] the proxy, or the chosen adapter (mx/net_policy.h); never direct when either is set
+    mx::netpolicy::applyTo(m_nam, s);
 }
 
 QString WebSearchPlugin::providersDir() const

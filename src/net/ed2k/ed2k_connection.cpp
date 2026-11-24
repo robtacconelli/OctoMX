@@ -3,6 +3,7 @@
 #include "ed2k_io.h"
 #include "ed2k_util.h"
 
+#include "mx/net_policy.h"
 #include "mx/plugin.h"
 
 #include <QtNetwork/QHostAddress>
@@ -49,7 +50,8 @@ void Ed2kConnection::init()
     connect(m_sock, &QTcpSocket::connected, this, [this] {
         m_state = Open;
         m_activity.start();
-        m_peerIpCached = ipFromHostOrder(m_sock->peerAddress().toIPv4Address());
+        // through a proxy the socket may not know the address (a server by host name): keep ours
+        if (const quint32 ip = ipFromHostOrder(m_sock->peerAddress().toIPv4Address())) m_peerIpCached = ip;
         flushCryptOutput();
         emit connected();
     });
@@ -79,6 +81,8 @@ void Ed2kConnection::connectTo(quint32 ip, quint16 port)
     m_peerIpCached = ip;
     m_peerPort = port;
     m_connectClock.start();
+    QString why;   // [net-2] through the proxy or bound to the chosen adapter, else not at all
+    if (!mx::netpolicy::prepareTcp(m_sock, m_policy, &why)) { finish(QStringLiteral("not connected: %1").arg(why)); return; }
     m_sock->connectToHost(QHostAddress(ipToHostOrder(ip)), port);
 }
 
@@ -87,6 +91,9 @@ void Ed2kConnection::connectToHost(const QString &host, quint16 port)
     m_state = Connecting;
     m_peerPort = port;
     m_connectClock.start();
+    QString why;
+    if (!mx::netpolicy::prepareTcp(m_sock, m_policy, &why)) { finish(QStringLiteral("not connected: %1").arg(why)); return; }
+    // a SOCKS5 proxy that resolves names gets the name (no lookup here)
     m_sock->connectToHost(host, port, QIODevice::ReadWrite, QAbstractSocket::IPv4Protocol);
 }
 

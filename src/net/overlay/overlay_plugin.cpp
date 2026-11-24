@@ -12,6 +12,7 @@
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkInterface>
 
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 namespace mx::ovl {
@@ -178,7 +179,20 @@ void OverlayPlugin::start()
     cfg.listenPort = m_testOpts.listenPort >= 0 ? static_cast<quint16>(m_testOpts.listenPort)
                      : randomPorts ? 0
                                    : static_cast<quint16>(setting(QString(keys::connection::TcpPort), 6699).toInt());
-    cfg.bindAddress = setting(QString(keys::connection::BindInterface), QString()).toString();
+    {   // [net-2] no OctoMX network through a proxy; with a chosen adapter every socket is bound to it
+        // (librats takes an address, not an interface name; IPv6 off: IPv4 only)
+        const mx::netpolicy::Verdict v = mx::netpolicy::verdict(Net::Overlay, m_ctx.settings);
+        bool ok = true;
+        QString why;
+        cfg.bindAddress = mx::netpolicy::bindAddressFor(m_ctx.settings, &ok, &why);
+        if (!v.allowed || !ok) {
+            m_status.state = ConnState::Error;
+            m_status.statusText = v.allowed ? why : v.reason;
+            Q_EMIT statusChanged(m_status);
+            Q_EMIT logMessage(QStringLiteral("OctoMX overlay: %1").arg(m_status.statusText));
+            return;
+        }
+    }
     cfg.dataDir = m_dataDir;
 #ifdef MX_TEST_HOOKS   // [release] fault-injection hooks only exist when CMake option MX_TEST_HOOKS is ON
     {   // [engine-3] hidden test hook: corrupt the bytes we serve in "start-end"
@@ -197,7 +211,7 @@ void OverlayPlugin::start()
     cfg.maxPeers = setting(QString(keys::overlay::MaxPeers), 50).toInt();
     cfg.peerTarget = qMin(cfg.maxPeers, 30);
     cfg.dht = m_testOpts.dht;
-    cfg.mdns = m_testOpts.mdns;
+    cfg.mdns = m_testOpts.mdns && setting(QString(keys::connection::BindInterface), QString()).toString().trimmed().isEmpty();
     cfg.pex = m_testOpts.pex;
     cfg.reconnect = m_testOpts.reconnect;
     {   // [ovl-2] instance tests on a shared host: no DHT rendezvous and no LAN discovery, so test

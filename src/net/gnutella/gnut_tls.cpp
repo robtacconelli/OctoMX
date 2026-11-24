@@ -209,6 +209,7 @@ void TlsSocket::attachInner(QTcpSocket *s)
 void TlsSocket::makeInner()
 {
     auto *s = new QTcpSocket(this);
+    if (m_prepare) m_prepare(s);   // [net-2]
     attachInner(s);
 }
 

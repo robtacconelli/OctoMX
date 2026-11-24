@@ -22,6 +22,7 @@
 #include <QtCore/QTimer>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QTcpSocket>
+#include <functional>
 #include <memory>
 
 struct ssl_ctx_st;
@@ -88,6 +89,8 @@ public:
     QString cipherName() const { return m_cipher; }      // "TLSv1.3 TLS_AES_256_GCM_SHA384"
     QString tlsError() const { return m_tlsError; }
     static void setHandshakeTimeoutMs(int ms);           // tests
+    // [net-2] applied to every TCP socket this one opens (proxy / chosen adapter, mx/net_policy.h)
+    void setPrepare(std::function<void(QAbstractSocket *)> f) { m_prepare = std::move(f); }
 
     qint64 bytesAvailable() const override;
     qint64 bytesToWrite() const override;
@@ -118,6 +121,7 @@ private:
     void becomeConnected();
     void finishUnconnected(bool emitDisconnected);
     void freeSsl();
+    std::function<void(QAbstractSocket *)> m_prepare;
 
     std::shared_ptr<TlsEngine> m_engine;
     Policy m_policy;

@@ -20,6 +20,8 @@
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QUdpSocket>
 
+#include "mx/net_policy.h"
+
 namespace mx::ed2k {
 
 static constexpr qint64 kSxReaskMs = SOURCEEXCHANGE_REASK_MS;
@@ -102,6 +104,12 @@ quint32 Ed2kCore::emuleVersionTag() const
     return (0x4Du << 24) | (maj << 17) | (min << 10) | (upd << 7);
 }
 
+qint64 Ed2kCore::peerConnectTimeoutMs() const
+{
+    // [net-2] "Connection attempts timeout after" (Internet Connection, Outgoing) for eD2k peers too
+    return qint64(qBound(5, m_cfg.i(QStringLiteral("connection/connectTimeoutSec"), 25), 300)) * 1000;
+}
+
 int Ed2kCore::uploadSlots() const
 {
     // ed2k/uploadSlots (schema default 0 = use the global transfers/maxUploads) [glue-2]
@@ -113,6 +121,7 @@ int Ed2kCore::uploadSlots() const
 QNetworkAccessManager *Ed2kCore::nam()
 {
     if (!m_nam) m_nam = new QNetworkAccessManager(this);
+    mx::netpolicy::applyTo(m_nam, m_cfg.s);   // [net-2] server.met / nodes.dat: proxy or adapter
     return m_nam;
 }
 
@@ -125,9 +134,19 @@ bool Ed2kCore::bindListener()
     }
     // schema key ed2k/tcpPort (mx/settings_keys.h) [glue-2: the old ed2k/port alias was dropped]
     const quint16 want = quint16(qBound(0, m_cfg.i(QStringLiteral("ed2k/tcpPort"), 4662), 65535));
+    // [net-2] on the chosen adapter only; not at all while a proxy is set
+    bool may = true;
+    QString why;
+    const QHostAddress on = mx::netpolicy::listenAddress(m_cfg.s, &may, &why);
+    if (!may) {
+        log(QStringLiteral("not listening for TCP: %1").arg(why));
+        m_tcpError = why;
+        m_tcpPort = want ? want : 4662;
+        return false;
+    }
     for (int k = 0; k < 10; ++k) {
         const quint16 p = want ? quint16(want + k) : 0;
-        if (m_listener->listen(QHostAddress::AnyIPv4, p)) {
+        if (m_listener->listen(on, p)) {
             m_tcpPort = m_listener->serverPort();
             m_tcpError = k > 0 ? QStringLiteral("port %1 busy, using %2").arg(want).arg(m_tcpPort) : QString();
             if (k > 0) log(QStringLiteral("TCP port %1 busy, listening on %2").arg(want).arg(m_tcpPort));
@@ -181,10 +200,15 @@ void Ed2kCore::startBase()
         const quint16 up = quint16(qBound(0, m_cfg.i(QStringLiteral("ed2k/udpPort"), kadUdp), 65535));
         m_wantUdp = up;
         m_udpError.clear();
-        if (!m_udp->bind(QHostAddress::AnyIPv4, up)) {
-            m_udpError = QStringLiteral("port %1: %2").arg(up).arg(m_udp->errorString());
-            if (!m_udp->bind(QHostAddress::AnyIPv4, 0))
-                log(QStringLiteral("cannot bind UDP: %1").arg(m_udp->errorString()));
+        // [net-2] on the chosen adapter; no UDP at all while a proxy is set (eD2k UDP and Kad off)
+        QString why;
+        if (!mx::netpolicy::udpAllowed(m_cfg.s, &why)) {
+            m_udpError = why;
+            log(QStringLiteral("no UDP: %1").arg(why));
+        } else if (!mx::netpolicy::bindUdp(m_udp, m_cfg.s, up, &why)) {
+            m_udpError = QStringLiteral("port %1: %2").arg(up).arg(why);
+            if (!mx::netpolicy::bindUdp(m_udp, m_cfg.s, 0, &why))
+                log(QStringLiteral("cannot bind UDP: %1").arg(why));
         }
         m_udpPort = m_udp->localPort();
     }
@@ -370,6 +394,7 @@ PeerConnection *Ed2kCore::connectPeer(const PeerDescriptor &d, bool allowObf)
     const int maxConn = qBound(10, m_cfg.i(QStringLiteral("ed2k/maxConnections"), 100), 2000);
     if (m_peers.size() >= maxConn) return nullptr;
     auto *conn = new Ed2kConnection();
+    conn->setPolicySettings(m_cfg.s);   // [net-2] proxy / adapter
     auto *pc = new PeerConnection(this, conn, true, this);
     pc->setProperty("mxAllowObf", allowObf);
     pc->setProperty("mxIp", d.ip);
@@ -426,7 +451,9 @@ void Ed2kCore::onNewConnection()
         const int maxConn = qBound(10, m_cfg.i(QStringLiteral("ed2k/maxConnections"), 100), 2000);
         if (!m_running || m_peers.size() >= maxConn + 20) { s->abort(); s->deleteLater(); continue; }
         auto *conn = new Ed2kConnection(s);
-        conn->useIncomingDetection(m_userHash, m_cryptRequired);
+        // [net-2] obfuscation switched off means plain only, both ways (as eMule): an obfuscated
+        // handshake is then not understood instead of being answered
+        if (m_cryptSupported) conn->useIncomingDetection(m_userHash, m_cryptRequired);
         auto *pc = new PeerConnection(this, conn, false, this);
         adoptPeer(pc);
         pc->startIncoming();

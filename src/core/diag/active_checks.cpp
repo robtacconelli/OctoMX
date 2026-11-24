@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // [diag-1] outbound checks (see active_checks.h)
 #include "core/diag/active_checks.h"
+#include "mx/net_policy.h"
 #include "mx/types.h"
 
 #include <QtCore/QElapsedTimer>
@@ -17,6 +18,9 @@
 #include <memory>
 
 namespace mx::diag {
+
+static const Settings *g_policy = nullptr;
+void setPolicySettings(const Settings *s) { g_policy = s; }
 
 namespace {
 // Calls `done` once; later calls are ignored.
@@ -76,6 +80,12 @@ void dnsLookup(QObject *ctx, const QString &host, int timeoutMs, CheckDone done)
         QTimer::singleShot(0, ctx, [once, r] { (*once)(r); });
         return;
     }
+    if (netpolicy::proxyResolvesNames(g_policy)) {   // [net-2] the proxy looks names up, this computer does not
+        CheckResult r;
+        r.error = QStringLiteral("not looked up here: the proxy resolves host names");
+        QTimer::singleShot(0, ctx, [once, r] { (*once)(r); });
+        return;
+    }
     QHostInfo::lookupHost(host, ctx, [once, t](const QHostInfo &hi) {
         CheckResult r;
         r.ms = t->elapsed();
@@ -105,6 +115,13 @@ static void udpExchange(QObject *ctx, const QString &host, quint16 port, int tim
     auto once = std::make_shared<Once>(Once{std::move(done)});
     auto t = std::make_shared<QElapsedTimer>();
     t->start();
+    QString noUdp;
+    if (!netpolicy::udpAllowed(g_policy, &noUdp)) {   // [net-2] never direct UDP behind a proxy
+        CheckResult r;
+        r.error = QStringLiteral("not tested: %1").arg(noUdp);
+        QTimer::singleShot(0, ctx, [once, r] { (*once)(r); });
+        return;
+    }
     QPointer<QUdpSocket> sock = new QUdpSocket(ctx);
     auto finish = [once, sock](const CheckResult &r) {
         (*once)(r);
@@ -126,7 +143,13 @@ static void udpExchange(QObject *ctx, const QString &host, quint16 port, int tim
             return;
         }
         const QHostAddress addr(dr.detail.section(QStringLiteral(", "), 0, 0));
-        if (!sock->bind(addr.protocol() == QAbstractSocket::IPv6Protocol ? QHostAddress::AnyIPv6 : QHostAddress::AnyIPv4, 0)) {
+        const netpolicy::Policy pol = netpolicy::fromSettings(g_policy);
+        QHostAddress from = addr.protocol() == QAbstractSocket::IPv6Protocol ? QHostAddress(QHostAddress::AnyIPv6) : QHostAddress(QHostAddress::AnyIPv4);
+        if (pol.bindWanted()) {   // [net-2] from the chosen adapter only
+            const netpolicy::Adapter a = netpolicy::resolveAdapter(pol.bind);
+            from = addr.protocol() == QAbstractSocket::IPv6Protocol ? a.v6() : a.v4();
+        }
+        if (from.isNull() || !sock->bind(from, 0)) {
             CheckResult r;
             r.error = QStringLiteral("cannot open a UDP socket: %1").arg(sock->errorString());
             finish(r);

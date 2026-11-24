@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Tests of the HTTP plugin (mxnet_http) against an in-process HTTP server (test_server.cpp).
+// [net-2] settings proven here (tests/ui/settings_registry.h): "http/maxRetries" (transient5xxGivesUp:
+// 2 retries, then the source fails), "http/stallTimeoutSec" (stallRetry: 2 s instead of 30 s, the
+// stalled request is restarted where it stopped).
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QMutex>

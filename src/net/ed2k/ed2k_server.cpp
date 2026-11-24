@@ -48,6 +48,7 @@ void ServerConnection::start()
 {
     m_conn = new Ed2kConnection(this);
     m_conn->setMeter(m_core->ctx().limiter);   // [glue-3] server traffic in the bandwidth graph
+    m_conn->setPolicySettings(m_core->ctx().settings);   // [net-2] proxy / adapter
     m_conn->setIdleTimeoutMs(0);
     m_conn->setConnectTimeoutMs(20000);
     m_conn->setMaxPacket(4 * 1024 * 1024);

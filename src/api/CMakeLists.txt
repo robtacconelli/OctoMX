@@ -37,6 +37,12 @@ add_library(mxapi STATIC
     # [mac-1] the program folder as the user sees it (the app bundle on macOS), portable.txt
     mx/app_paths.h
     app_paths.cpp
+    # [net-2] the connection policy every network follows (proxy, chosen adapter, IPv6) and the
+    # relay that binds web requests to the chosen adapter
+    mx/net_policy.h
+    net_policy.cpp
+    bind_relay.h
+    bind_relay.cpp
 )
 target_include_directories(mxapi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mxapi PUBLIC Qt6::Core Qt6::Network)

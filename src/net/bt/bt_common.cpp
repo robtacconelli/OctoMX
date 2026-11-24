@@ -9,11 +9,13 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QRandomGenerator>
 #include <QtCore/QSaveFile>
+#include <QtNetwork/QHostAddress>
 
 #include <libtorrent/alert.hpp>
 #include <libtorrent/fingerprint.hpp>
 #include <libtorrent/version.hpp>
 
+#include "mx/net_policy.h"
 #include "mx/services.h"
 #include "mx/settings_keys.h"
 
@@ -44,6 +46,13 @@ Config Config::fromSettings(const Settings *s)
     c.randomizePorts = get(s, k::connection::RandomizePorts, c.randomizePorts).toBool();
     c.bindInterface = get(s, k::connection::BindInterface, QString()).toString().trimmed();
     c.ipv6 = get(s, k::connection::Ipv6, c.ipv6).toBool();
+    if (!c.bindInterface.isEmpty()) {
+        // [net-2] an interface name, a friendly name or an address: bind to its addresses (IPv4,
+        // and IPv6 only when connection/ipv6 is on)
+        const mx::netpolicy::Adapter a = mx::netpolicy::resolveAdapter(c.bindInterface);
+        for (const QHostAddress &h : a.addresses)
+            if (h.protocol() == QAbstractSocket::IPv4Protocol || c.ipv6) c.bindAddresses << h.toString();
+    }
     c.dht = get(s, k::bt::Dht, c.dht).toBool();
     c.pex = get(s, k::bt::Pex, c.pex).toBool();
     c.lsd = get(s, k::bt::Lsd, c.lsd).toBool();
@@ -72,14 +81,19 @@ Config Config::fromSettings(const Settings *s)
     c.superSeeding = get(s, k::bt::SuperSeeding, c.superSeeding).toBool();
     c.preallocate = get(s, k::bt::Preallocate, c.preallocate).toBool();
     c.webSeeds = get(s, k::bt::WebSeeds, c.webSeeds).toBool();
-    c.proxyType = get(s, k::connection::ProxyType, c.proxyType).toString().toLower();
-    c.proxyHost = get(s, k::connection::ProxyHost, QString()).toString().trimmed();
-    c.proxyPort = get(s, k::connection::ProxyPort, c.proxyPort).toInt();
-    c.proxyAuth = get(s, k::connection::ProxyAuth, c.proxyAuth).toBool();
-    c.proxyUser = get(s, k::connection::ProxyUser, QString()).toString();
-    c.proxyPassword = get(s, k::connection::ProxyPassword, QString()).toString();
-    c.proxyPeers = get(s, k::connection::ProxyPeers, c.proxyPeers).toBool();
-    c.proxyHostnames = get(s, k::connection::ProxyHostnames, c.proxyHostnames).toBool();
+    {   // [net-2] the program's one proxy policy (SOCKS4 is used as SOCKS5; every peer goes through it)
+        const mx::netpolicy::Proxy px = mx::netpolicy::fromSettings(s).proxy;
+        c.proxyType = px.kind == mx::netpolicy::Proxy::Socks5 ? QStringLiteral("socks5")
+                      : px.kind == mx::netpolicy::Proxy::Http ? QStringLiteral("http")
+                                                              : QStringLiteral("none");
+        c.proxyHost = px.host;
+        c.proxyPort = px.port;
+        c.proxyAuth = !px.user.isEmpty();
+        c.proxyUser = px.user;
+        c.proxyPassword = px.password;
+        c.proxyPeers = true;
+        c.proxyHostnames = px.remoteDns;
+    }
     c.limitLan = get(s, k::bandwidth::LimitLan, false).toBool();
     // keys not in the schema (yet): read with fallbacks
     c.allowMultipleConnectionsPerIp = get(s, "bt/allowMultipleConnectionsPerIp", false).toBool();
@@ -211,6 +225,12 @@ lt::settings_pack makeSettingsPack(const Config &c, bool online, int port, const
     p.set_int(sp::alert_queue_size, 20000);
 
     // listening
+    // [net-2] a chosen adapter that is missing: offline (no listen socket, no DHT, no peers)
+    if (!c.bindInterface.isEmpty() && c.bindAddresses.isEmpty())
+        online = false;
+    // [net-2] a proxy chosen without an address: offline too (never direct)
+    if (c.proxyType != QLatin1String("none") && (c.proxyHost.isEmpty() || c.proxyPort <= 0))
+        online = false;
     QString ifaces;
     if (online) {
         QStringList parts;
@@ -219,34 +239,42 @@ lt::settings_pack makeSettingsPack(const Config &c, bool online, int port, const
             if (c.ipv6)
                 parts << QStringLiteral("[::]:%1").arg(port);
         } else {
-            const QString iface = c.bindInterface.contains(QLatin1Char(':')) && !c.bindInterface.startsWith(QLatin1Char('['))
-                                      ? QStringLiteral("[%1]").arg(c.bindInterface)
-                                      : c.bindInterface;
-            parts << QStringLiteral("%1:%2").arg(iface).arg(port);
+            for (const QString &a : c.bindAddresses)
+                parts << QStringLiteral("%1:%2").arg(a.contains(QLatin1Char(':')) ? QStringLiteral("[%1]").arg(a) : a).arg(port);
         }
         ifaces = parts.join(QLatin1Char(','));
     }
     p.set_str(sp::listen_interfaces, ifaces.toStdString());
     p.set_int(sp::max_retry_port_bind, 10);
-    if (!c.bindInterface.isEmpty())
-        p.set_str(sp::outgoing_interfaces, c.bindInterface.toStdString());
+    // outgoing connections from the adapter's addresses (an address no longer there fails: no fallback)
+    p.set_str(sp::outgoing_interfaces, c.bindInterface.isEmpty() ? std::string()
+                                       : (c.bindAddresses.isEmpty() ? std::string("0.0.0.1") : c.bindAddresses.join(QLatin1Char(',')).toStdString()));
 
     // discovery
-    p.set_bool(sp::enable_dht, online && c.dht);
-    p.set_bool(sp::enable_lsd, online && c.lsd);
-    p.set_bool(sp::enable_upnp, online && c.upnp && !c.coreMapsPorts);
-    p.set_bool(sp::enable_natpmp, online && c.natpmp && !c.coreMapsPorts);
+    // [net-2] an HTTP proxy carries no UDP: no DHT then (libtorrent would only fail to send)
+    p.set_bool(sp::enable_dht, online && c.dht && c.proxyType != QLatin1String("http"));
+    p.set_bool(sp::enable_lsd, online && c.lsd && c.proxyType == QLatin1String("none"));   // [net-2] no LAN multicast through a proxy
+    // [net-2] no port mapping while a proxy is set (nobody reaches us through it)
+    const bool mapPorts = online && !c.coreMapsPorts && c.proxyType == QLatin1String("none");
+    p.set_bool(sp::enable_upnp, mapPorts && c.upnp);
+    p.set_bool(sp::enable_natpmp, mapPorts && c.natpmp);
     p.set_int(sp::announce_port, c.announcePort);   // [diag-1] trackers / DHT get the mapped external port
     QStringList nodes;
+    const bool proxied = c.proxyType != QLatin1String("none");
     for (const QString &n : c.bootstrapNodes + userNodes) {
         QString h;
         int pt = 0;
-        if (parseHostPort(n, &h, &pt, 6881))
-            nodes << QStringLiteral("%1:%2").arg(h).arg(pt);
+        if (!parseHostPort(n, &h, &pt, 6881))
+            continue;
+        // [net-2] libtorrent looks DHT router names up itself, with the system's DNS: behind a
+        // proxy only routers given by address (the DHT finds the rest through its saved nodes)
+        if (proxied && QHostAddress(h).isNull())
+            continue;
+        nodes << QStringLiteral("%1:%2").arg(h).arg(pt);
     }
     p.set_str(sp::dht_bootstrap_nodes, nodes.join(QLatin1Char(',')).toStdString());
-    p.set_bool(sp::enable_incoming_utp, c.utp);
-    p.set_bool(sp::enable_outgoing_utp, c.utp);
+    p.set_bool(sp::enable_incoming_utp, c.utp && c.proxyType != QLatin1String("http"));
+    p.set_bool(sp::enable_outgoing_utp, c.utp && c.proxyType != QLatin1String("http"));
 
     // encryption
     int pol = sp::pe_enabled;
@@ -256,7 +284,9 @@ lt::settings_pack makeSettingsPack(const Config &c, bool online, int port, const
         pol = sp::pe_disabled;
     p.set_int(sp::out_enc_policy, pol);
     p.set_int(sp::in_enc_policy, pol);
-    p.set_int(sp::allowed_enc_level, sp::pe_both);
+    // [net-2] "Require encryption" means the whole stream: RC4 only, not a plain stream after an
+    // encrypted handshake (libtorrent's pe_both would let a peer pick that)
+    p.set_int(sp::allowed_enc_level, c.encryption == QLatin1String("forced") ? sp::pe_rc4 : sp::pe_both);
     p.set_bool(sp::prefer_rc4, c.encryption == QLatin1String("forced"));
 
     // limits

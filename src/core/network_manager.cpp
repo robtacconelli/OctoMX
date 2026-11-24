@@ -4,6 +4,7 @@
 #include "core/pinger.h"
 #include "core/server_list.h"
 
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 #include <QtCore/QDateTime>
@@ -50,6 +51,14 @@ NetworkManager::NetworkManager(Settings *settings, const QList<NetworkPlugin *> 
             while (m_incoming.size() > 100000) m_incoming.pop_front();
         });
     }
+    // [net-2] the proxy / adapter policy: a network that may not run under it is not started
+    // (or is stopped), and starts again when it may; a change of the policy restarts the networks
+    m_policy = new netpolicy::Monitor(m_settings, this);
+    m_policyPrint = m_policy->policy().fingerprint() + m_policy->adapter().fingerprint();
+    m_policyTimer.setSingleShot(true);
+    m_policyTimer.setInterval(500);   // a few settings in a row (the proxy page) restart once
+    connect(&m_policyTimer, &QTimer::timeout, this, &NetworkManager::applyPolicy);
+    connect(m_policy, &netpolicy::Monitor::changed, this, [this] { m_policyTimer.start(); });
     m_summaryTimer.setInterval(1000);
     connect(&m_summaryTimer, &QTimer::timeout, this, &NetworkManager::checkSummary);
     m_summaryTimer.start();
@@ -213,6 +222,17 @@ void NetworkManager::setSharedFiles(const QList<SharedFile> &files)
 void NetworkManager::startPlugin(NetworkPlugin *p)
 {
     if (!m_inited || m_running.value(p) || !isEnabled(p->net())) return;
+    const netpolicy::Verdict v = m_policy->verdict(p->net());
+    if (!v.allowed) {
+        if (m_blocked.value(p) != v.reason) {
+            m_blocked.insert(p, v.reason);
+            qCInfo(lcNet).noquote() << netName(p->net()) << "not started:" << v.reason;
+            emit logMessage(p->net(), v.reason);
+        }
+        emit networkChanged(status(p->net()));
+        return;
+    }
+    m_blocked.remove(p);
     qCInfo(lcNet) << "starting" << netName(p->net());
     m_running[p] = true;
     p->start();
@@ -226,6 +246,46 @@ void NetworkManager::stopPlugin(NetworkPlugin *p)
     m_running[p] = false;
     p->stop();
     emit networkChanged(status(p->net()));
+}
+
+QString NetworkManager::blockedReason(Net n) const
+{
+    NetworkPlugin *p = plugin(n);
+    return p ? m_blocked.value(p) : QString();
+}
+
+void NetworkManager::applyPolicy()
+{
+    m_policy->recheck();
+    const QString print = m_policy->policy().fingerprint() + m_policy->adapter().fingerprint();
+    const bool restart = print != m_policyPrint;
+    m_policyPrint = print;
+    for (NetworkPlugin *p : std::as_const(m_plugins)) {
+        const netpolicy::Verdict v = m_policy->verdict(p->net());
+        if (!v.allowed) {
+            const bool was = m_running.value(p);
+            if (was) stopPlugin(p);
+            const bool news = m_blocked.value(p) != v.reason;
+            if (was || m_online || m_blocked.contains(p)) m_blocked.insert(p, v.reason);
+            if (news && (was || m_online)) {
+                qCInfo(lcNet).noquote() << netName(p->net()) << (was ? "stopped:" : "not started:") << v.reason;
+                emit logMessage(p->net(), v.reason);
+            }
+            emit networkChanged(status(p->net()));
+            continue;
+        }
+        const bool wasBlocked = m_blocked.remove(p) > 0;
+        if (m_running.value(p) && restart) {
+            qCInfo(lcNet) << "restarting" << netName(p->net()) << "for the new connection settings";
+            stopPlugin(p);
+            startPlugin(p);
+        } else if (!m_running.value(p) && wasBlocked && m_online) {
+            startPlugin(p);
+        } else if (wasBlocked) {
+            emit networkChanged(status(p->net()));
+        }
+    }
+    emitOverallIfChanged();
 }
 
 void NetworkManager::onPluginStatus(NetworkPlugin *p)
@@ -265,6 +325,9 @@ NetworkStatus NetworkManager::status(Net n) const
     if (!isEnabled(n)) {
         st.state = ConnState::Disabled;
         st.statusText = QStringLiteral("Disabled");
+    } else if (!m_running.value(p) && m_blocked.contains(p)) {
+        st.state = ConnState::Error;   // [net-2] the proxy / adapter policy keeps it off
+        st.statusText = m_blocked.value(p);
     } else if (!m_running.value(p) && st.state != ConnState::Error) {
         st.state = ConnState::Disconnected;
         if (st.statusText.isEmpty() || st.statusText.startsWith(QLatin1String("Connect")))
@@ -310,8 +373,12 @@ QString NetworkManager::overallDetail() const
         return QStringLiteral("You can search and download now.");
     case ConnState::Connecting:
         return QStringLiteral("Connecting: searching and downloading work in a moment...");
-    case ConnState::Error:
+    case ConnState::Error: {
+        // [net-2] the adapter is missing / the proxy is not reached through it: say so
+        const netpolicy::Verdict v = m_policy->verdict(Net::Unknown);
+        if (!v.allowed) return v.reason + QStringLiteral(". Transfers continue when it is back.");
         return QStringLiteral("OctoMX could not connect to any network. It will keep trying.");
+    }
     case ConnState::Disconnected:
         return QStringLiteral("Click Connect to join the network.");
     case ConnState::Disabled:
@@ -332,6 +399,7 @@ void NetworkManager::disconnectAll()
 {
     for (NetworkPlugin *p : std::as_const(m_plugins)) stopPlugin(p);
     m_online = false;
+    m_blocked.clear();   // [net-2] offline by choice now
     emitOverallIfChanged();
 }
 
@@ -360,7 +428,10 @@ void NetworkManager::connectNetwork(Net n)
 
 void NetworkManager::disconnectNetwork(Net n)
 {
-    if (NetworkPlugin *p = plugin(n)) stopPlugin(p);
+    if (NetworkPlugin *p = plugin(n)) {
+        stopPlugin(p);
+        m_blocked.remove(p);
+    }
     emitOverallIfChanged();
 }
 

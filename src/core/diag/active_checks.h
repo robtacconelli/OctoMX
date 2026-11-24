@@ -13,7 +13,13 @@
 
 class QNetworkAccessManager;
 
+namespace mx { class Settings; }
+
 namespace mx::diag {
+
+// [net-2] the settings whose proxy / adapter the checks follow (mx/net_policy.h): no name lookups
+// here when the proxy resolves names, no UDP while a proxy is set, UDP from the chosen adapter
+void setPolicySettings(const Settings *s);
 
 struct CheckResult {
     bool    ok = false;

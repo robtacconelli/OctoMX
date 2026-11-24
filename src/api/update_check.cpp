@@ -14,6 +14,7 @@
 #include <QtNetwork/QNetworkRequest>
 
 #include "mx/services.h"
+#include "mx/net_policy.h"
 #include "mx/settings_keys.h"
 
 namespace mx {
@@ -186,29 +187,8 @@ QString releasePageUrl(const ReleaseInfo &r)
 
 void applyUpdateProxy(QNetworkAccessManager *nam, Settings *settings)
 {
-    // the same rules as the web search plugin: SOCKS 5 / HTTP proxy from Settings > Connection
-    QNetworkProxy proxy(QNetworkProxy::NoProxy);
-    if (settings) {
-        const QString type = settings->s(keys::connection::ProxyType).toLower();
-        if (type == QLatin1String("socks5") || type == QLatin1String("http")) {
-            proxy.setType(type == QLatin1String("http") ? QNetworkProxy::HttpProxy : QNetworkProxy::Socks5Proxy);
-            proxy.setHostName(settings->s(keys::connection::ProxyHost));
-            proxy.setPort(quint16(settings->i(keys::connection::ProxyPort)));
-            if (settings->b(keys::connection::ProxyAuth)) {
-                proxy.setUser(settings->s(keys::connection::ProxyUser));
-                proxy.setPassword(settings->s(keys::connection::ProxyPassword));
-            }
-            QNetworkProxy::Capabilities caps = proxy.capabilities();
-            if (settings->value(keys::connection::ProxyHostnames).toBool())
-                caps |= QNetworkProxy::HostNameLookupCapability;
-            else
-                caps &= ~QNetworkProxy::HostNameLookupCapability;
-            proxy.setCapabilities(caps);
-            if (proxy.hostName().isEmpty())
-                proxy = QNetworkProxy(QNetworkProxy::NoProxy);
-        }
-    }
-    nam->setProxy(proxy);
+    // [net-2] the same policy as every network: the proxy, or the chosen adapter (mx/net_policy.h)
+    netpolicy::applyTo(nam, settings);
 }
 
 // ============================================================================== UpdateChecker

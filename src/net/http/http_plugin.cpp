@@ -35,7 +35,9 @@ void HttpPlugin::init(const PluginContext &ctx)
     m_ctx = ctx;
     if (m_ctx.settings) {
         connect(m_ctx.settings, &Settings::changed, this, [this](const QString &key, const QVariant &) {
-            if (key.startsWith(QLatin1String("connection/proxy")) && m_nam) configureManager(m_nam, m_ctx.settings);
+            if ((key.startsWith(QLatin1String("connection/proxy")) || key == QLatin1String("connection/bindInterface")
+                 || key == QLatin1String("connection/ipv6")) && m_nam)
+                configureManager(m_nam, m_ctx.settings);   // [net-2] at once
         });
     }
 }

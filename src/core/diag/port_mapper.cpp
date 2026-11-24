@@ -18,6 +18,8 @@
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QUdpSocket>
 
+#include "mx/net_policy.h"
+
 #include <thread>
 
 namespace mx::diag {
@@ -105,7 +107,17 @@ QString PortMapper::internalClient() const
     return m_router.localAddress;
 }
 
-void PortMapper::setEnabled(bool upnp, bool natpmp)
+void PortMapper::setAdapter(const QString &wanted)
+{
+    if (wanted == m_adapter) return;
+    m_adapter = wanted;
+    // the router's control requests: bound to the adapter too (the binding relay), else direct
+    // (the router is on the LAN: never through a proxy)
+    m_nam->setProxy(wanted.isEmpty() ? QNetworkProxy(QNetworkProxy::NoProxy) : netpolicy::adapterRelayProxy(wanted, true));
+    m_searchKey.clear();
+}
+
+void PortMapper::setEnabled(bool upnp, bool natpmp, const QString &offReason)
 {
     const bool changed = upnp != m_upnp || natpmp != m_natpmp;
     m_upnp = upnp;
@@ -117,7 +129,7 @@ void PortMapper::setEnabled(bool upnp, bool natpmp)
             Entry &e = m_entries[k];
             if (e.m.result == PortMapping::Mapped && m_router.upnpFound)
                 deleteUpnp(e.m.proto, e.m.externalPort, [](bool, const QString &) {});
-            setResult(e, PortMapping::Off, QStringLiteral("port mapping is switched off (Settings, Internet Connection)"));
+            setResult(e, PortMapping::Off, offReason.isEmpty() ? QStringLiteral("port mapping is switched off (Settings, Internet Connection)") : offReason);
         }
         m_pump.stop();
         // a discovery still in flight must not report anything any more
@@ -269,6 +281,18 @@ QList<AdapterAddr> searchAdapters()
     return want;
 }
 
+// [net-2] only the chosen adapter's addresses (none while it is missing)
+QList<AdapterAddr> onAdapter(const QList<AdapterAddr> &l, const QString &wanted)
+{
+    if (wanted.isEmpty()) return l;
+    const netpolicy::Adapter a = netpolicy::resolveAdapter(wanted);
+    QList<AdapterAddr> out;
+    for (const AdapterAddr &x : l)
+        if (a.addresses.contains(x.addr)) out << x;
+    if (out.isEmpty() && !a.v4().isNull()) out << AdapterAddr{a.name, a.v4(), 0};
+    return out;
+}
+
 QString adapterKey(const QList<AdapterAddr> &l)
 {
     QStringList parts;
@@ -284,7 +308,7 @@ void PortMapper::ensureSearchSockets()
     if (!m_testAdapters.isEmpty()) {
         for (const auto &t : m_testAdapters) want << AdapterAddr{t.first, t.second, 0};
     } else {
-        want = searchAdapters();
+        want = onAdapter(searchAdapters(), m_adapter);
     }
     const QString key = adapterKey(want);
     if (key == m_searchKey && !m_search.isEmpty()) return;
@@ -514,7 +538,7 @@ void PortMapper::onNotifyReady()
 void PortMapper::checkNetworkChange()
 {
     if ((!m_upnp && !m_natpmp) || m_shuttingDown || !m_testAdapters.isEmpty()) return;
-    const QString key = adapterKey(searchAdapters());
+    const QString key = adapterKey(onAdapter(searchAdapters(), m_adapter));
     if (m_searchKey.isEmpty() || key == m_searchKey) return;
     qCInfo(lcDiag).noquote() << QStringLiteral("UPnP: the network adapters changed (%1), searching again").arg(key);
     ensureSearchSockets();
@@ -733,8 +757,21 @@ void PortMapper::natPmpStart()
         m_pmp = new QUdpSocket(this);
         connect(m_pmp, &QUdpSocket::readyRead, this, &PortMapper::onPmpReady);
     }
-    if (m_pmp->state() != QAbstractSocket::BoundState) m_pmp->bind(QHostAddress::AnyIPv4, 0);
     const QHostAddress gw(m_router.gateway);
+    if (!m_adapter.isEmpty() && !m_testPmpPort) {
+        // [net-2] from the chosen adapter only, and only to a gateway reached through it
+        const QHostAddress mine = netpolicy::resolveAdapter(m_adapter).v4();
+        if (mine.isNull() || netpolicy::localAddressTowards(gw) != mine) {
+            m_pmpDiscovering = false;
+            m_pmpTimer.stop();
+            m_router.natPmpError = QStringLiteral("the gateway is not reached through the chosen adapter");
+            QTimer::singleShot(0, this, [this] { discoveryFinished(); });
+            return;
+        }
+        if (m_pmp->state() == QAbstractSocket::BoundState && m_pmp->localAddress() != mine) m_pmp->close();
+        if (m_pmp->state() != QAbstractSocket::BoundState) m_pmp->bind(mine, 0);
+    }
+    if (m_pmp->state() != QAbstractSocket::BoundState) m_pmp->bind(QHostAddress::AnyIPv4, 0);
     const quint16 port = m_testPmpPort ? m_testPmpPort : kPmpPort;
     const char req[2] = {0, 0};
     m_pmp->writeDatagram(req, 2, gw, port);
@@ -808,7 +845,7 @@ void PortMapper::discoveryFinished()
         // our own search found nothing: on Windows ask the system's UPnP service (it uses the
         // SSDP Discovery service, which the firewall allows and which handles the adapters itself)
 #ifdef Q_OS_WIN
-        const bool win = true;
+        const bool win = m_adapter.isEmpty();   // [net-2] the Windows service cannot keep to one adapter
 #else
         const bool win = m_testWin;
 #endif

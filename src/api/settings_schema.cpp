@@ -217,19 +217,24 @@ QList<SettingDef> buildSchema()
         "Firewall", L({"Detect automatically", "I can accept incoming connections",
                        "I am firewalled (cannot accept incoming connections)"}));
     B.b(connection::Upnp, true, "Map ports with UPnP", true);
-    B.b(connection::NatPmp, true, "Map ports with NAT-PMP / PCP", true);
-    B.b(connection::Ipv6, true, "Use IPv6 when available", true);
-    B.s(connection::BindInterface, QString(), "Network interface (empty = all)", true);
+    B.b(connection::NatPmp, true, "Map ports with NAT-PMP", true);   // [net-2] no PCP: the label said so
+    // [net-2] proxy, adapter and IPv6 apply at once: the networks restart on them (NetworkManager)
+    B.b(connection::Ipv6, true, "Use IPv6 when available (BitTorrent, OctoMX network, Rats, HTTP)");
+    B.s(connection::BindInterface, QString(), "Network adapter for every network (empty = all)");
     B.i(connection::MaxConnections, 500, 20, 5000, "Maximum connections (all networks)"); B.hide();   // [ui-h] nothing reads it: off the UI
-    B.e(connection::ProxyType, QStringLiteral("none"), L({"none", "socks4", "socks5", "http"}), "Proxy type",
-        L({"No proxy", "SOCKS 4", "SOCKS 5", "HTTP"}), true);
-    B.s(connection::ProxyHost, QString(), "Proxy host", true);
-    B.port(connection::ProxyPort, 1080, "Proxy port");
-    B.b(connection::ProxyAuth, false, "Proxy requires authentication", true);
-    B.s(connection::ProxyUser, QString(), "Proxy user name", true);
-    B.s(connection::ProxyPassword, QString(), "Proxy password", true);
-    B.b(connection::ProxyPeers, true, "Use the proxy for peer connections", true);
-    B.b(connection::ProxyHostnames, true, "Resolve host names through the proxy", true);
+    // [net-2] "socks4" stays a valid stored value (old profiles keep their proxy) but is used as SOCKS5:
+    // Qt has no SOCKS4 client; the page offers SOCKS5 and HTTP only
+    B.e(connection::ProxyType, QStringLiteral("none"), L({"none", "socks4", "socks5", "http"}), "Proxy type (every network)",
+        L({"No proxy", "SOCKS 4 (used as SOCKS 5)", "SOCKS 5", "HTTP"}));
+    B.s(connection::ProxyHost, QString(), "Proxy host");
+    B.i(connection::ProxyPort, 1080, 0, 65535, "Proxy port");
+    B.b(connection::ProxyAuth, false, "Proxy requires authentication");
+    B.s(connection::ProxyUser, QString(), "Proxy user name");
+    B.s(connection::ProxyPassword, QString(), "Proxy password");
+    // [net-2] every peer connection goes through the proxy when one is set (one clear choice: a
+    // proxy that hid only the servers showed the address to every peer)
+    B.b(connection::ProxyPeers, true, "Use the proxy for peer connections"); B.hide();
+    B.b(connection::ProxyHostnames, true, "Resolve host names through the proxy");
     B.i(connection::ConnectTimeoutSec, 25, 5, 300, "Connection attempts timeout after (seconds)");
     B.b(connection::AcceptIncoming, true, "Listen for incoming TCP connections", true);
     B.b(connection::UdpEnabled, true, "Send and receive UDP datagrams", true); B.hide();   // [ui-h] nothing reads it: off the UI
@@ -307,7 +312,7 @@ QList<SettingDef> buildSchema()
 
     // ---- Kad
     B.b(kad::Enabled, true, "Enable Kad (serverless eD2k)");
-    B.port(kad::UdpPort, 4672, "Kad UDP port (may equal the eD2k UDP port)");
+    B.port(kad::UdpPort, 4672, "Kad UDP port (may equal the eD2k UDP port)"); B.hide();   // [net-2] Kad uses the eD2k UDP socket: off the UI
     B.s(kad::NodesDatUrl, QStringLiteral("http://upd.emule-security.org/nodes.dat"), "nodes.dat URL");
     B.sl(kad::BootstrapNodes, QStringList(), "Kad bootstrap nodes (host:port)");
     B.b(kad::AutoBootstrap, true, "Bootstrap automatically from nodes.dat");

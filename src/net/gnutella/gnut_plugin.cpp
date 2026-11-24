@@ -12,6 +12,8 @@
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QUdpSocket>
 
+#include "mx/net_policy.h"
+
 namespace mx {
 mx::NetworkPlugin *createGnutellaPlugin(QObject *parent) { return new mx::gnut::GnutellaPlugin(parent); }
 }
@@ -156,22 +158,39 @@ void GnutellaPlugin::start()
     m_uptime.start();
     if (tlsMode() != TlsMode::Off) ensureTls();   // [enc-1] certificate made on first use
     if (!m_nam) m_nam = new QNetworkAccessManager(this);
+    mx::netpolicy::applyTo(m_nam, m_ctx.settings);   // [net-2] GWebCaches: proxy / chosen adapter
     // listener (TCP: handshakes, HTTP uploads, GIV, connect-back) + UDP on the same port
     int port = setting(QString(keys::gnutella::Port), 6346).toInt();
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection, this, &GnutellaPlugin::onNewConnection);
     bool bound = false;
-    if (port <= 0) {
-        bound = m_server->listen(QHostAddress::AnyIPv4, 0);
+    bool mayListen = true;
+    QString why;
+    // [net-2] on the chosen adapter only; no listener and no UDP while a proxy is set
+    const QHostAddress on = mx::netpolicy::listenAddress(m_ctx.settings, &mayListen, &why);
+    if (!mayListen) {
+        log(QStringLiteral("not listening: %1").arg(why));
+    } else if (port <= 0) {
+        bound = m_server->listen(on, 0);
     } else {
-        for (int i = 0; i < 10 && !bound; ++i) bound = m_server->listen(QHostAddress::AnyIPv4, quint16(port + i));
-        if (!bound) bound = m_server->listen(QHostAddress::AnyIPv4, 0);
+        for (int i = 0; i < 10 && !bound; ++i) bound = m_server->listen(on, quint16(port + i));
+        if (!bound) bound = m_server->listen(on, 0);
     }
     m_port = bound ? m_server->serverPort() : 0;
-    m_udp = new QUdpSocket(this);
-    if (m_port && !m_udp->bind(QHostAddress::AnyIPv4, m_port)) log(QStringLiteral("UDP bind on %1 failed").arg(m_port));
-    connect(m_udp, &QUdpSocket::readyRead, this, &GnutellaPlugin::onUdpReadyRead);
-    log(QStringLiteral("listening on port %1 (TCP%2)").arg(m_port).arg(m_udp->state() == QAbstractSocket::BoundState ? "+UDP" : ""));
+    // an unbound QUdpSocket would bind itself on the first datagram: no socket at all without UDP
+    if (m_port && mx::netpolicy::udpAllowed(m_ctx.settings, &why)) {
+        m_udp = new QUdpSocket(this);
+        if (!mx::netpolicy::bindUdp(m_udp, m_ctx.settings, m_port, &why)) {
+            log(QStringLiteral("UDP bind on %1 failed: %2").arg(m_port).arg(why));
+            delete m_udp;
+            m_udp = nullptr;
+        } else {
+            connect(m_udp, &QUdpSocket::readyRead, this, &GnutellaPlugin::onUdpReadyRead);
+        }
+    } else if (m_port) {
+        log(QStringLiteral("no UDP: %1").arg(why));
+    }
+    log(QStringLiteral("listening on port %1 (TCP%2)").arg(m_port).arg(m_udp ? "+UDP" : ""));
     m_maintainTimer.start();
     m_saveTimer.start();
     m_searchTimer.start();
@@ -253,6 +272,13 @@ TlsSocket::Policy GnutellaPlugin::tlsPolicy(bool peerTls) const
 
 QTcpSocket *GnutellaPlugin::newSocket(bool peerTls, QObject *parent)
 {
+    QTcpSocket *s = makeSocket(peerTls, parent);
+    prepareSocket(s);   // [net-2] every outgoing connection: through the proxy / bound to the adapter
+    return s;
+}
+
+QTcpSocket *GnutellaPlugin::makeSocket(bool peerTls, QObject *parent)
+{
     const TlsSocket::Policy p = tlsPolicy(peerTls);
     if (p == TlsSocket::Plain) return new QTcpSocket(parent);
     if (!ensureTls()) {
@@ -261,6 +287,21 @@ QTcpSocket *GnutellaPlugin::newSocket(bool peerTls, QObject *parent)
         return new QTcpSocket(parent);
     }
     return new TlsSocket(m_tls, p, parent);
+}
+
+void GnutellaPlugin::prepareSocket(QTcpSocket *s)
+{
+    // [net-2] a refused socket points at a closed door (mx/net_policy.h): it fails, never goes direct
+    const mx::Settings *st = m_ctx.settings;
+    if (auto *t = qobject_cast<TlsSocket *>(s)) {
+        t->setPrepare([this, st](QAbstractSocket *inner) {
+            QString why;
+            if (!mx::netpolicy::prepareTcp(inner, st, &why)) log(QStringLiteral("not connecting: %1").arg(why));
+        });
+        return;
+    }
+    QString why;
+    if (!mx::netpolicy::prepareTcp(s, st, &why)) log(QStringLiteral("not connecting: %1").arg(why));
 }
 
 int GnutellaPlugin::encryptedLinks() const
@@ -391,6 +432,11 @@ void GnutellaPlugin::addServer(const QString &address, const QString &name)
     const QString host = a.section(QLatin1Char(':'), 0, 0);
     const quint16 port = quint16(a.contains(QLatin1Char(':')) ? a.section(QLatin1Char(':'), 1).toUInt() : 6346);
     if (host.isEmpty() || port == 0) { log(QStringLiteral("cannot add server \"%1\"").arg(address)); return; }
+    if (mx::netpolicy::proxyResolvesNames(m_ctx.settings)) {
+        // [net-2] the proxy resolves names: no lookup from this computer (Gnutella dials addresses)
+        log(QStringLiteral("not looking up %1: the proxy resolves host names, give an address").arg(host));
+        return;
+    }
     QPointer<GnutellaPlugin> self(this);
     QHostInfo::lookupHost(host, this, [self, host, port, name](const QHostInfo &info) {
         if (!self) return;
