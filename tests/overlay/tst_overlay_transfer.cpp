@@ -304,7 +304,14 @@ private slots:
         QSignalSpy upFinished(B->plugin, &mx::NetworkPlugin::uploadFinished);
         src->open();
         QVERIFY(waitFor([&] { return f.done > 4 * 1024 * 1024; }, 20000));
-        const QString uploadId = upChanged.last().first().value<mx::TransferInfo>().id;
+        // the upload of the big file: the last change can belong to the previous case's upload,
+        // whose close arrives late on a loaded machine
+        QString uploadId;
+        for (qsizetype i = upChanged.size() - 1; i >= 0 && uploadId.isEmpty(); --i) {
+            const mx::TransferInfo t = upChanged.at(i).first().value<mx::TransferInfo>();
+            if (t.size == big.size) uploadId = t.id;
+        }
+        QVERIFY(!uploadId.isEmpty());
         B->plugin->cancelUpload(uploadId);
         QVERIFY(waitFor([&] { return src->state() == mx::RangeSource::Failed; }, 5000));
         bool finished = false;
