@@ -195,6 +195,15 @@ void preApplicationSetup()
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::Floor);
     QCoreApplication::setAttribute(Qt::AA_Use96Dpi);
     QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+#ifdef Q_OS_MACOS
+    // [mac-1] the classic look on a Mac: message boxes and file dialogs are our own classic ones, not the
+    // native Aqua panels (Qt 6 shows QMessageBox as a native alert on macOS otherwise). Core Text draws
+    // the bundled Tahoma with its bitmap strikes, unsmoothed (QFont::NoAntialias), like Windows; Qt's
+    // FreeType engine on macOS ignores the strikes (tst_qa1_fidelity glyphsOneAndJ), so it is not used.
+    // Retina screens: Qt draws at 2x (= 200 %).
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, false);
+#endif
 }
 
 QStringList fontSearchDirs()
@@ -206,7 +215,8 @@ QStringList fontSearchDirs()
     if (QCoreApplication::instance()) {
         const QString app = QCoreApplication::applicationDirPath();
         out << app + QStringLiteral("/fonts") << QDir::cleanPath(app + QStringLiteral("/../fonts"))
-            << QDir::cleanPath(app + QStringLiteral("/../share/octomx/fonts"));
+            << QDir::cleanPath(app + QStringLiteral("/../share/octomx/fonts"))
+            << QDir::cleanPath(app + QStringLiteral("/../Resources/fonts"));   // [mac-1] OctoMX.app/Contents/Resources
     }
     return out;
 }

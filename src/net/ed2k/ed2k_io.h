@@ -12,6 +12,7 @@ class Reader {
 public:
     Reader() = default;
     explicit Reader(const QByteArray &b) : m_d(b.constData()), m_n(b.size()) {}
+    Reader(QByteArray &&) = delete;   // [mac-1] it keeps a pointer into the bytes: never a temporary
     Reader(const char *d, qsizetype n) : m_d(d), m_n(n) {}
 
     bool ok() const { return m_ok; }

@@ -123,7 +123,8 @@ bool seamMove(const QString &path, QString *where, QString *error)
 #if !defined(Q_OS_WIN)
 bool networkFs(const QByteArray &type)
 {
-    static const char *const kinds[] = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "fuse.sshfs", "sshfs", "9p", "afs",
+    // [mac-1] macOS: smbfs, nfs, afpfs, webdav
+    static const char *const kinds[] = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "afpfs", "webdav", "fuse.sshfs", "sshfs", "9p", "afs",
                                         "ceph", "glusterfs", "fuse.glusterfs", "davfs", "fuse.rclone", "fuse.davfs2"};
     for (const char *k : kinds)
         if (type == k)
@@ -160,6 +161,8 @@ QString placeName()
 {
 #ifdef Q_OS_WIN
     return QStringLiteral("Recycle Bin");
+#elif defined(Q_OS_MACOS)
+    return QStringLiteral("Trash");   // [mac-1] the Finder's name
 #else
     return QStringLiteral("trash");
 #endif

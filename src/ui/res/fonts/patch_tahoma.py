@@ -18,6 +18,7 @@ having a top bar and sitting on it. fix_glyphs() redraws those two (same bearing
 
 Usage: patch_tahoma.py <third_party/fonts dir> <output dir>   (needs fontTools)
        patch_tahoma.py --fix-glyphs <tahoma.ttf>             (only the glyph fixes, in place)
+       patch_tahoma.py --mac-advances <tahoma.ttf> <tahoma-mac.ttf>   [mac-1] the macOS copy (see bitmap_advances)
 """
 import sys, os
 from fontTools.ttLib import TTFont
@@ -42,6 +43,59 @@ def fix_glyphs(f):
         g.setRows([bytes(int("".join(map(str, (b + [0] * 8)[i:i + 8])), 2) for i in range(0, len(b), 8)) for b in packed],
                   bitDepth=1, metrics=m)
 
+
+def bitmap_advances(f, ppem=11):
+    """[mac-1] hmtx advance of every glyph of the <ppem> strike := its bitmap advance, scaled to the em.
+    Core Text (macOS) draws the strike's bitmaps but positions them by the outline advances, which differ
+    from the bitmap ones by up to a pixel at 11 ppem ("m": 9.24 against 8); with these advances the
+    positions are the Windows (and FreeType) ones. Used for the macOS copies of the fonts only."""
+    idx = [i for i, s in enumerate(f["EBLC"].strikes) if s.bitmapSizeTable.ppemX == ppem][0]
+    strike = f["EBDT"].strikeData[idx]
+    upm = f["head"].unitsPerEm
+    hmtx = f["hmtx"].metrics
+    n = 0
+    for g, bmp in strike.items():
+        m = getattr(bmp, "metrics", None)
+        if m is None or g not in hmtx:
+            continue
+        # rounded up: 7 px = 1303.27 units; 1303 would put the next glyph at x 6.998, which a renderer that
+        # truncates draws one pixel too far left; 1304 (7.004) stays within half a pixel for 120 glyphs
+        adv = -(-m.Advance * upm // ppem)
+        if hmtx[g][0] != adv:
+            hmtx[g] = (adv, hmtx[g][1])
+            n += 1
+    # glyphs without a bitmap (the space, no-break space): the whole-pixel advance FreeType's hinting
+    # gives them (space 3.44 -> 3 px), so a line of words is not wider than on Windows
+    for g, (a, lsb) in list(hmtx.items()):
+        if g in strike:
+            continue
+        px = int(a * ppem / upm + 0.5)
+        hmtx[g] = (-(-px * upm // ppem), lsb)
+    f["hhea"].advanceWidthMax = max(a for a, _ in hmtx.values())
+    # Windows GDI (and FreeType with the strikes) does not kern this font, Core Text would ("sharing
+    # with the classic ..." 5 px wider): the "kern" feature goes, mark positioning stays
+    gpos = f["GPOS"].table if "GPOS" in f else None
+    if gpos is not None:
+        keep = [i for i, fr in enumerate(gpos.FeatureList.FeatureRecord) if fr.FeatureTag != "kern"]
+        remap = {old: new for new, old in enumerate(keep)}
+        gpos.FeatureList.FeatureRecord = [gpos.FeatureList.FeatureRecord[i] for i in keep]
+        gpos.FeatureList.FeatureCount = len(keep)
+        for sr in gpos.ScriptList.ScriptRecord:
+            for ls in [sr.Script.DefaultLangSys] + [r.LangSys for r in sr.Script.LangSysRecord]:
+                if ls is None:
+                    continue
+                ls.FeatureIndex = [remap[i] for i in ls.FeatureIndex if i in remap]
+                ls.FeatureCount = len(ls.FeatureIndex)
+    return n
+
+
+if sys.argv[1] == "--mac-advances":
+    # patch_tahoma.py --mac-advances <bundled tahoma.ttf> <out.ttf>
+    f = TTFont(sys.argv[2])
+    n = bitmap_advances(f)
+    f.save(sys.argv[3])
+    print("wrote", sys.argv[3], "with", n, "advances from the 11-ppem strike")
+    sys.exit(0)
 
 if sys.argv[1] == "--fix-glyphs":
     f = TTFont(sys.argv[2])

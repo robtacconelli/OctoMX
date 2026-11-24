@@ -711,6 +711,7 @@ private slots:
         QVERIFY(df && df->statusTip().contains(QStringLiteral("You are asked first")));
         uib::closeMenus();
         l->expand(folderRow);
+        QTRY_VERIFY(l->model()->index(0, 0, folderRow).isValid());   // [mac-1] the file row comes a moment later on a CI Mac
         page->showContextMenu(l->model()->index(0, 0, folderRow), QPoint(5, 5));
         QTest::qWait(10);
         QAction *dfile = uib::menuAction(uib::openMenu(), QStringLiteral("Delete File..."));
@@ -718,10 +719,27 @@ private slots:
         uib::closeMenus();
         // Del on the list asks (Cancel here)
         answer = QDialog::Rejected;
-        l->setCurrentIndex(l->model()->index(0, 0, folderRow));
-        l->selectionModel()->select(l->model()->index(0, 0, folderRow), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         const int k = int(asked.size());
-        QTest::keyClick(l, Qt::Key_Delete);
+        // [mac-1] a late library update reloads the list and drops the selection (seen on a CI Mac):
+        // select the file row again until the key reaches a selected row
+        auto pressDel = [&] {
+            QModelIndex folder;
+            for (int r = 0; r < l->model()->rowCount(); ++r)
+                if (l->model()->index(r, 0).data().toString().contains(QStringLiteral("share%12").arg(m_run)))
+                    folder = l->model()->index(r, 0);
+            if (!folder.isValid())
+                return false;
+            l->expand(folder);
+            const QModelIndex file = l->model()->index(0, 0, folder);
+            if (!file.isValid())
+                return false;
+            l->setCurrentIndex(file);
+            l->selectionModel()->select(file, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+            QTest::keyClick(l, Qt::Key_Delete);
+            return int(asked.size()) > k;
+        };
+        for (int tries = 0; tries < 50 && !pressDel(); ++tries)
+            QTest::qWait(100);
         QCOMPARE(int(asked.size()), k + 1);
         QVERIFY(QFileInfo::exists(share + QStringLiteral("2/x.mp3")));
         DeleteFilesDialog::s_execHook = nullptr;

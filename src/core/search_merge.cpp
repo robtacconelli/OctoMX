@@ -61,7 +61,9 @@ bool listComplete(const QList<BundleFile> &files)
 
 QString SearchMerger::normalizedName(const QString &fileName)
 {
-    QString name = baseName(fileName).toLower();
+    // [mac-1] NFC first: macOS file systems hand out names in decomposed form (e + combining accent),
+    // other peers send composed ones; both must give the same words
+    QString name = baseName(fileName).normalized(QString::NormalizationForm_C).toLower();
     QString ext;
     const int dot = name.lastIndexOf(QLatin1Char('.'));
     if (dot > 0 && name.size() - dot <= 6) {
@@ -107,7 +109,7 @@ QString SearchMerger::probableExtension(const QString &name)
 
 QStringList SearchMerger::nameWords(const QString &name)
 {
-    QString base = baseName(name).trimmed();
+    QString base = baseName(name).normalized(QString::NormalizationForm_C).trimmed();   // [mac-1] NFD names from macOS
     const QString ext = probableExtension(base);
     QStringList words;
     if (!ext.isEmpty() && base.endsWith(QLatin1Char('.') + ext, Qt::CaseInsensitive)) {

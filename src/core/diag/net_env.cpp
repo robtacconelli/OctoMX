@@ -14,8 +14,71 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #endif
+#ifdef Q_OS_MACOS
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <net/route.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#include <algorithm>
+#include <cstddef>
+#endif
 
 namespace mx::diag {
+
+#ifdef Q_OS_MACOS
+namespace {
+// [mac-1] the IPv4 default routes from the kernel's routing table (sysctl NET_RT_FLAGS, no /proc on
+// macOS): gateway (host order) and interface index, the unscoped (primary) route first
+struct MacRoute { quint32 gateway = 0; int ifIndex = 0; bool scoped = false; };
+QList<MacRoute> macDefaultRoutes()
+{
+    QList<MacRoute> out;
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
+    size_t len = 0;
+    if (sysctl(mib, 6, nullptr, &len, nullptr, 0) < 0 || len == 0)
+        return out;
+    QByteArray buf(int(len), '\0');
+    if (sysctl(mib, 6, buf.data(), &len, nullptr, 0) < 0)
+        return out;
+    const char *end = buf.constData() + len;
+    for (const char *p = buf.constData(); p + sizeof(rt_msghdr) <= end;) {
+        const auto *rtm = reinterpret_cast<const rt_msghdr *>(p);
+        if (rtm->rtm_msglen == 0)
+            break;
+        const sockaddr *addrs[RTAX_MAX] = {};
+        const char *sp = p + sizeof(rt_msghdr);
+        for (int i = 0; i < RTAX_MAX && sp < p + rtm->rtm_msglen; ++i) {
+            if (!(rtm->rtm_addrs & (1 << i)))
+                continue;
+            const auto *sa = reinterpret_cast<const sockaddr *>(sp);
+            addrs[i] = sa;
+            // Darwin rounds each address up to 4 bytes (ROUNDUP in route.c)
+            const size_t l = sa->sa_len ? ((sa->sa_len + sizeof(uint32_t) - 1) & ~(sizeof(uint32_t) - 1)) : sizeof(uint32_t);
+            sp += l;
+        }
+        const sockaddr *dst = addrs[RTAX_DST], *gw = addrs[RTAX_GATEWAY], *mask = addrs[RTAX_NETMASK];
+        const bool defaultDst = dst && dst->sa_family == AF_INET && reinterpret_cast<const sockaddr_in *>(dst)->sin_addr.s_addr == 0;
+        const bool zeroMask = !mask || mask->sa_len <= offsetof(sockaddr_in, sin_addr) ||
+                              reinterpret_cast<const sockaddr_in *>(mask)->sin_addr.s_addr == 0;
+        if (defaultDst && zeroMask && gw && gw->sa_family == AF_INET && (rtm->rtm_flags & RTF_UP)) {
+            MacRoute r;
+            r.gateway = ntohl(reinterpret_cast<const sockaddr_in *>(gw)->sin_addr.s_addr);
+            r.ifIndex = rtm->rtm_index;
+#ifdef RTF_IFSCOPE
+            r.scoped = (rtm->rtm_flags & RTF_IFSCOPE) != 0;
+#endif
+            if (r.gateway)
+                out << r;
+        }
+        p += rtm->rtm_msglen;
+    }
+    std::stable_sort(out.begin(), out.end(), [](const MacRoute &a, const MacRoute &b) { return !a.scoped && b.scoped; });
+    return out;
+}
+} // namespace
+#endif
 
 QHostAddress localAddressTowards(const QHostAddress &to, quint16 port)
 {
@@ -38,6 +101,9 @@ QHostAddress defaultGateway()
         return QHostAddress(ntohl(row.dwForwardNextHop));
     }
     return QHostAddress();
+#elif defined(Q_OS_MACOS)
+    const QList<MacRoute> r = macDefaultRoutes();
+    return r.isEmpty() ? QHostAddress() : QHostAddress(r.first().gateway);
 #else
     QFile f(QStringLiteral("/proc/net/route"));
     if (!f.open(QIODevice::ReadOnly)) return QHostAddress();
@@ -86,6 +152,9 @@ QHash<int, AdapterExtra> adapterExtras()
         }
         break;
     }
+#elif defined(Q_OS_MACOS)
+    for (const MacRoute &r : macDefaultRoutes())
+        out[r.ifIndex].hasGateway = true;
 #else
     QFile f(QStringLiteral("/proc/net/route"));
     if (f.open(QIODevice::ReadOnly)) {

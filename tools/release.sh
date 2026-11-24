@@ -139,7 +139,8 @@ if [ $DO_WIN = 1 ]; then
 fi
 
 step "SHA256SUMS"
-(cd "$DIST" && rm -f SHA256SUMS && for f in "$WIN_NAME.zip" "$LIN_NAME.tar.xz"; do
+# [mac-1] the macOS package of the same version, fetched before from CI (tools/release/fetch-mac.sh)
+(cd "$DIST" && rm -f SHA256SUMS && for f in "$WIN_NAME.zip" "$LIN_NAME.tar.xz" "${WIN_NAME%-win64}"-macos-*.zip; do
    [ -f "$f" ] && sha256sum "$f"; done > SHA256SUMS)
 sed 's/^/  /' "$DIST/SHA256SUMS" | tee -a "$SUMMARY"
 

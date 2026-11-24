@@ -2,6 +2,7 @@
 // [diag-1] the Connection Test service (see diagnostics_manager.h)
 #include "core/diag/diagnostics_manager.h"
 #include "core/diag/diag_log.h"
+#include "core/diag/mac_firewall.h"
 #include "core/engine/engine.h"
 #include "core/log.h"
 #include "core/network_manager.h"
@@ -425,6 +426,9 @@ QString DiagnosticsManager::forwardAdvice(const QList<PortBinding> &bindings) co
 #ifdef Q_OS_WIN
     if (m_firewall.checked && m_firewall.enabled && m_firewall.allowRules == 0)
         a += QStringLiteral(" Windows Firewall has no rule for OctoMX: allow it in Windows Security ▸ Firewall & network protection ▸ Allow an app through firewall.");
+#elif defined(Q_OS_MACOS)
+    if (m_firewall.checked && m_firewall.enabled && (m_firewall.blockRules > 0 || m_firewall.blockAllInbound))
+        a += QStringLiteral(" The macOS firewall blocks incoming connections to OctoMX: allow it in System Settings > Network > Firewall > Options.");
 #endif
     return a;
 }
@@ -633,9 +637,38 @@ DiagGroup DiagnosticsManager::generalGroup(const QList<NetFacts> &nets) const
                                                  .arg(m_firewall.oldProgramRules.isEmpty() ? QString()
                                                       : QStringLiteral(" The rule \"%1\" is for winmx.exe, an older program file in this folder: Windows does not apply it to octomx.exe.")
                                                             .arg(m_firewall.oldProgramRules.first())));
+#elif defined(Q_OS_MACOS)
+    // [mac-1] the application firewall (System Settings > Network > Firewall), read with socketfilterfw
+    {
+        const QString t = QStringLiteral("macOS Firewall");
+        const QString where = QStringLiteral("System Settings > Network > Firewall > Options");
+        if (m_firewallRunning && !m_firewall.checked)
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Unknown, QStringLiteral("Checking..."));
+        else if (!m_firewall.checked)
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Unknown, QStringLiteral("Not checked on this Mac"), m_firewall.error);
+        else if (!m_firewall.enabled)
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Ok, QStringLiteral("Off"), m_firewall.profiles);
+        else if (m_firewall.blockAllInbound)
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Limited, QStringLiteral("Blocks all incoming connections"), m_firewall.profiles,
+                            QStringLiteral("\"Block all incoming connections\" is on: nobody can connect to OctoMX. Turn it off in %1.").arg(where));
+        else if (m_firewall.blockRules > 0)
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Limited, QStringLiteral("Blocks OctoMX"), m_firewall.profiles,
+                            QStringLiteral("The firewall blocks incoming connections to OctoMX: set OctoMX to \"Allow incoming connections\" in %1.").arg(where));
+        else if (m_firewall.allowRules > 0)
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Ok, QStringLiteral("On, OctoMX allowed"), m_firewall.profiles);
+        else
+            g.items << item(QStringLiteral("general.firewall"), t, DiagLevel::Ok, QStringLiteral("On, asks at the first connection"), m_firewall.profiles,
+                            QStringLiteral("macOS asks once whether OctoMX may accept incoming connections: answer Allow (or set it in %1).").arg(where));
+    }
+    // macOS 15 asks once before a program may reach devices on the local network (the router for port
+    // mapping, OctoMX users on the same network); the answer cannot be read by the program
+    g.items << item(QStringLiteral("general.localnetwork"), QStringLiteral("Local network access"), DiagLevel::Ok, QStringLiteral("Asked by macOS"),
+                    QStringLiteral("the first local connection shows \"OctoMX would like to find and connect to devices on your local network\""),
+                    QStringLiteral("If you chose Don't Allow, port mapping (UPnP / NAT-PMP) and peers on your own network fail: allow OctoMX in "
+                                   "System Settings > Privacy & Security > Local Network."));
 #else
     g.items << item(QStringLiteral("general.firewall"), QStringLiteral("Firewall"), DiagLevel::Off, QStringLiteral("Not checked"),
-                    QStringLiteral("only checked on Windows"));
+                    QStringLiteral("only checked on Windows and macOS"));
 #endif
     DiagLevel lv = DiagLevel::Unknown;
     for (const DiagItem &i : g.items) lv = diagWorse(lv, i.level);
@@ -1043,7 +1076,7 @@ QString DiagnosticsManager::startupBlock() const
 // ------------------------------------------------------------------------------------ firewall
 void DiagnosticsManager::runFirewallCheck()
 {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
     if (m_firewallRunning) return;
     m_firewallRunning = true;
     const QString exe = QCoreApplication::applicationFilePath();
@@ -1052,15 +1085,28 @@ void DiagnosticsManager::runFirewallCheck()
         m_firewall = w->result();
         m_firewallRunning = false;
         w->deleteLater();
+#ifdef Q_OS_MACOS
+        qCInfo(lcDiag).noquote() << QStringLiteral("macOS Firewall: %1").arg(
+            !m_firewall.checked ? m_firewall.error
+                                : QStringLiteral("%1, %2%3%4").arg(m_firewall.enabled ? QStringLiteral("on") : QStringLiteral("off"), m_firewall.profiles,
+                                                                    m_firewall.blockAllInbound ? QStringLiteral(", blocks all incoming") : QString(),
+                                                                    m_firewall.blockRules ? QStringLiteral(", blocks OctoMX")
+                                                                    : m_firewall.allowRules ? QStringLiteral(", OctoMX allowed") : QString()));
+#else
         qCInfo(lcDiag).noquote() << QStringLiteral("Windows Firewall: %1").arg(
             !m_firewall.checked ? m_firewall.error
                                 : QStringLiteral("%1 (%2), %3 allow / %4 block rules for this program%5")
                                       .arg(m_firewall.enabled ? QStringLiteral("on") : QStringLiteral("off"), m_firewall.profiles)
                                       .arg(m_firewall.allowRules).arg(m_firewall.blockRules)
                                       .arg(m_firewall.blockAllInbound ? QStringLiteral(", blocks all incoming") : QString()));
+#endif
         scheduleReportChanged();
     });
+#ifdef Q_OS_MACOS
+    w->setFuture(QtConcurrent::run([exe] { return diag::checkMacFirewall(exe); }));
+#else
     w->setFuture(QtConcurrent::run([exe] { return diag::checkWindowsFirewall(exe); }));
+#endif
 #endif
 }
 

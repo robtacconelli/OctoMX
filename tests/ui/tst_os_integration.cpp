@@ -112,15 +112,16 @@ private slots:
         qunsetenv("MX_OS_INTEGRATION");
         qputenv("MX_OS_ROOT", QFile::encodeName(m_root + QStringLiteral("/approot")));
         std::unique_ptr<OsIntegration> os2(OsIntegration::createForApp(true, {}));
-        QVERIFY(os2->backendName().contains(QStringLiteral("redirected")) || os2->backendName().contains(QStringLiteral("registry")));
+        QVERIFY(os2->backendName().contains(QStringLiteral("redirected")) || os2->backendName().contains(QStringLiteral("registry"))
+                || os2->backendName() == QLatin1String("macos-test"));   // [mac-1] LaunchAgent + Launch Services seam
     }
 
     // [ui-e] with MX_OS_ROOT set, the app's backend writes only below the root and never runs the
     // desktop tools (a fake xdg-mime / update-desktop-database on PATH must stay untouched)
     void osRootRedirectsAndSkipsTools()
     {
-#ifdef Q_OS_WIN
-        QSKIP("XDG tools are Linux only");
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        QSKIP("XDG tools are Linux only (the macOS backend under MX_OS_ROOT: tst_mac appUsesRootOnMac)");
 #else
         const QString bin = m_root + QStringLiteral("/fakebin"), marker = m_root + QStringLiteral("/tool-ran");
         QVERIFY(QDir().mkpath(bin));

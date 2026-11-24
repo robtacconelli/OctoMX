@@ -167,6 +167,10 @@ private slots:
             QCOMPARE(c.program, QStringLiteral("explorer.exe"));
             QCOMPARE(c.native, QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(abs)));
             QVERIFY(!c.native.mid(9).contains(QLatin1Char('/')));
+#elif defined(Q_OS_MACOS)
+            // [mac-1] Finder selects the file: open -R <file>
+            QCOMPARE(c.program, QStringLiteral("/usr/bin/open"));
+            QCOMPARE(c.args, (QStringList{QStringLiteral("-R"), abs}));
 #else
             if (c.program == QLatin1String("url")) {   // no session bus: the folder opens
                 QCOMPARE(QUrl::fromEncoded(c.args.value(0).toUtf8()).toLocalFile(), QFileInfo(abs).absolutePath());
@@ -297,6 +301,10 @@ private slots:
     // the combo box arrow button was a fixed 16-px sliver at every scale
     void comboArrowScales()
     {
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() == QLatin1String("offscreen"))
+            QSKIP("Qt's offscreen platform on macOS scales the Windows style metrics differently; run with Cocoa by tools/mac/test-cocoa.sh");
+#endif
         const double before = uiScale();
         ClassicStyle style;
         QComboBox cb;

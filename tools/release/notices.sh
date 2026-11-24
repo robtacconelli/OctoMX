@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# tools/release/notices.sh <linux|win> <package-dir>
+# tools/release/notices.sh <linux|win|mac> <package-dir>      (mac: OctoMX.app/Contents/Resources, [mac-1])
 # Writes LICENSE.txt, NOTICE.txt, SOURCE.txt, THIRD-PARTY-NOTICES.txt, README.txt and licenses/ into a
 # package folder. The source location in SOURCE.txt comes from OCTOMX_SOURCE_URL (and OCTOMX_SOURCE_TAG,
 # default v<version>); without it a clearly marked placeholder is written and a warning printed.
@@ -9,7 +9,8 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 source "$ROOT/toolchain/env.sh"
-PLAT=$1; DEST=$(realpath "$2")
+PLAT=$1; DEST=$(cd "$2" && pwd)
+[ "$PLAT" = mac ] && source "$ROOT/tools/mac/env.sh"
 V=${OCTOMX_RELEASE_VERSION:-5.3}
 SOURCE_URL=${OCTOMX_SOURCE_URL:-https://github.com/robtacconelli/OctoMX}
 SOURCE_TAG=${OCTOMX_SOURCE_TAG:-v$V}
@@ -20,7 +21,11 @@ rm -rf "$L"; mkdir -p "$L/qt" "$L/fonts"
 cl=/usr/share/common-licenses
 
 # ---- licence texts --------------------------------------------------------------------------
+if [ "$PLAT" = mac ]; then   # [mac-1] no common-licenses folder on a Mac: the same texts from Qt's LICENSES/ copy
+  cp "$F/licenses/qt/LGPL-3.0-only.txt" "$L/LGPL-3.0.txt"; cp "$F/licenses/qt/GPL-3.0-only.txt" "$L/GPL-3.0.txt"
+else
 cp "$cl/LGPL-3" "$L/LGPL-3.0.txt"; cp "$cl/GPL-3" "$L/GPL-3.0.txt"     # LGPLv3 = GPLv3 + additional permissions
+fi
 cp "$TP/libtorrent-rasterbar-2.0.15/COPYING" "$L/libtorrent-rasterbar-COPYING.txt"
 cp "$TP/libtorrent-rasterbar-2.0.15/LICENSE" "$L/libtorrent-rasterbar-LICENSE.txt"
 cp "$TP/boost-1.92.0/LICENSE_1_0.txt" "$L/Boost-BSL-1.0.txt"
@@ -38,8 +43,11 @@ cp "$ROOT/src/ui/res/fonts/patch_tahoma.py" "$L/fonts/patch_tahoma.py"
 mkdir -p "$L/fonts/original-wine-10.0"
 cp "$ROOT/third_party/fonts/tahoma.ttf" "$ROOT/third_party/fonts/tahomabd.ttf" "$L/fonts/original-wine-10.0/"
 
-QT_SBOM=$QT_LINUX_DIR/sbom/qtbase-$QT_VERSION.spdx.json
-[ "$PLAT" = win ] && QT_SBOM=$QT_WIN_DIR/sbom/qtbase-$QT_VERSION.spdx.json
+case "$PLAT" in
+  win) QT_SBOM=$QT_WIN_DIR/sbom/qtbase-$QT_VERSION.spdx.json ;;
+  mac) QT_SBOM=$QT_MAC_DIR/sbom/qtbase-$QT_VERSION.spdx.json ;;   # [mac-1]
+  *)   QT_SBOM=$QT_LINUX_DIR/sbom/qtbase-$QT_VERSION.spdx.json ;;
+esac
 QTN=$(mktemp)
 python3 -I "$ROOT/tools/release/qt_notices.py" "$QT_SBOM" "$F/licenses/qt" "$QTN" "$L/qt"
 
@@ -48,6 +56,8 @@ if [ "$PLAT" = win ]; then
   M=$LLVM_MINGW_ROOT/x86_64-w64-mingw32/share/mingw32
   cp "$M/COPYING.MinGW-w64-runtime.txt" "$L/MinGW-w64-runtime.txt"
   [ -f "$DEST/libwinpthread-1.dll" ] && cp "$M/COPYING.winpthreads.txt" "$L/winpthreads.txt"
+elif [ "$PLAT" = mac ]; then
+  :   # [mac-1] nothing besides Qt, the static libraries and the font: macOS supplies the rest
 else
   cp "$F/licenses/ICU-73.2-LICENSE.txt" "$L/ICU-73.2-LICENSE.txt"
   mkdir -p "$L/x11-libs"
@@ -76,6 +86,11 @@ if [ "$PLAT" = win ]; then cat <<'EOF'
    Shipped as separate files: Qt6Core.dll, Qt6Gui.dll, Qt6Widgets.dll, Qt6Network.dll,
    Qt6Sql.dll and the plugins in platforms/, tls/, sqldrivers/, imageformats/.
 EOF
+elif [ "$PLAT" = mac ]; then cat <<'EOF'
+   Shipped as separate files inside OctoMX.app: the frameworks in Contents/Frameworks (QtCore,
+   QtGui, QtWidgets, QtNetwork, QtSql, QtConcurrent and what they need) and the plugins in
+   Contents/PlugIns (platforms, tls, sqldrivers, imageformats).
+EOF
 else cat <<'EOF'
    Shipped as separate files: lib/libQt6Core.so.6, libQt6Gui.so.6, libQt6Widgets.so.6,
    libQt6Network.so.6, libQt6Sql.so.6, libQt6DBus.so.6, libQt6XcbQpa.so.6 and the plugins in
@@ -85,7 +100,7 @@ fi
 cat <<EOF
    You may replace these Qt libraries with your own build of the same Qt version (keep the
    file names); OctoMX will use them. The binaries are the official Qt Company builds
-   ($( [ "$PLAT" = win ] && echo win64_llvm_mingw || echo linux_gcc_64 ), installed with aqtinstall), without changes.
+   ($(case "$PLAT" in win) echo win64_llvm_mingw ;; mac) echo clang_64 ;; *) echo linux_gcc_64 ;; esac), installed with aqtinstall), without changes.
    Corresponding source: the Qt $QT_VERSION source code is available from
      https://download.qt.io/official_releases/qt/${QT_VERSION%.*}/$QT_VERSION/single/qt-everywhere-src-$QT_VERSION.tar.xz
      (submodules: https://download.qt.io/official_releases/qt/${QT_VERSION%.*}/$QT_VERSION/submodules/qtbase-everywhere-src-$QT_VERSION.tar.xz)
@@ -109,6 +124,9 @@ EOF
 if [ "$PLAT" = linux ]; then cat <<'EOF'
    Qt's TLS backend (plugins/tls/libqopensslbackend.so) loads the system's own libssl.so.3 /
    libcrypto.so.3 at run time; those are not part of this package.
+EOF
+elif [ "$PLAT" = mac ]; then cat <<'EOF'
+   Qt's TLS on macOS uses the system's Secure Transport; no OpenSSL library is shipped.
 EOF
 else cat <<'EOF'
    Qt's TLS on Windows uses the Windows "Secure Channel" (schannel); no OpenSSL DLL is shipped.
@@ -165,6 +183,10 @@ cat <<'EOF'
 
 11. (no further runtime DLLs: everything else octomx.exe imports is part of Windows 10/11.)
 EOF
+elif [ "$PLAT" = mac ]; then cat <<'EOF'
+9. System frameworks used but NOT shipped (Cocoa, Core Text, Core Services, Security,
+   SystemConfiguration, libc++, ...) are part of macOS and come with it under Apple's terms.
+EOF
 else cat <<'EOF'
 9. ICU 73.2 (lib/libicuuc.so.73, libicui18n.so.73, libicudata.so.73; shipped by Qt's Linux
    build). Copyright (c) Unicode, Inc. Licence: Unicode/ICU licence (MIT-like) with the
@@ -209,7 +231,7 @@ if [ "$PLAT" = linux ]; then   # symbol-version floor of everything in the bundl
                    *) DISTRO="a distribution with glibc $GLIBC";; esac
   echo "floor: glibc $GLIBC, GLIBCXX_$CXX (GCC $GCC)"
 fi
-sed -e "s/@VERSION@/$V/g" -e "s/@GLIBC@/$GLIBC/g" -e "s/@GCC@/$GCC/g" -e "s/@DISTRO_EXAMPLE@/$DISTRO/g" \
+sed -e "s/@VERSION@/$V/g" -e "s/@MACOS_MIN@/${MX_MACOS_MIN:-}/g" -e "s/@GLIBC@/$GLIBC/g" -e "s/@GCC@/$GCC/g" -e "s/@DISTRO_EXAMPLE@/$DISTRO/g" \
     "$F/README-$PLAT.txt" > "$DEST/README.txt"
 if [ "$PLAT" = win ]; then   # Windows users open these with Notepad: CRLF line ends
   for f in "$DEST"/*.txt; do sed -i 's/\r\?$/\r/' "$f"; done

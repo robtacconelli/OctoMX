@@ -1404,7 +1404,14 @@ void MxListView::keyPressEvent(QKeyEvent *e)
         emit contextMenuAt(currentIndex(), viewport()->mapToGlobal(r.bottomLeft()));
         return;
     }
-    if (e->key() == Qt::Key_Delete && e->modifiers() == Qt::NoModifier && selectionModel() &&
+    // [mac-1] macOS sends the forward-delete key with the keypad flag, and its main delete key is
+    // Backspace (as in Finder): both count there
+#ifdef Q_OS_MACOS
+    const bool delKey = e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace;
+#else
+    const bool delKey = e->key() == Qt::Key_Delete;
+#endif
+    if (delKey && (e->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier && selectionModel() &&
         selectionModel()->hasSelection() && isSignalConnected(QMetaMethod::fromSignal(&MxListView::deleteRequested))) {
         emit deleteRequested();
         return;

@@ -2,6 +2,7 @@
 #include "ui/pages/shared_page.h"
 
 #include <QtCore/QCoreApplication>
+#include "mx/app_paths.h"
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QStandardPaths>
@@ -388,7 +389,7 @@ void SharedPage::deleteSelected(const QStringList &only)
     ctx.incoming = ts->incomingDir();
     ctx.incomplete = ts->incompleteDir();
     ctx.profile = core()->profileDir();
-    ctx.program = QCoreApplication::applicationDirPath();
+    ctx.program = mx::paths::programDir();   // [mac-1] the app bundle on macOS
     for (const TransferInfo &t : ts->downloads()) {
         const bool seeding = t.state == TransferState::Seeding;
         if (transfers::isFinished(t) && !seeding)

@@ -368,7 +368,12 @@ bool TransfersPage::eventFilter(QObject *o, QEvent *e)
             pasteLinks();
             return true;
         }
-        if (k->key() == Qt::Key_Delete) {   // [ui-j] Del = Clear: the selected rows leave the list (the question)
+#ifdef Q_OS_MACOS
+        const bool delKey = k->key() == Qt::Key_Delete || k->key() == Qt::Key_Backspace;   // [mac-1] the Mac's delete key
+#else
+        const bool delKey = k->key() == Qt::Key_Delete;
+#endif
+        if (delKey) {   // [ui-j] Del = Clear: the selected rows leave the list (the question)
             clearSelected();
             return true;
         }

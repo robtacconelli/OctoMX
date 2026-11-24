@@ -222,6 +222,8 @@ void TstPieceBar::paintsInsideCellAtEveryScale()
         view.header()->resizeSection(2, S(100));
         view.show();
         QVERIFY(QTest::qWaitForWindowExposed(&view));
+        if (view.width() < S(500))   // [mac-1] a real screen smaller than the window (a 1024-px CI display at 300 %)
+            QSKIP(qPrintable(QStringLiteral("the screen cannot hold the %1-px window of scale %2").arg(S(500)).arg(scale)));
         const piecebar::Colors c = piecebar::themeColors();
         for (int round = 0; round < 2; ++round) {
             if (round == 1) {   // the bar follows the column

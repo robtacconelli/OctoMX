@@ -16,7 +16,7 @@
 namespace mx::ui::shdel {
 
 namespace {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)   // [mac-1] APFS / HFS+ ignore case by default
 constexpr Qt::CaseSensitivity kCase = Qt::CaseInsensitive;
 #else
 constexpr Qt::CaseSensitivity kCase = Qt::CaseSensitive;

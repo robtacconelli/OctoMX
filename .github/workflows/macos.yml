@@ -1,0 +1,207 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# [mac-1] OctoMX for macOS: build (one universal arm64 + x86_64 app), test on Apple Silicon and
+# on Intel, package, verify, screenshots, live smoke test. Every step is a script in tools/mac/
+# that can be read and run by hand on a Mac. Only GitHub's own actions, pinned by commit, a
+# read-only token and no secrets.
+name: macOS
+
+on:
+  push:
+    branches: [macos-port]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build (default: the branch the run starts on)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_ANALYTICS: "1"
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPRESS: "1"
+
+jobs:
+  build:
+    # the same universal app is built and tested natively on both kinds of Mac
+    name: Build (universal) and test on ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-26
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Restore dependencies (Qt, static libraries)
+        id: deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            toolchain/qt
+            third_party/mac
+            third_party/src
+          key: mac-deps-v1-${{ hashFiles('tools/mac/deps.sh', 'tools/mac/env.sh', 'tools/build-third-party.sh', 'tools/install-toolchain.sh', 'toolchain/env.sh') }}
+
+      - name: Install and build dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: tools/mac/deps.sh
+
+      - name: Save dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            toolchain/qt
+            third_party/mac
+            third_party/src
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Build tools (ccache, bash 5)
+        run: |
+          brew install ccache bash > /dev/null
+          ccache --version | head -n1; bash --version | head -n1
+          echo "Qt floor / deployment target: $(source tools/mac/env.sh; echo "$MACOSX_DEPLOYMENT_TARGET")"
+          echo "QtCore built for macOS $(otool -l toolchain/qt/*/macos/lib/QtCore.framework/QtCore | awk '/LC_BUILD_VERSION/ {f=1} f && $1 == "minos" {print $2; exit}') (minos)"
+          grep -h -E 'freetype|QT_ARCHS' toolchain/qt/*/macos/mkspecs/qconfig.pri toolchain/qt/*/macos/mkspecs/modules/qt_lib_gui_private.pri 2>/dev/null | head -n 6 || true
+
+      - name: Restore compiler cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: toolchain/cache/ccache
+          key: mac-ccache-v1-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            mac-ccache-v1-${{ matrix.arch }}-
+            mac-ccache-v1-
+
+      - name: Build
+        id: build
+        env:
+          MX_WERROR: "1"
+        run: tools/mac/build.sh build/mac
+
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: toolchain/cache/ccache
+          key: mac-ccache-v1-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Release build (the package, without tests and test hooks)
+        id: release
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          MX_WERROR: "1"
+        run: tools/mac/build.sh build/mac-release --release
+
+      - name: Save compiler cache (with the release build)
+        if: ${{ !cancelled() && steps.release.outcome != 'skipped' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: toolchain/cache/ccache
+          key: mac-ccache-v1-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}-r
+
+      - name: Package
+        id: package
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
+        run: tools/mac/package.sh build/mac-release build/out/package
+
+      - name: Verify the package
+        id: verify
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: tools/mac/verify.sh build/out/package/OctoMX-*.zip build/out/verify
+
+      - name: Screenshots (Cocoa, 1x and 2x)
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: |
+          EXE=$(ls -d build/out/verify/unpacked/*/OctoMX.app)/Contents/MacOS/octomx
+          system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Resolution|Retina|Main Display' | head -n 4 || true
+          tools/mac/shots.sh "$EXE" build/out/shots/1x || true
+          QT_SCALE_FACTOR=2 MX_SHOTS_SIZE=900x500 tools/mac/shots.sh "$EXE" build/out/shots/2x || true
+          rm -rf build/out/shots/*/.work/prof-* build/out/shots/*/.work/os-root
+
+      - name: Test machine set-up (second loopback address, no App Nap)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          sudo ifconfig lo0 alias 127.0.0.2 up
+          # test programs are background processes: App Nap would slow their timers (the program
+          # itself opts out, main.cpp keepRunningInBackground; the test executables do not)
+          defaults write NSGlobalDomain NSAppSleepDisabled -bool YES
+
+      - name: Test (offscreen)
+        id: test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          MX_TEST_JOBS: "2"   # the timing tests of the limiter, the engine and HTTP need some quiet
+        run: tools/mac/test.sh build/mac build/out/tests offscreen
+
+      - name: Test UI with the Cocoa platform
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: tools/mac/test-cocoa.sh build/mac build/out/tests
+
+      - name: Live smoke test (real networks)
+        if: ${{ !cancelled() && steps.package.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: |
+          tools/mac/smoke.sh "$(ls -d build/out/verify/unpacked/*/OctoMX.app)" build/mac build/out/smoke
+          # keep the logs, not the downloaded films and profiles
+          find build/out/smoke -type f \( -name '*.mp4' -o -name '*.mkv' -o -name '*.avi' -o -name '*.part' -o -name '*.db' \) -delete
+          rm -rf build/out/smoke/*-profile/bt build/out/smoke/*-profile/incomplete build/out/smoke/*-profile/incoming
+
+      - name: Crash reports of test programs (if any)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          mkdir -p build/out/crash
+          find ~/Library/Logs/DiagnosticReports -type f \( -name 'tst_*' -o -name 'octomx*' -o -name 'mxcli*' \) -newer build/mac.build.log -exec cp {} build/out/crash/ \; 2>/dev/null || true
+          ls build/out/crash | head -n 20
+
+      - name: Upload the package
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: octomx-macos-package-built-on-${{ matrix.arch }}
+          path: |
+            build/out/package/OctoMX-*.zip
+            build/out/package/octomx.dSYM.zip
+            build/out/package/package-info.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: octomx-macos-logs-${{ matrix.arch }}
+          path: |
+            build/out/tests/
+            build/out/verify/*.txt
+            build/out/verify/*.out
+            build/out/verify/demo.png
+            build/out/shots/
+            build/out/smoke/
+            build/out/crash/
+            build/out/package/package-info.txt
+            build/out/package/macdeployqt.log
+            build/mac.cmake.log
+            build/mac.build.log
+            build/mac-release.cmake.log
+            build/mac-release.build.log
+          if-no-files-found: ignore
+          retention-days: 14

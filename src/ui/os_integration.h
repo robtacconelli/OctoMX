@@ -5,6 +5,8 @@
 //   Windows   HKCU\Software\Microsoft\Windows\CurrentVersion\Run  "OctoMX"
 //             HKCU\Software\Classes\magnet | ed2k  (URL protocol, shell\open\command)
 //             HKCU\Software\Classes\.torrent -> OctoMX.torrent
+//   macOS     ~/Library/LaunchAgents/io.github.robtacconelli.octomx.plist; Launch Services for the
+//             links and .torrent files declared in Info.plist ([mac-1], os_integration_mac.cpp)
 //   Linux     $XDG_CONFIG_HOME/autostart/octomx.desktop
 //             $XDG_DATA_HOME/applications/octomx.desktop (MimeType=...) + default handler in
 //             $XDG_CONFIG_HOME/mimeapps.list (through xdg-mime when installed)
@@ -40,13 +42,19 @@ public:
         bool runXdgTools = true;    // xdg-mime / update-desktop-database (env redirected to the roots)
         // registry backend: an INI file instead of HKCU\Software (tests / sandboxes)
         QString registryIni;
+        // [mac-1] macOS backend: the LaunchAgents folder (default ~/Library/LaunchAgents) and an INI
+        // file in place of Launch Services (tests / sandboxes; empty = the real Launch Services)
+        QString launchAgentsDir;
+        QString launchServicesIni;
     };
 
-    // The native backend of this platform (Windows registry or XDG).
+    // The native backend of this platform (Windows registry, macOS or XDG).
     static OsIntegration *createNative(const Options &o, QObject *parent = nullptr);
     // Registry layout over HKCU\Software (Windows) or the INI file in o.registryIni (any platform).
     static OsIntegration *createRegistry(const Options &o, QObject *parent = nullptr);
     static OsIntegration *createXdg(const Options &o, QObject *parent = nullptr);
+    // [mac-1] LaunchAgent + Launch Services (any platform with o.launchServicesIni, for tests)
+    static OsIntegration *createMac(const Options &o, QObject *parent = nullptr);
     static OsIntegration *createFake(QObject *parent = nullptr);
     // What main() uses: env MX_OS_INTEGRATION = native | fake | off, MX_OS_ROOT = redirect root;
     // `sandboxed` (demo / script / screenshot runs) selects the fake backend unless redirected.

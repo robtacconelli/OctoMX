@@ -173,7 +173,7 @@ void Library::start()
             if (!under || r.hashes.ed2k.isEmpty()) continue;
             Entry e;
             e.file.path = r.path;
-            e.file.name = QFileInfo(r.path).fileName();
+            e.file.name = QFileInfo(r.path).fileName().normalized(QString::NormalizationForm_C);   // [mac-1] NFC (macOS: NFD names)
             e.file.size = r.size;
             e.file.mtime = QDateTime::fromMSecsSinceEpoch(r.mtimeMs);
             e.file.type = mediaTypeForFileName(e.file.name);
@@ -590,7 +590,7 @@ void Library::onScanDone()
             }
             Entry e;
             e.file.path = item.path;
-            e.file.name = QFileInfo(item.path).fileName();
+            e.file.name = QFileInfo(item.path).fileName().normalized(QString::NormalizationForm_C);   // [mac-1] NFC (macOS: NFD names)
             e.file.size = item.size;
             e.file.mtime = QDateTime::fromMSecsSinceEpoch(item.mtimeMs);
             e.file.type = mediaTypeForFileName(e.file.name);
@@ -812,7 +812,7 @@ void Library::onHashed(const HashResult &r)
             if (it == m_entries.end() && priority) {
                 Entry e;
                 e.file.path = r.path;
-                e.file.name = QFileInfo(r.path).fileName();
+                e.file.name = QFileInfo(r.path).fileName().normalized(QString::NormalizationForm_C);   // [mac-1] NFC (macOS: NFD names)
                 e.file.type = mediaTypeForFileName(e.file.name);
                 e.shared = isUnderSharedFolder(r.path);
                 it = m_entries.insert(r.path, e);
@@ -855,7 +855,7 @@ void Library::onHashed(const HashResult &r)
         if (priority) {
             SharedFile f;
             f.path = r.path;
-            f.name = QFileInfo(r.path).fileName();
+            f.name = QFileInfo(r.path).fileName().normalized(QString::NormalizationForm_C);   // [mac-1] NFC (macOS: NFD names)
             emit fileHashed(f); // hashed == false tells the requester it failed
         }
     }

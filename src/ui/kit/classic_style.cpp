@@ -4,6 +4,7 @@
 #include <QtGui/QPainter>
 #include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QAbstractItemView>
+#include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMenu>
@@ -129,6 +130,22 @@ int ClassicStyle::styleHint(StyleHint h, const QStyleOption *opt, const QWidget 
         return 0;
     case SH_Widget_Animation_Duration:
         return 0;
+#ifdef Q_OS_MACOS
+    // [mac-1] the classic (Windows) behaviour, not what the macOS platform theme suggests
+    case SH_DialogButtonLayout:
+        return int(QDialogButtonBox::WinLayout);   // OK / Cancel, not Cancel / OK
+    case SH_MessageBox_CenterButtons:
+        return 0;
+    case SH_ScrollBar_Transient:
+        return 0;   // classic scroll bars, never overlay ones
+    case SH_Menu_FlashTriggeredItem:
+    case SH_Menu_FadeOutOnHide:
+    case SH_ComboBox_UseNativePopup:
+    case SH_FocusFrame_AboveWidget:
+        return 0;
+    case SH_TabBar_Alignment:
+        return int(Qt::AlignLeft);
+#endif
     default:
         return QProxyStyle::styleHint(h, opt, w, ret);
     }

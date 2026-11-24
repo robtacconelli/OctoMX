@@ -216,10 +216,14 @@ private slots:
         auto run = [&l](int ms, qint64 ask) {   // eD2k asks for `ask` bytes every 10 ms
             QElapsedTimer t;
             t.start();
+            qint64 next = 0;
             while (t.elapsed() < ms) {
                 const qint64 n = l.acquireFor(RateLimiter::Down, Net::ED2K, ask);
                 if (n > 0) l.accountTraffic(RateLimiter::Down, Net::ED2K, n, n);
-                QThread::msleep(10);
+                // [mac-1] every 10 ms on average: a plain msleep(10) lasts longer on macOS (timer slack)
+                next += 10;
+                const qint64 wait = next - t.elapsed();
+                if (wait > 0) QThread::msleep(quint64(wait));
             }
         };
         run(1500, 300);   // satisfied at ~30 kB/s: libtorrent gets what it leaves (minus a margin)
@@ -229,8 +233,9 @@ private slots:
         const int b2 = l.budgetBps(RateLimiter::Down, Net::BitTorrent);
         QVERIFY2(b2 >= 45000 && b2 <= 55000, qPrintable(QString::number(b2)));
         QTest::qWait(1500);   // nothing moves any more: (nearly) all of it again
-        const int b3 = l.budgetBps(RateLimiter::Down, Net::BitTorrent);
-        QVERIFY2(b3 >= 90000, qPrintable(QString::number(b3)));
+        // [mac-1] the limiter's 1 s tick may land a little later on a busy CI Mac: up to one more second
+        QTRY_VERIFY2_WITH_TIMEOUT(l.budgetBps(RateLimiter::Down, Net::BitTorrent) >= 90000,
+                                  qPrintable(QString::number(l.budgetBps(RateLimiter::Down, Net::BitTorrent))), 1000);
         QTest::qWait(1000);
         QCOMPARE(l.budgetBps(RateLimiter::Down, Net::BitTorrent), 100000);
         QCOMPARE(l.shareBps(RateLimiter::Down, Net::ED2K), 0);
@@ -300,6 +305,8 @@ private slots:
 
     void bitTorrentChargedWithinItsBudget()
     {
+        QElapsedTimer waited;
+        waited.start();
         CoreRateLimiter l(nullptr);
         l.setLimits(100000, 0);
         QCOMPARE(l.budgetBps(RateLimiter::Down, Net::BitTorrent), 100000);
@@ -308,7 +315,9 @@ private slots:
         // local (LAN) class or DHT; only the budget part is charged
         l.accountTraffic(RateLimiter::Down, Net::BitTorrent, 300000, 300000);
         const qint64 c = l.chargedTotal(RateLimiter::Down);
-        QVERIFY2(c >= 90000 && c <= 105000, qPrintable(QString::number(c)));
+        // [mac-1] the budget of the time that really passed (qWait(1000) lasted up to 1.07 s on a CI Mac)
+        const qint64 upper = qMax<qint64>(105000, 100000 * waited.elapsed() / 1000 + 5000);
+        QVERIFY2(c >= 90000 && c <= upper, qPrintable(QStringLiteral("%1 (at most %2)").arg(c).arg(upper)));
         QVERIFY(l.acquire(RateLimiter::Down, 50000) < 2000);   // the others wait
     }
 
@@ -420,6 +429,7 @@ private slots:
         t.start();
         qint64 got = 0;
         int i = 0;
+        qint64 next = 0;
         while (t.elapsed() < 2000) {
             // 5x the limit of search answers next to a greedy transfer
             if (i++ % 2 == 0) {
@@ -432,7 +442,10 @@ private slots:
             const qint64 n = l.acquireFor(RateLimiter::Down, Net::Http, 8192);
             if (n > 0) l.accountTraffic(RateLimiter::Down, Net::Http, n, n);
             got += n;
-            QThread::msleep(2);
+            // [mac-1] every 2 ms on average (macOS sleeps longer than asked)
+            next += 2;
+            const qint64 wait = next - t.elapsed();
+            if (wait > 0) QThread::msleep(quint64(wait));
         }
         const double rate = got * 1000.0 / t.elapsed();
         const qint64 search = l.total(RateLimiter::Down, Net::Kad) + l.total(RateLimiter::Down, Net::Web) + l.total(RateLimiter::Down, Net::Rats);

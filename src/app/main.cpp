@@ -27,6 +27,7 @@
 
 #include "app_log.h"
 #include "mock/mock_core.h"
+#include "mx/app_paths.h"
 #include "mx/legacy_names.h"
 #include "mx/services.h"
 #include "mx/settings_keys.h"
@@ -39,6 +40,7 @@
 #include "ui/kit/theme.h"
 #include "ui/dialogs/legal_notice.h"
 #include "ui/dialogs/setup_wizard.h"
+#include "ui/mac_glue.h"
 #include "ui/main_window.h"
 #include "ui/os_integration.h"
 #include "ui/script_driver.h"
@@ -80,12 +82,18 @@
 #include <windows.h>
 #include <cstdio>
 #endif
+#ifdef Q_OS_MACOS
+#include <CoreFoundation/CoreFoundation.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 
 namespace {
 
 QString defaultProfileDir()
 {
-    const QString exeDir = QCoreApplication::applicationDirPath();
+    // [mac-1] beside the executable; on macOS beside the app bundle
+    const QString exeDir = mx::paths::portableDir();
     if (QFileInfo::exists(QDir(exeDir).filePath(QStringLiteral("portable.txt"))))
         return QDir(exeDir).filePath(QStringLiteral("profile"));
     // [ren-1] <AppData>/OctoMX; the legacy profile folder <AppData>/WinMX of a copy installed before
@@ -120,11 +128,35 @@ const char *dpiAwarenessText()
 #endif
 }
 
+// [mac-1] App Nap: macOS slows down the timers and the network of a program whose windows are hidden
+// or covered; a file-sharing client keeps transferring and serving in the background, as on the
+// other systems. [NSProcessInfo beginActivityWithOptions:reason:] through the Objective-C runtime
+// (NSActivityUserInitiatedAllowingIdleSystemSleep: the Mac may still go to sleep when idle).
+void keepRunningInBackground()
+{
+#ifdef Q_OS_MACOS
+    Class cls = objc_getClass("NSProcessInfo");
+    if (!cls)
+        return;
+    using GetInfo = id (*)(Class, SEL);
+    using Begin = id (*)(id, SEL, unsigned long long, id);
+    id info = reinterpret_cast<GetInfo>(objc_msgSend)(cls, sel_registerName("processInfo"));
+    if (!info)
+        return;
+    const unsigned long long userInitiatedAllowingIdleSleep = 0x00FFFFFFULL & ~(1ULL << 20);
+    CFStringRef reason = CFSTR("OctoMX transfers and shares files in the background");
+    id activity = reinterpret_cast<Begin>(objc_msgSend)(info, sel_registerName("beginActivityWithOptions:reason:"),
+                                                         userInitiatedAllowingIdleSleep, (id)reason);
+    if (activity)
+        CFRetain(reinterpret_cast<CFTypeRef>(activity));   // kept for the life of the process
+#endif
+}
+
 bool exportIcons(const QString &dir)
 {
     QDir().mkpath(dir);
     bool ok = true;
-    for (int s : {16, 20, 24, 32, 40, 48, 64, 128, 256, 512})   // [logo-1] the .ico sizes (tools/make-ico.py) and 512
+    for (int s : {16, 20, 24, 32, 40, 48, 64, 128, 256, 512, 1024})   // [logo-1] the .ico sizes (tools/make-ico.py), [mac-1] 512 and 1024 for the .icns (tools/make-icns.py)
         ok &= mx::ui::iconImage(mx::ui::IconId::App, s).save(QDir(dir).filePath(QStringLiteral("octomx-%1.png").arg(s)));
     // multi-size .ico through Qt's ico writer (one image per call is all it supports): write the
     // 48 px one; tools/make-ico (python) can merge the PNGs if a multi-size file is wanted.
@@ -343,7 +375,9 @@ int verifyCommand(int argc, char **argv)
                                   .arg(m.version, m.platform).arg(m.files.size())
                             : QStringLiteral("MANIFEST.txt: %1").arg(why));
             QStringList extra;
-            QDirIterator it(manifestDir, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+            // [mac-1] symbolic links are not files of the manifest (the framework layout of a macOS app
+            // bundle has them; the other packages have none, tools/release/manifest.sh refuses them)
+            QDirIterator it(manifestDir, QDir::Files | QDir::Hidden | QDir::System | QDir::NoSymLinks, QDirIterator::Subdirectories);
             while (it.hasNext()) {
                 const QString rel = QDir(manifestDir).relativeFilePath(it.next());
                 if (rel != QLatin1String(mx::upd::kManifestName) && !m.contains(rel))
@@ -385,6 +419,7 @@ int main(int argc, char **argv)
     QGuiApplication::setApplicationDisplayName(QString());
     QGuiApplication::setQuitOnLastWindowClosed(false);
     mx::registerMetaTypes();
+    keepRunningInBackground();   // [mac-1]
 
     QCommandLineParser cl;
     cl.setApplicationDescription(QStringLiteral("OctoMX %1: a file-sharing client with the classic WinMX-style interface.")
@@ -450,6 +485,10 @@ int main(int argc, char **argv)
     QStringList earlyLinks;
     QMetaObject::Connection earlyConn = QObject::connect(&single, &mx::app::SingleInstance::linksReceived, &app,
                                                          [&earlyLinks](const QStringList &l) { earlyLinks << l; });
+    // [mac-1] links and .torrent files the system hands over (macOS: QFileOpenEvent), also at start
+    mx::ui::OpenEventFilter openEvents(&app);
+    QMetaObject::Connection earlyOpenConn = QObject::connect(&openEvents, &mx::ui::OpenEventFilter::linksReceived, &app,
+                                                             [&earlyLinks](const QStringList &l) { earlyLinks << l; });
 
 #ifdef MX_HAVE_CORE
     if (!cl.isSet(oDemo))
@@ -554,6 +593,7 @@ int main(int argc, char **argv)
 
     if (os && tray)
         tray->setOsIntegration(os);
+    mx::ui::installMacGlue(mw);   // [mac-1] menu bar, Dock, red button (macOS only)
     if (cl.isSet(oSize)) {
         const QStringList wh = cl.value(oSize).split(QLatin1Char('x'));
         if (wh.size() == 2)
@@ -583,6 +623,8 @@ int main(int argc, char **argv)
     };
     QObject::connect(mw, &mx::ui::MainWindow::quitRequested, &app, [&] { shutdown(0); });
     QObject::disconnect(earlyConn);
+    QObject::disconnect(earlyOpenConn);
+    QObject::connect(&openEvents, &mx::ui::OpenEventFilter::linksReceived, mw, [mw](const QStringList &l) { mw->addLinks(l); });
     QObject::connect(&single, &mx::app::SingleInstance::linksReceived, mw, [mw](const QStringList &l) {
         qInfo("octomx: %d link(s) forwarded by a second instance", int(l.size()));
         mw->addLinks(l);

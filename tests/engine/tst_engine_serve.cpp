@@ -336,11 +336,12 @@ void TstEngineServe::closeReasons()
     QTRY_VERIFY_WITH_TIMEOUT(ov->source(QStringLiteral("ovl://bad")) && ov->source(QStringLiteral("ovl://bad"))->closeCode == QLatin1String("banned"), 30000);
     qInfo("banned source was told: %s", qPrintable(ov->source(QStringLiteral("ovl://bad"))->closeText));
     QVERIFY(!ov->source(QStringLiteral("ovl://bad"))->closeText.isEmpty());
-    QTRY_VERIFY_WITH_TIMEOUT(env.info(id).done > 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(env.info(id).done > 0, 30000);   // [mac-1] 18 s on a CI Mac
     env.engine->pause(id);
     QTRY_COMPARE_WITH_TIMEOUT(ov->source(QStringLiteral("ovl://slow"))->closeCode, QStringLiteral("paused"), 5000);
     env.engine->resume(id);
-    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
+    // [mac-1] ~42 s here; the 512 KB/s source (timer driven) is slower on the CI Macs: more than 60 s
+    QVERIFY2(env.waitDone(id, 150000), qPrintable(env.info(id).statusText));
     QCOMPARE(ov->source(QStringLiteral("ovl://slow"))->closeCode, QStringLiteral("done"));
     // cancel
     const QByteArray d2 = randomBytes(P + 3, 511);

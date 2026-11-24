@@ -941,6 +941,11 @@ void buildMiscPages(SettingsDialog *d)
                  QObject::tr("No request at start. Help > Check for Updates... still checks when you ask.")},
             };
             for (const auto &m : modes) {
+#ifdef Q_OS_MACOS
+                // [mac-1] no automatic install on macOS (mx/update_install.h): only the choices that work
+                if (qstrcmp(m.v, "auto") == 0 || qstrcmp(m.v, "ask") == 0)
+                    continue;
+#endif
                 k.radio(m.text, keys::updates::Mode, QString::fromLatin1(m.v), f.left(), f.y, f.width(), 17)->setToolTip(m.tip);
                 f.gap(18);
             }

@@ -1,0 +1,2 @@
+# tools/mac/test-skips.txt: ctest names that tools/mac/test.sh does not run on macOS, with the reason
+# (name<TAB>reason). Keep this list short; every line needs a reason.

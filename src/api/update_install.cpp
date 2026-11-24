@@ -615,10 +615,24 @@ QString platformTag()
 {
 #ifdef Q_OS_WIN
     return QStringLiteral("win64");
+#elif defined(Q_OS_MACOS)
+    return QStringLiteral(MX_MAC_PLATFORM_TAG);   // [mac-1] "macos-universal" (src/api/CMakeLists.txt)
 #else
     return QStringLiteral("linux-x86_64");
 #endif
 }
+
+namespace {
+// [mac-1] "macos-universal" / "macos-arm64" / "macos-x86_64": a folder with OctoMX.app, as a .zip
+bool isMacTag(const QString &platform)
+{
+    return platform.startsWith(QLatin1String("macos"));
+}
+bool zipped(const QString &platform)
+{
+    return platform == QLatin1String("win64") || isMacTag(platform);
+}
+} // namespace
 
 QString packageDirName(const QString &version, const QString &platform)
 {
@@ -630,7 +644,7 @@ QString packageDirName(const QString &version, const QString &platform)
 
 bool isPackageArchiveName(const QString &assetName, const QString &platform)
 {
-    const QString ext = platform == QLatin1String("win64") ? QStringLiteral("\\.zip") : QStringLiteral("\\.tar\\.xz");
+    const QString ext = zipped(platform) ? QStringLiteral("\\.zip") : QStringLiteral("\\.tar\\.xz");
     const QRegularExpression re(QStringLiteral("^%1-[0-9.]+-%2%3$")
                                     .arg(QRegularExpression::escape(QLatin1String(kPackageBaseName)), QRegularExpression::escape(platform), ext));
     return re.match(assetName).hasMatch();
@@ -638,17 +652,19 @@ bool isPackageArchiveName(const QString &assetName, const QString &platform)
 
 QString programFile(const QString &platform)
 {
+    if (isMacTag(platform))
+        return QStringLiteral("OctoMX.app/Contents/MacOS/octomx");
     return platform == QLatin1String("win64") ? QStringLiteral("octomx.exe") : QStringLiteral("bin/octomx");
 }
 
 QString launcherFile(const QString &platform)
 {
-    return platform == QLatin1String("win64") ? QString() : QStringLiteral("octomx");
+    return platform == QLatin1String("win64") || isMacTag(platform) ? QString() : QStringLiteral("octomx");
 }
 
 QString archiveName(const QString &version, const QString &platform)
 {
-    return packageDirName(version, platform) + (platform == QLatin1String("win64") ? QStringLiteral(".zip") : QStringLiteral(".tar.xz"));
+    return packageDirName(version, platform) + (zipped(platform) ? QStringLiteral(".zip") : QStringLiteral(".tar.xz"));
 }
 
 // [upd-2] the legacy program file names (pre-5.0), kept in a folder that has them (see mx/update_install.h)
@@ -656,6 +672,8 @@ QStringList legacyStarterFiles(const QString &platform)
 {
     if (platform == QLatin1String("win64"))
         return {QStringLiteral("winmx.exe")};
+    if (isMacTag(platform))
+        return {};   // [mac-1] there was no macOS version before 5.0
     return {QStringLiteral("winmx"), QStringLiteral("bin/winmx")};
 }
 
@@ -713,6 +731,16 @@ bool isElf64(const QString &path)
     return h.size() >= 20 && h.startsWith("\x7f" "ELF") && h.at(4) == 2 && le16(reinterpret_cast<const uchar *>(h.constData()) + 18) == 62;
 }
 
+// [mac-1] a Mach-O program: universal (fat) or 64-bit thin
+bool isMachO(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray h = f.read(4);
+    return h == QByteArray("\xca\xfe\xba\xbe", 4) || h == QByteArray("\xcf\xfa\xed\xfe", 4);
+}
+
 bool startsWithShebang(const QString &path)
 {
     QFile f(path);
@@ -727,6 +755,12 @@ QString programDirOf(const QString &appDir, const QString &platform)
     const QString d = QDir::cleanPath(QFileInfo(appDir).absoluteFilePath());
     if (platform == QLatin1String("win64"))
         return d;
+    if (isMacTag(platform)) {
+        // [mac-1] <package>/OctoMX.app/Contents/MacOS
+        if (!d.endsWith(QLatin1String(".app/Contents/MacOS")))
+            return QString();
+        return QDir::cleanPath(d + QStringLiteral("/../../.."));
+    }
     if (QFileInfo(d).fileName() != QLatin1String("bin"))
         return QString();
     return QDir::cleanPath(d + QStringLiteral("/.."));
@@ -737,6 +771,15 @@ Layout detectLayout(const QString &appDir, const QString &platform)
     Layout l;
     const bool win = platform == QLatin1String("win64");
     QString prog = QDir::cleanPath(QFileInfo(appDir).absoluteFilePath());
+    if (isMacTag(platform)) {
+        // [mac-1] not proven on a Mac yet (a bundle replaced at quit, its signature and the quarantine
+        // flag): the update box offers the download page
+        l.programDir = programDirOf(appDir, platform);
+        l.exe = l.programDir.isEmpty() ? QString() : QDir(l.programDir).filePath(programFile(platform));
+        l.why = QStringLiteral("The macOS version of OctoMX does not install updates by itself yet: download the new version "
+                               "from the release page and replace OctoMX.app with it (your profile and downloads stay where they are).");
+        return l;
+    }
     if (!win) {
         if (QFileInfo(prog).fileName() != QLatin1String("bin")) {
             l.why = QStringLiteral("This copy of OctoMX is not one of the published packages (for example a developer build or a "
@@ -818,6 +861,9 @@ bool checkStagedTree(const QString &stageDir, const QString &version, const QStr
     if (platform == QLatin1String("win64")) {
         if (!isPe64(exe))
             return fail(QStringLiteral("%1 of the new package is not a 64-bit Windows program").arg(programFile(platform)));
+    } else if (isMacTag(platform)) {
+        if (!isMachO(exe) || !QFileInfo(exe).isExecutable())
+            return fail(QStringLiteral("%1 of the new package is not a macOS program").arg(programFile(platform)));
     } else {
         const QString launcher = QDir(top).filePath(launcherFile(platform));
         if (!m.contains(launcherFile(platform)) || !startsWithShebang(launcher) || !QFileInfo(launcher).isExecutable())

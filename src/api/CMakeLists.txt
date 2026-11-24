@@ -34,12 +34,27 @@ add_library(mxapi STATIC
     # [ui-j] the trash / Recycle Bin (test seam under MX_OS_ROOT)
     mx/trash.h
     trash.cpp
+    # [mac-1] the program folder as the user sees it (the app bundle on macOS), portable.txt
+    mx/app_paths.h
+    app_paths.cpp
 )
 target_include_directories(mxapi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mxapi PUBLIC Qt6::Core Qt6::Network)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 target_link_libraries(mxapi PRIVATE OpenSSL::Crypto ZLIB::ZLIB)
+if(APPLE)
+    # [mac-1] the package name of this build (mx::upd::platformTag): one universal app, or one architecture
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _mx_narch)
+    if(_mx_narch GREATER 1)
+        set(MX_MAC_PLATFORM_TAG macos-universal)
+    elseif(CMAKE_OSX_ARCHITECTURES)
+        set(MX_MAC_PLATFORM_TAG macos-${CMAKE_OSX_ARCHITECTURES})
+    else()
+        set(MX_MAC_PLATFORM_TAG macos-${CMAKE_SYSTEM_PROCESSOR})
+    endif()
+    target_compile_definitions(mxapi PRIVATE MX_MAC_PLATFORM_TAG="${MX_MAC_PLATFORM_TAG}")
+endif()
 if(WIN32)
     target_link_libraries(mxapi PRIVATE ws2_32 crypt32 bcrypt advapi32 user32)   # static libcrypto needs them
 endif()

@@ -380,7 +380,9 @@ private slots:
         app.mw->checkForUpdates();
         QMessageBox *box = nullptr;
         QTRY_VERIFY((box = app.mw->findChild<QMessageBox *>(QStringLiteral("updateBox"))) && box->isVisible());
+#ifndef Q_OS_MACOS   // [mac-1] Qt leaves the title of a message box empty on macOS (Apple's rule); the frame is native
         QCOMPARE(box->windowTitle(), QStringLiteral("OctoMX"));
+#endif
         QCOMPARE(box->textFormat(), Qt::PlainText);
         QStringList texts;
         for (QAbstractButton *b : box->buttons())
@@ -520,6 +522,9 @@ private:
 private slots:
     void autoModeRestartNow()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the macOS version does not install updates by itself (macNotifyNamesTheFile covers its box)");
+#endif
         if (!m_up) {
             m_key = upd1::Key::make(true);
             m_up = new upd1::Server;
@@ -584,6 +589,9 @@ private slots:
 
     void askModeUpdateNowLater()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the macOS version does not install updates by itself (macNotifyNamesTheFile covers its box)");
+#endif
         Inst in = install(QStringLiteral("ask"));
         UpdateController::setLayoutForTests(in.layout);
         serve(QStringLiteral("/ask"), in);
@@ -627,6 +635,9 @@ private slots:
 
     void notifyModeAndRefusals()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the macOS version does not install updates by itself (macNotifyNamesTheFile covers its box)");
+#endif
         Inst in = install(QStringLiteral("ref"));
         UpdateController::setLayoutForTests(in.layout);
         const QString name = mx::upd::archiveName(in.newVersion);
@@ -703,8 +714,60 @@ private slots:
         clearHooks();
     }
 
+    // [mac-1] the Mac: the check finds the release, the box offers the download page and names the
+    // macOS file, nothing is downloaded, in every mode (auto / ask behave like notify)
+    void macNotifyNamesTheFile()
+    {
+#ifndef Q_OS_MACOS
+        QSKIP("macOS only");
+#else
+        if (!m_up) {
+            m_key = upd1::Key::make(true);
+            m_up = new upd1::Server;
+        }
+        Inst in = install(QStringLiteral("mac"));
+        QVERIFY(!in.layout.ok);   // a folder of the Mac: never installed by the program
+        UpdateController::setLayoutForTests(in.layout);
+        const QString name = mx::upd::archiveName(in.newVersion);
+        QVERIFY2(name.endsWith(QLatin1String("-macos-universal.zip")) || name.contains(QLatin1String("-macos-")), qPrintable(name));
+        uib::App app;
+        app.start(m_dir.filePath(QStringLiteral("p-mac")));
+        UpdateController *uc = UpdateController::of(app.mw);
+        Settings *s = app.core->settings();
+        QCOMPARE(uc->mode(), QStringLiteral("notify"));   // the default on macOS
+        QList<UpdateController::Offer> offers;
+        UpdateController::s_offerHook = [&](const UpdateController::Offer &o) {
+            offers << o;
+            return int(UpdateController::RemindLater);
+        };
+        QSignalSpy done(uc, &UpdateController::checkFinished);
+        serve(QStringLiteral("/mac"), in);
+        for (const char *mode : {"notify", "auto", "ask"}) {
+            s->setValue(QString(keys::updates::Mode), QString::fromLatin1(mode));
+            s->setValue(QString(keys::updates::Url), m_up->url(QStringLiteral("/mac/latest")));
+            s->setValue(QString(keys::updates::LastCheck), QString());
+            uc->scheduleStartCheck(0);
+            QVERIFY2(done.wait(10000), mode);
+            QVERIFY2(!offers.isEmpty(), mode);
+            QCOMPARE(int(offers.last().kind), int(UpdateController::Kind::Notify));
+            QVERIFY2(offers.last().text.contains(QStringLiteral("The file for this Mac on the download page: ") + name), qPrintable(offers.last().text));
+            if (qstrcmp(mode, "notify") != 0)
+                QVERIFY2(offers.last().reason.contains(QStringLiteral("does not install updates by itself")), qPrintable(offers.last().reason));
+            QVERIFY(!offers.last().pageUrl.isEmpty());
+        }
+        QCOMPARE(m_up->count(QStringLiteral("/mac/a/SHA256SUMS")), 0);
+        QCOMPARE(m_up->count(QStringLiteral("/mac/a/") + name), 0);
+        QVERIFY(!UpdateController::hasPendingInstall());
+        app.stop();
+        clearHooks();
+#endif
+    }
+
     void readySkipThisVersion()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the macOS version does not download updates, so it never has one ready");
+#endif
         Inst in = install(QStringLiteral("skip"));
         UpdateController::setLayoutForTests(in.layout);
         serve(QStringLiteral("/s"), in);
@@ -741,12 +804,22 @@ private slots:
         QCOMPARE(app.core->settings()->s(keys::updates::Mode), QStringLiteral("off"));
         UpdateController *uc = UpdateController::of(app.mw);
         QCOMPARE(uc->mode(), QStringLiteral("off"));
+#ifdef Q_OS_MACOS
+        QCOMPARE(settingDefault(keys::updates::Mode).toString(), QStringLiteral("notify"));   // [mac-1]
+#else
         QCOMPARE(settingDefault(keys::updates::Mode).toString(), QStringLiteral("auto"));
+#endif
         // Settings > Miscellaneous > System Integration: four radios, each with a tool tip
         {
             SettingsDialog d(app.core, app.mw);
             QVERIFY(d.showPage(QStringLiteral("misc/system")));
+#ifdef Q_OS_MACOS   // [mac-1] only what works on a Mac
+            for (const char *m : {"auto", "ask"})
+                QVERIFY2(!d.findChild<QRadioButton *>(QStringLiteral("set_updates_mode_") + QString::fromLatin1(m)), m);
+            for (const char *m : {"notify", "off"}) {
+#else
             for (const char *m : {"auto", "ask", "notify", "off"}) {
+#endif
                 auto *r = d.findChild<QRadioButton *>(QStringLiteral("set_updates_mode_") + QString::fromLatin1(m));
                 QVERIFY2(r, m);
                 QVERIFY2(!r->toolTip().isEmpty(), m);
@@ -778,6 +851,10 @@ private slots:
             {"updated", "updatedBox", {QStringLiteral("updatedWhatsNew"), QStringLiteral("updatedOk")}},
         };
         for (const Want &w : wants) {
+#ifdef Q_OS_MACOS
+            if (qstrcmp(w.kind, "updated") != 0)
+                continue;   // [mac-1] Update Now / ready / progress boxes do not exist on macOS (no install by itself)
+#endif
             uc->showDemoBox(QString::fromLatin1(w.kind), r);
             QWidget *box = nullptr;
             QTRY_VERIFY((box = app.mw->findChild<QWidget *>(QString::fromLatin1(w.box))) && box->isVisible());

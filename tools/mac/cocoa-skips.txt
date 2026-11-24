@@ -1,0 +1,1 @@
+# tools/mac/cocoa-skips.txt: UI tests not run a second time with the Cocoa platform (name<TAB>reason)

@@ -283,6 +283,9 @@ private slots:
 
     void stagedTreeAndLayout()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the program folder swap is not used on macOS (no install by itself; the macOS package checks: tst_mac)");
+#endif
         const QString stage = m_dir.filePath(QStringLiteral("stage1"));
         const QString top = QDir(stage).filePath(packageDirName(kNew));
         upd1::writePackage(top, kNew, upd1::packageFiles(kNew));
@@ -457,6 +460,9 @@ private slots:
 
     void swapComplete()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the program folder swap is not used on macOS (no install by itself; the macOS package checks: tst_mac)");
+#endif
         const Fixture fx = makeFixture(m_dir.filePath(QStringLiteral("swap0")));
         QVERIFY(wholeAs(fx, false).isEmpty());
         QString why;
@@ -481,6 +487,9 @@ private slots:
 
     void swapCrashAtEveryStep()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the program folder swap is not used on macOS (no install by itself; the macOS package checks: tst_mac)");
+#endif
         // a crash (kill) after every single file operation of the swap; the next start finishes it
         int total = -1;
         for (int crash = 0; crash < 200; ++crash) {
@@ -512,6 +521,9 @@ private slots:
 
     void swapRollBack()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the program folder swap is not used on macOS (no install by itself; the macOS package checks: tst_mac)");
+#endif
         // the staged files are gone after a crash (deleted by hand, a full disk): the old version comes back
         for (int crash : {1, 3, 6, 9, 12, 15}) {
             for (bool shared : {false, true}) {   // a file only the new version has / one both have
@@ -544,6 +556,9 @@ private slots:
 
     void swapErrorIsUndone()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("the program folder swap is not used on macOS (no install by itself; the macOS package checks: tst_mac)");
+#endif
         // a foreign file where the new version wants to put one: nothing is changed at all
         {
             Fixture fx = makeFixture(m_dir.filePath(QStringLiteral("inway")));

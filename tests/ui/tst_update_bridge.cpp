@@ -203,6 +203,9 @@ private slots:
 
     void bridgedLayout()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("folders of copies before 5.0 exist only on Windows and Linux, and macOS does not install updates by itself");
+#endif
         const Fx fx = bridgedFx(m_dir.filePath(QStringLiteral("lay")));
         const QString appDir = kWin ? fx.prog : QDir(fx.prog).filePath(QStringLiteral("bin"));
         const Layout l = detectLayout(appDir);
@@ -220,6 +223,9 @@ private slots:
 
     void startersKeptByNormalUpdates()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("folders of copies before 5.0 exist only on Windows and Linux, and macOS does not install updates by itself");
+#endif
         Fx fx = bridgedFx(m_dir.filePath(QStringLiteral("keep")));
         QString why;
         QVERIFY2(swapInstall(fx.plan(), &why), qPrintable(why));
@@ -260,6 +266,9 @@ private slots:
 
     void changedStarterIsTheUsers()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("folders of copies before 5.0 exist only on Windows and Linux, and macOS does not install updates by itself");
+#endif
         // the user replaced a starter file: it stays where it is, but is no longer listed as ours
         Fx fx = bridgedFx(m_dir.filePath(QStringLiteral("changed")));
         const QString f = starterFiles().firstKey();
@@ -285,6 +294,9 @@ private slots:
 
     void packageWithTheStarterNameReplacesIt()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("folders of copies before 5.0 exist only on Windows and Linux, and macOS does not install updates by itself");
+#endif
         // a later package that has a file of that name itself: an ordinary file of the package
         QMap<QString, QByteArray> newFiles = merged(upd1::packageFiles(QStringLiteral("5.1.0")), starterFiles());
         for (auto it = newFiles.begin(); it != newFiles.end(); ++it)
@@ -305,6 +317,9 @@ private slots:
 
     void startersSurviveCrashesAndRollBack()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("folders of copies before 5.0 exist only on Windows and Linux, and macOS does not install updates by itself");
+#endif
         // a crash after every single file operation of 5.0 -> 5.1 in such a folder, then the next start
         int total = -1;
         for (int crash = 0; crash < 200; ++crash) {
@@ -352,6 +367,9 @@ private slots:
 
     void journalWrittenBy45()
     {
+#ifdef Q_OS_MACOS
+        QSKIP("folders of copies before 5.0 exist only on Windows and Linux, and macOS does not install updates by itself");
+#endif
         // exactly what version 4.5 leaves after "Restart Now" (git show v4.5.0:src/api/update_install.cpp):
         // the new files in place, the old files in .old-4.5.0/, the staging folder emptied, and the
         // journal "committed"; the first start of this version removes the old files and reports it

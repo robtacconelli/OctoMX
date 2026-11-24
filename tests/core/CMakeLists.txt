@@ -47,6 +47,7 @@ endif()
 mx_core_test(tst_glue3)
 # diag-1: Connection Test (rules, masking, report text, port mapper against a fake router, manager)
 mx_core_test(tst_diag)
+mx_core_test(tst_mac_core)   # [mac-1] macOS firewall answers, default route, NFD names
 if(TARGET tst_diag)
     target_link_libraries(tst_diag PRIVATE Qt6::Network)
 endif()

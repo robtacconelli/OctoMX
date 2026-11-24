@@ -596,6 +596,8 @@ OsIntegration *OsIntegration::createNative(const Options &o, QObject *parent)
 {
 #ifdef Q_OS_WIN
     return createRegistry(o, parent);
+#elif defined(Q_OS_MACOS)
+    return createMac(o, parent);
 #else
     return createXdg(o, parent);
 #endif
@@ -615,6 +617,12 @@ OsIntegration *OsIntegration::createForApp(bool sandboxed, const QStringList &ex
 #ifdef Q_OS_WIN
         if (mode != QLatin1String("native"))
             o.registryIni = QDir(root).filePath(QStringLiteral("registry.ini"));
+#endif
+        // [mac-1] the LaunchAgent under the root; Launch Services only when asked for (native)
+        o.launchAgentsDir = QDir(root).filePath(QStringLiteral("LaunchAgents"));
+#ifdef Q_OS_MACOS
+        if (mode != QLatin1String("native"))
+            o.launchServicesIni = QDir(root).filePath(QStringLiteral("launchservices.ini"));
 #endif
         return createNative(o, parent);
     }

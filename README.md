@@ -90,6 +90,7 @@ built-in demo data:
 |---|---|
 | **Windows** | Unzip `OctoMX-5.3-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
 | **Linux** | `tar xf OctoMX-5.3-linux-x86_64.tar.xz` and run `OctoMX-5.3-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
+| **macOS** | Unzip `OctoMX-5.3-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
 
 `SHA256SUMS` next to the archives has their checksums.
 
@@ -153,9 +154,10 @@ part files of unfinished downloads and the log (`logs/octomx.log`).
 
 * Windows: `%APPDATA%\OctoMX`
 * Linux: `~/.local/share/OctoMX`
+* macOS: `~/Library/Application Support/OctoMX`
 * `--profile <dir>` uses any other folder, for example for a second identity or for tests.
 * A file named `portable.txt` next to the executable makes it use `profile/` next to the
-  executable (a portable install).
+  executable (a portable install); on macOS both go next to `OctoMX.app`.
 
 Completed downloads go to `Downloads/OctoMX` in your home folder unless you choose another
 folder in the wizard or the settings.

@@ -38,3 +38,15 @@ if(WIN32)
     # the resource compiler does not report the icon as a dependency: rebuild the resources when it changes
     set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/octomx.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/res/octomx.ico)
 endif()
+
+if(APPLE)
+    # [mac-1] bin/octomx.app (OctoMX.app in the package, tools/mac/package.sh): Info.plist from the
+    # project version (URL schemes, .torrent documents, local network text), icon from tools/make-icns.py
+    set_target_properties(octomx PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/res/Info.plist.in)
+    target_sources(octomx PRIVATE res/octomx.icns)
+    set_source_files_properties(res/octomx.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    # App Nap opt-out through the Objective-C runtime (main.cpp keepRunningInBackground)
+    target_link_libraries(octomx PRIVATE "-framework Foundation" objc)
+endif()

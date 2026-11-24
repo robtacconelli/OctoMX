@@ -19,6 +19,12 @@ mx_ui_test(tst_piece_bar)   # [ui-i] the download bar as a map of the file
 mx_ui_test(tst_colors)
 mx_ui_test(tst_smoke)
 mx_ui_test(tst_perf)
+mx_ui_test(tst_mac)   # [mac-1] bundle paths, macOS package names, LaunchAgent, Launch Services seam, open events
+mx_ui_test(tst_mac_release)   # [mac-1] a release with three archives: asset choice per platform, --verify-update
+if(TARGET octomx)
+    target_compile_definitions(tst_mac_release PRIVATE MX_OCTOMX_EXE="$<TARGET_FILE:octomx>")
+    add_dependencies(tst_mac_release octomx)
+endif()
 
 # [ui-c] Settings dialog, wizard, tray/close, OS integration, restart tests
 include(${CMAKE_CURRENT_SOURCE_DIR}/ui_c_tests.cmake OPTIONAL)

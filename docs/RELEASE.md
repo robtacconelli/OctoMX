@@ -160,6 +160,53 @@ to A in `MX_UPDATE_TEST_PUBKEY`, which only builds with test hooks read.
 The real-core run of the verification has no update check (`updates/mode` off) and
 `MX_OVERLAY_DISCOVERY=0`: a release run contacts neither GitHub nor the live OctoMX network.
 
+## The macOS package [mac-1]
+
+This Linux machine cannot build Mac programs, so the Mac package comes from GitHub Actions
+(`.github/workflows/macos.yml`, workflow "macOS"): one universal app (arm64 + x86_64), built and
+tested on an Intel runner (`macos-15-intel`) and on an Apple Silicon runner (`macos-26`; `macos-15` arm64 jobs were not picked up for lack of capacity). Every
+step is a script in `tools/mac/` that also runs by hand on a Mac:
+
+| step | script | what |
+|---|---|---|
+| Qt + static libraries | `tools/mac/deps.sh` | Qt 6.12.1 (the version of the other platforms) for macOS with aqtinstall (the pinned commit of `install-toolchain.sh`), zlib / OpenSSL / Boost headers / libtorrent with the versions and SHA-256 pins of `tools/build-third-party.sh`, universal; cached by the workflow |
+| test build | `tools/mac/build.sh build/mac` | RelWithDebInfo with tests, universal, ccache |
+| release build | `tools/mac/build.sh build/mac-release --release` | Release `-O2 -g`, `MX_BUILD_TESTS=OFF`, `MX_TEST_HOOKS=OFF` |
+| package | `tools/mac/package.sh build/mac-release out/package` | `OctoMX.app` (macdeployqt, only the plugins we use, fonts and notices in `Contents/Resources`, `notices.sh mac`), ad-hoc signature, `MANIFEST.txt` beside the app (`tools/mac/manifest.sh`), `OctoMX-<X.Y>-macos-universal.zip` (ditto), `octomx.dSYM.zip` (keep it, not shipped) |
+| verification | `tools/mac/verify.sh <zip> out/verify` | unpacks the zip, Info.plist, architectures and links of every Mach-O file, codesign / spctl, no test hooks, `octomx --verify-manifest`, a demo start with the real Cocoa platform |
+| tests | `tools/mac/test.sh`, `tools/mac/test-cocoa.sh` | the whole ctest suite (offscreen), the UI tests again with Cocoa; skips with reasons in `tools/mac/test-skips.txt` |
+| screenshots | `tools/mac/shots.sh` | the real app (Cocoa), 1x and `QT_SCALE_FACTOR=2` |
+| live smoke test | `tools/mac/smoke.sh` | the packaged app with the real core and networks, a Big Buck Bunny download from a merged row (mxcli), the Internet Archive file through the HTTP network with its SHA-1 checked |
+
+**For a release commit:**
+
+1. Start the workflow for the commit (or tag) that is being released:
+   `gh workflow run macOS --ref main -f ref=<commit sha>` (any branch that has the
+   workflow file works as `--ref`; the `ref` input is what gets built). `gh run watch <run id>`.
+2. When the run is green: `tools/release/fetch-mac.sh <run id>` downloads the package artifact
+   (`octomx-macos-package-built-on-arm64`, else `-x86_64`), checks that the run built HEAD and
+   that the version matches, unpacks it here with its symbolic links, checks every file against
+   `MANIFEST.txt` (`tools/mac/check-manifest.py`), reads `Info.plist` back and prints the
+   signature lines of the run, then copies `OctoMX-<X.Y>-macos-universal.zip` into `dist/`.
+3. `tools/release.sh` as usual: `SHA256SUMS` lists the macOS zip next to the Windows and Linux
+   archives (same version), and `sign.sh` signs it with the others.
+4. Upload the zip with the other assets.
+
+**Minimum macOS: 14.4**, the version the Qt 6.12.1 frameworks are built for (their LC_BUILD_VERSION);
+`tools/mac/build.sh` reads it and puts it in `LSMinimumSystemVersion`.
+
+**Signing.** The app has an ad-hoc signature (`codesign -s -`): no Apple Developer account. Users
+open it the first time with right-click > Open (README-mac.txt says so). The hook for a Developer
+ID is in `package.sh` and off: `MX_MAC_SIGN_IDENTITY` (a certificate in the keychain: hardened
+runtime + timestamp) and `MX_MAC_NOTARY_PROFILE` (notarytool + stapler). To switch it on later,
+import the certificate into a temporary keychain in the workflow from the repository settings; nothing
+else changes.
+
+**Updates on macOS.** The update check and the box work as on the other platforms; the asset
+name is `OctoMX-<X.Y>-macos-universal.zip` (`mx::upd::archiveName`). The Mac version does not
+replace its own bundle (not proven on a real Mac: the swap of a signed bundle, the quarantine flag),
+so it offers the download page and says why; Settings shows only "Only tell me" and "Do not check".
+
 ## Folders with legacy starter files [upd-2]
 
 Copies installed before 5.0 could update themselves to 5.0 only through packages under the old

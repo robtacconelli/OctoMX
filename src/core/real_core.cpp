@@ -17,6 +17,7 @@
 #include "core/upload_tracker.h"
 #include "core/user_manager.h"
 
+#include "mx/app_paths.h"
 #include "mx/legacy_names.h"
 #include "mx/settings_keys.h"
 
@@ -39,7 +40,7 @@ bool RealCore::isolatedProfile(const QString &profileDir)
     // [ren-1] the standard folder (<AppData>/OctoMX) and the legacy one next to it (<AppData>/WinMX)
     const QString def = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     if (legacy::isStandardProfileDir(p, def)) return false;
-    const QString exeDir = QCoreApplication::applicationDirPath();
+    const QString exeDir = paths::portableDir();   // [mac-1] beside the app bundle on macOS
     if (!exeDir.isEmpty() && QFileInfo::exists(QDir(exeDir).filePath(QStringLiteral("portable.txt")))
         && p == QDir::cleanPath(QDir(exeDir).filePath(QStringLiteral("profile"))))
         return false;

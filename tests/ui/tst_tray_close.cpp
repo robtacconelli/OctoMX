@@ -207,9 +207,12 @@ private slots:
                 QTest::qWait(60);
                 QVERIFY2(!m_tray->isHiddenToTray(), action);
                 QVERIFY2(m_mw->isVisible(), action);   // a task bar button, not hidden
-                QVERIFY2(m_mw->isMinimized(), action);
+                QTRY_VERIFY2(m_mw->isMinimized(), action);   // [mac-1] Cocoa minimises with an animation
                 m_mw->showNormal();
                 QTRY_VERIFY(!m_mw->isMinimized());
+#ifdef Q_OS_MACOS
+                QTest::qWait(700);   // [mac-1] Cocoa ignores a minimise while the restore animation runs
+#endif
             }
         QCOMPARE(m_promptCalls, before);   // a minimise never asks
         TrayController::setPromptHook({});

@@ -573,6 +573,14 @@ void UpdateController::offer(const ReleaseInfo &r, Kind kind, const QString &rea
     }
     const QString version = r.version;
     const ReleaseInfo rel = r;
+#ifdef Q_OS_MACOS
+    // [mac-1] no install by itself on macOS: the box names the file to take from the download page
+    if (kind == Kind::Notify) {
+        const ReleaseAsset *a = mx::upd::UpdateDownloader::platformAsset(r, mx::upd::platformTag());
+        o.text += QStringLiteral("\n\n") + (a ? tr("The file for this Mac on the download page: %1").arg(a->name)
+                                               : tr("This release has no macOS package yet."));
+    }
+#endif
     showBox(o, [this, o, version, rel](int a) {
         if (a == OpenPage)
             openPage(o.pageUrl);

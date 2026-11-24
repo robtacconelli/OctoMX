@@ -780,7 +780,14 @@ QList<SettingDef> buildSchema()
     B.s(updates::SkipVersion, QString(), "Version the user chose to skip");
     B.hide();
     // [upd-1] signed self-update
-    B.e(updates::Mode, QStringLiteral("auto"), L({"auto", "ask", "notify", "off"}), "New versions",
+#ifdef Q_OS_MACOS
+    // [mac-1] the macOS version does not install updates by itself (mx/update_install.h): it tells
+    // (Settings shows only "notify" and "off"; "auto" / "ask" behave like "notify" there)
+    const QString updateModeDefault = QStringLiteral("notify");
+#else
+    const QString updateModeDefault = QStringLiteral("auto");
+#endif
+    B.e(updates::Mode, updateModeDefault, L({"auto", "ask", "notify", "off"}), "New versions",
         L({"Install updates automatically", "Ask before downloading", "Only tell me", "Do not check at start"}));
     B.b(updates::ModeMigrated, false, "Update mode migrated from checkAtStart");
     B.hide();

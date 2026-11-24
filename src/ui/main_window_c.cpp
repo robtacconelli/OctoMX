@@ -252,6 +252,18 @@ void saveFloatingPages(MainWindow *mw)
 
 void MainWindow::closeEvent(QCloseEvent *e)
 {
+#ifdef Q_OS_MACOS
+    // [mac-1] the red button hides the window (the Dock icon brings it back); Quit (Cmd+Q, the Dock)
+    // asks as the close prompt does (mac_glue.cpp)
+    if (e->spontaneous()) {
+        TrayController *t = TrayController::of(this);
+        if (t && !t->isQuitting() && TrayController::trayAvailable()) {
+            t->hideToTray();
+            e->ignore();
+            return;
+        }
+    }
+#endif
     if (handleCloseRequest()) {
         saveState();
         saveFloatingPages(this);

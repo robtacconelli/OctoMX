@@ -42,6 +42,8 @@ void setAskHook(const AskHook &h);
 // line without opening a window. Return false = the start failed.
 using CommandHook = std::function<bool(const QString &program, const QStringList &args, const QString &nativeArgs)>;
 void setCommandHook(const CommandHook &h);
+// [mac-1] a macOS application bundle (a folder "Name.app", started with "open -a"); false elsewhere
+bool isAppBundle(const QString &path);
 // Explorer's arguments for selecting `path` (made native and quoted: names with spaces, commas, "&"
 // or non-ASCII letters select the right file; the path must not be split at a comma)
 QString explorerSelectArguments(const QString &path);

@@ -68,7 +68,7 @@ struct ManifestEntry {
 };
 struct Manifest {
     QString version;     // "4.3.0"
-    QString platform;    // "win64" | "linux-x86_64"
+    QString platform;    // "win64" | "linux-x86_64" | "macos-universal"
     QList<ManifestEntry> files;
     bool contains(const QString &path) const;
     const ManifestEntry *find(const QString &path) const;
@@ -96,17 +96,19 @@ bool untarXz(const QString &archive, const QString &destDir, QString *error = nu
 bool unpackArchive(const QString &archive, const QString &destDir, QString *error = nullptr);
 
 // ---------------------------------------------------------------------------------- layout
-QString platformTag();                                     // this build: "win64" | "linux-x86_64"
+QString platformTag();                                     // this build: "win64" | "linux-x86_64" | "macos-universal" [mac-1]
 // ---- [ren-1] package naming: the ONE place that knows how our packages and program files are
 // named (tools/release/* use the same names).
 inline constexpr const char *kPackageBaseName = "OctoMX";
-// "OctoMX-5.1-win64.zip" / "OctoMX-5.1-linux-x86_64.tar.xz" (major.minor, as tools/release.sh names them)
+// "OctoMX-5.1-win64.zip" / "OctoMX-5.1-linux-x86_64.tar.xz" (major.minor, as tools/release.sh names them) /
+// [mac-1] "OctoMX-5.1-macos-universal.zip" (a folder with OctoMX.app, tools/mac/package.sh)
 QString archiveName(const QString &version, const QString &platform = platformTag());
 // the top folder of the archive: "OctoMX-5.1-win64"
 QString packageDirName(const QString &version, const QString &platform = platformTag());
 // a release asset that is a package of this platform, any version ("OctoMX-<v>-<platform>.<ext>")
 bool isPackageArchiveName(const QString &assetName, const QString &platform = platformTag());
-// the program file inside the package folder: "octomx.exe" (Windows) / "bin/octomx" (Linux)
+// the program file inside the package folder: "octomx.exe" (Windows) / "bin/octomx" (Linux) /
+// "OctoMX.app/Contents/MacOS/octomx" (macOS)
 QString programFile(const QString &platform = platformTag());
 // the start script at the top of the package folder: "" (Windows) / "octomx" (Linux)
 QString launcherFile(const QString &platform = platformTag());
@@ -128,7 +130,8 @@ struct Layout {
     Manifest manifest;           // the installed one
 };
 // the package folder for this program folder (Windows: appDir; Linux: appDir/.. when appDir is
-// "bin"), empty when it cannot be one of ours; does not read anything
+// "bin"; macOS: the folder that holds OctoMX.app), empty when it cannot be one of ours; does not read
+// anything. [mac-1] On macOS detectLayout() is never ok: the update box offers the download page.
 QString programDirOf(const QString &appDir, const QString &platform = platformTag());
 // appDir = QCoreApplication::applicationDirPath() of the running program
 Layout detectLayout(const QString &appDir, const QString &platform = platformTag());

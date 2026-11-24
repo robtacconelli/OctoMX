@@ -50,7 +50,8 @@ void record(const QString &what)
 // the first installed desktop sound player
 QString findPlayer()
 {
-    for (const char *p : {"canberra-gtk-play", "paplay", "pw-play", "aplay"}) {
+    // [mac-1] afplay: the macOS command-line player (always there)
+    for (const char *p : {"afplay", "canberra-gtk-play", "paplay", "pw-play", "aplay"}) {
         const QString exe = QStandardPaths::findExecutable(QString::fromLatin1(p));
         if (!exe.isEmpty())
             return exe;

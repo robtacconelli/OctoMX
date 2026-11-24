@@ -113,15 +113,18 @@ void TstEd2k::tagsKnownEncoding()
     Writer w4; writeTag(w4, Tag::makeInt(QByteArray("users"), 2), false);
     QCOMPARE(w4.data(), hx("030500") + QByteArray("users") + hx("02000000"));
     // decoding uint16/uint8/bool types normalises to UINT32
-    Reader r(hx("880200"));   // short-form uint16 with only one value byte -> truncated
+    const QByteArray rBytes = hx("880200");   // [mac-1] the Reader keeps a pointer: no temporary
+    Reader r(rBytes);   // short-form uint16 with only one value byte -> truncated
     Tag t;
     QVERIFY(!readTag(r, &t));
-    Reader r2(hx("8915" "05"));
+    const QByteArray r2Bytes = hx("8915" "05");   // [mac-1] the Reader keeps a pointer: no temporary
+    Reader r2(r2Bytes);
     QVERIFY(readTag(r2, &t));
     QCOMPARE(t.type, quint8(TAGTYPE_UINT32));
     QCOMPARE(t.num, quint64(5));
     // Latin-1 fallback for invalid UTF-8
-    Reader r3(hx("0201000103004162e9"));
+    const QByteArray r3Bytes = hx("0201000103004162e9");   // [mac-1] the Reader keeps a pointer: no temporary
+    Reader r3(r3Bytes);
     QVERIFY(readTag(r3, &t));
     QCOMPARE(t.str, QStringLiteral("Ab\u00e9"));
 }

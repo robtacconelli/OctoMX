@@ -96,6 +96,18 @@ bool startCommand(const QString &program, const QStringList &args, const QString
 }
 } // namespace
 
+// [mac-1] a macOS application bundle (a folder "Name.app"); never on other platforms
+bool isAppBundle(const QString &path)
+{
+#ifdef Q_OS_MACOS
+    const QFileInfo fi(path);
+    return fi.isDir() && fi.fileName().endsWith(QLatin1String(".app"), Qt::CaseInsensitive);
+#else
+    Q_UNUSED(path);
+    return false;
+#endif
+}
+
 void setCommandHook(const CommandHook &h)
 {
     commandHook() = h;
@@ -222,6 +234,10 @@ bool showInFolder(const QString &path, QString *why)
     // Explorer opens the folder with the file selected
     if (startCommand(QStringLiteral("explorer.exe"), {}, explorerSelectArguments(abs)))
         return true;
+#elif defined(Q_OS_MACOS)
+    // [mac-1] Finder opens the folder with the file selected
+    if (startCommand(QStringLiteral("/usr/bin/open"), {QStringLiteral("-R"), abs}))
+        return true;
 #else
     // the desktop file manager selects the file (Nautilus, Dolphin, Nemo, Thunar, Caja ...)
     const QString gdbus = QStandardPaths::findExecutable(QStringLiteral("gdbus"));
@@ -258,7 +274,7 @@ QList<Player> findPlayers()
         return playersHook()();
     QList<Player> out;
     auto add = [&out](const QString &name, const QString &path) {
-        if (path.isEmpty() || !QFileInfo(path).isFile())
+        if (path.isEmpty() || !(QFileInfo(path).isFile() || isAppBundle(path)))
             return;
         for (const Player &p : std::as_const(out))
             if (QFileInfo(p.path).canonicalFilePath() == QFileInfo(path).canonicalFilePath())
@@ -287,6 +303,16 @@ QList<Player> findPlayers()
             add(QString::fromLatin1(k.name), QDir(r).filePath(QString::fromLatin1(k.rel)));
     add(QStringLiteral("mpv"), QStandardPaths::findExecutable(QStringLiteral("mpv")));
     add(QStringLiteral("VLC media player"), QStandardPaths::findExecutable(QStringLiteral("vlc")));
+#elif defined(Q_OS_MACOS)
+    // [mac-1] application bundles (started with "open -a <app> <file>")
+    const QStringList roots = {QStringLiteral("/Applications"), QDir::homePath() + QStringLiteral("/Applications"),
+                               QStringLiteral("/System/Applications")};
+    const struct { const char *name; const char *app; } known[] = {
+        {"IINA", "IINA.app"}, {"VLC media player", "VLC.app"}, {"mpv", "mpv.app"}, {"QuickTime Player", "QuickTime Player.app"}};
+    for (const auto &k : known)
+        for (const QString &r : roots)
+            add(QString::fromLatin1(k.name), QDir(r).filePath(QString::fromLatin1(k.app)));
+    add(QStringLiteral("mpv"), QStandardPaths::findExecutable(QStringLiteral("mpv")));   // Homebrew
 #else
     const struct { const char *name; const char *exe; } known[] = {
         {"VLC media player", "vlc"}, {"mpv", "mpv"}, {"Celluloid", "celluloid"}, {"Videos (Totem)", "totem"}};
@@ -323,16 +349,19 @@ bool previewFile(QWidget *parent, const QString &path, const QString &choice, co
     const QString abs = fi.absoluteFilePath();
     if (choice == QLatin1String("program")) {
         const QFileInfo pi(program);
-        if (program.trimmed().isEmpty() || !pi.isFile())
+        const bool bundle = isAppBundle(program);   // [mac-1] an .app: "open -a <app> <file>"
+        if (program.trimmed().isEmpty() || !(pi.isFile() || bundle))
             return fail(QObject::tr("The preview player \"%1\" was not found. Choose another one in Settings, File Launching, "
                                     "Preview Player.").arg(QDir::toNativeSeparators(program)));
-        if (pi.absoluteFilePath() == abs || mx::preview::isMediaFile(pi.fileName()) || !pi.isExecutable())
+        if (pi.absoluteFilePath() == abs || mx::preview::isMediaFile(pi.fileName()) || (!bundle && !pi.isExecutable()))
             return fail(QObject::tr("\"%1\" is not a program that can play files.").arg(QDir::toNativeSeparators(program)));
         if (hook())
             return hook()(QStringLiteral("preview-with:") + QDir::toNativeSeparators(pi.absoluteFilePath()), abs);
         if (logged(QStringLiteral("preview-with:") + QDir::toNativeSeparators(pi.absoluteFilePath()), abs))
             return true;
-        if (!startCommand(pi.absoluteFilePath(), playerArguments(abs), playerNativeArguments(abs), true))
+        const bool started = bundle ? startCommand(QStringLiteral("/usr/bin/open"), {QStringLiteral("-a"), pi.absoluteFilePath(), abs}, QString(), true)
+                                    : startCommand(pi.absoluteFilePath(), playerArguments(abs), playerNativeArguments(abs), true);
+        if (!started)
             return fail(QObject::tr("\"%1\" could not be started.").arg(QDir::toNativeSeparators(program)));
         return true;
     }
