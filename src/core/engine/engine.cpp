@@ -165,6 +165,10 @@ struct DownloadEngine::Private : public engine::EngineHost {
     qint64 lastNameSearchMs = 0;
     QString requestWhat;                       // [engine-4] downloadNotStarted(): the hit key being downloaded
     QHash<QString, quint64> lastSig;           // signature of the last transferChanged per download
+    // [str-1] the next new download is a stream (setNextStream)
+    bool nextStream = false;
+    int nextStreamFile = -1;
+    QString nextStreamDir;
 
     // A library file seeded as a torrent (bt/seedLibrary or explicit): link its btih with the
     // library's hashes, keep it in HashLinksDao and publish it, so a magnet-only downloader can
@@ -469,7 +473,12 @@ struct DownloadEngine::Private : public engine::EngineHost {
     {
         if (!started || stopped || closing) return;
         QList<Download *> run;
-        for (Download *d : list) if (d->wantsToRun()) run << d;
+        // [str-1] a player waits for a stream: it always runs and takes no place of "downloads at once"
+        for (Download *d : list) {
+            if (!d->wantsToRun()) continue;
+            if (d->streaming()) { if (!d->isActive()) d->activate(); continue; }
+            run << d;
+        }
         std::stable_sort(run.begin(), run.end(), [](Download *a, Download *b) {
             if (a->record().priority != b->record().priority) return a->record().priority > b->record().priority;
             return a->record().sortOrder < b->record().sortOrder;
@@ -617,6 +626,11 @@ struct DownloadEngine::Private : public engine::EngineHost {
     }
     void removeDownload(Download *d, FileRemoval mode)
     {
+        // [str-1] a stream's cache never goes to the trash and is never kept: the stream service deletes it
+        if (d->streamRestricts()) {
+            q->dropStream(d->id());
+            return;
+        }
         const QString id = d->id();
         const QString name = d->record().name;
         const bool finished = d->isFinished();
@@ -1273,11 +1287,18 @@ QString DownloadEngine::download(const DownloadRequest &reqIn)
     r.wantedFiles = req.wantedFiles;
     r.added = QDateTime::currentDateTime();
     r.sortOrder = d->list.isEmpty() ? 0 : d->list.last()->record().sortOrder + 1;
-    const bool paused = req.startPaused || (d->ctx.settings && d->ctx.settings->b(keys::transfers::StartPaused));
+    const bool stream = d->nextStream;   // [str-1]
+    d->nextStream = false;
+    const QString streamDir = stream ? QDir(d->nextStreamDir).filePath(r.id) : QString();
+    if (stream) r.saveDir = streamDir;
+    const bool paused = !stream && (req.startPaused || (d->ctx.settings && d->ctx.settings->b(keys::transfers::StartPaused)));
     r.state = int(paused ? TransferState::Paused : TransferState::Queued);
     r.statusText = transferStateText(TransferState(r.state));
     Download *x = d->adopt(r);
-    if (d->ctx.settings)   // [dl-1] the defaults of the order flags (Settings, File Transfers)
+    if (stream) {
+        QDir().mkpath(streamDir);
+        x->setStream(true, true, d->nextStreamFile, QDir(streamDir).filePath(r.id + QStringLiteral(".part")));
+    } else if (d->ctx.settings)   // [dl-1] the defaults of the order flags (Settings, File Transfers)
         x->setOrder(d->ctx.settings->b(keys::transfers::SequentialDefault), d->ctx.settings->b(keys::transfers::FirstLastDefault), false);
     x->persist(true);
     x->addSources(req.sources, nullptr, true);
@@ -1703,6 +1724,41 @@ QList<PartialFile> DownloadEngine::partialFiles() const
             pf->link = hash::formatEd2kLink(k.rec.name, k.rec.size, k.rec.hashes);
     }
     return out;
+}
+
+// ============================================================================ [str-1] streaming
+
+engine::Download *DownloadEngine::downloadObject(const QString &id) const { return d->byId.value(id); }
+
+void DownloadEngine::setNextStream(int fileIndex, const QString &cacheDir)
+{
+    d->nextStream = true;
+    d->nextStreamFile = fileIndex;
+    d->nextStreamDir = cacheDir;
+}
+
+void DownloadEngine::clearNextStream() { d->nextStream = false; }
+
+QString DownloadEngine::streamCacheRoot() const { return QDir(d->incompleteDir()).filePath(QStringLiteral("Streams")); }
+
+void DownloadEngine::dropStream(const QString &id)
+{
+    Download *x = d->byId.value(id);
+    if (!x) return;
+    x->stopForRemoval(false);
+    d->list.removeAll(x);
+    d->byId.remove(id);
+    d->dirty.remove(id);
+    d->lastEmit.remove(id);
+    d->lastSig.remove(id);
+    if (d->daoPtr) d->daoPtr->remove(id);
+    for (int i = int(d->follows.size()) - 1; i >= 0; --i)
+        if (d->follows.at(i).downloadId == id) d->follows.removeAt(i);
+    x->deleteLater();
+    qCInfo(lcEngine) << "stream" << id << "removed from the list";
+    emit transferRemoved(id, false);
+    d->updatePartials();
+    d->requestRebalance();
 }
 
 } // namespace mx

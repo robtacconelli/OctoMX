@@ -439,6 +439,20 @@ signals:
     void testFinished(bool cancelled);
 };
 
+// ---------------------------------------------------------------- [str-1] the local streaming API
+// What the Settings page shows of it (src/core/stream, docs/API.md).
+struct StreamApiState {
+    bool        available = false;   // this core has the API
+    bool        enabled = false;     // api/enabled
+    bool        listening = false;
+    int         port = 0;
+    QStringList addresses;           // where it listens ("127.0.0.1", "::1", "192.168.1.20")
+    QString     baseUrl;             // "http://127.0.0.1:17580/api/v1/"
+    QString     error;               // why it does not listen ("Port 17580 is in use by another program ...")
+    int         streams = 0;         // open streams
+    int         players = 0;         // player connections reading now
+};
+
 // ---------------------------------------------------------------- the facade
 class Core : public QObject {
     Q_OBJECT
@@ -470,9 +484,12 @@ public:
     virtual bool isMock() const { return false; }
     // [added by diag-1] the Connection Test service; nullptr = not available (old cores)
     virtual DiagnosticsService *diagnostics() { return nullptr; }
+    // [str-1] the local streaming API (off by default; settings api/*): its state for the Settings page
+    virtual StreamApiState streamApiState() const { return {}; }
 signals:
     void statusMessage(const QString &text);                  // status-bar text
     void shutdownFinished();
+    void streamApiChanged();                                  // [str-1] streamApiState() changed
 };
 
 // Factories. createRealCore is defined in src/core (target mxcore); it takes ownership of the

@@ -6,7 +6,8 @@
 file(GLOB MXCORE_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/engine/*.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/diag/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/diag/*.h)   # [diag-1] Connection Test
+    ${CMAKE_CURRENT_SOURCE_DIR}/diag/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/diag/*.h   # [diag-1] Connection Test
+    ${CMAKE_CURRENT_SOURCE_DIR}/stream/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/stream/*.h)   # [str-1] the streaming API
 add_library(mxcore STATIC ${MXCORE_SOURCES})
 # Includes are written as "core/xxx.h" / "core/engine/engine.h".
 target_include_directories(mxcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

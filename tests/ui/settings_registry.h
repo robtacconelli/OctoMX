@@ -133,6 +133,13 @@ inline const Proof kProofs[] = {
     {"web/timeoutSec", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webUserAgentAndSearchTimeout", ""},   // [net-3]
     {"web/probeOnStart", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webIndexCheckAtStart", ""},   // [net-3]
     {"web/trackers", "test", "tests/netpolicy/tst_netsettings_web.cpp", "webResultsAdultWordsAndTrackers", ""},   // [net-3]
+    {"api/enabled", "test", "tests/stream/tst_stream_api.cpp", "onOffPortAndLanAtRunTime", ""},   // [str-1]
+    {"api/port", "test", "tests/stream/tst_stream_api.cpp", "onOffPortAndLanAtRunTime", ""},   // [str-1]
+    {"api/allowLan", "test", "tests/stream/tst_stream_api.cpp", "onOffPortAndLanAtRunTime", ""},   // [str-1]
+    {"api/token", "test", "tests/stream/tst_stream_api.cpp", "newTokenEndsOldLinks", ""},   // [str-1]
+    {"api/cacheLimitMB", "test", "tests/stream/tst_stream_play.cpp", "idleTimeAndCacheLimit", ""},   // [str-1]
+    {"api/idleMin", "test", "tests/stream/tst_stream_play.cpp", "pausedStoppedAndBack", ""},   // [str-1]
+    {"api/keepStreams", "test", "tests/stream/tst_stream_play.cpp", "keepAsDownload", ""},   // [str-1]
     {"rats/enabled", "test", "tests/overlay/tst_netsettings_ovl.cpp", "enabledSwitchesStartAndStop", ""},   // [net-3]
     {"rats/protocol", "internal", "src/net/overlay/overlay_plugin.h", "\"rats/protocol\"", "rats-search protocol id (compatibility with other clients)"},
     {"rats/listenPort", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsListenPortAndBootstrapPeers", ""},   // [net-3]

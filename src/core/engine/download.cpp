@@ -380,6 +380,7 @@ void Download::persist(bool full)
     DownloadsDao *dao = m_host->dao();
     m_lastPersistMs = nowMs();
     m_dirtyBlob = false;
+    if (streamRestricts()) return;   // [str-1] a stream's cache is never stored: no record claims it
     if (Store *s = store()) {
         if (s->kind() == Store::Part)
             m_rec.done = (m_part->scheme() == PartStore::NoUnits) ? m_part->heldBytes() : m_part->verifiedBytes();
@@ -487,7 +488,7 @@ void Download::ensureStore()
 
 void Download::createPartStore()
 {
-    const bool prealloc = m_host->settings() && m_host->settings()->b(keys::transfers::Preallocate);
+    const bool prealloc = !m_streamOn && m_host->settings() && m_host->settings()->b(keys::transfers::Preallocate);   // [str-1] a cache is sparse
     m_partPath = partPath();   // fixed from now on (a later incompleteDir change does not orphan it)
     m_part = std::make_unique<PartStore>(m_host->pool(), m_partPath, m_rec.size > 0 ? m_rec.size : -1, prealloc);
     m_part->restore(m_restoreHeld, m_restoreVerified);
@@ -1512,7 +1513,7 @@ void Download::addSources(const QList<SearchSource> &sources, NetworkPlugin *fro
         m_slots.push_back(std::move(slot));
         toStore << src;
     }
-    if (!toStore.isEmpty() && m_host->dao()) m_host->dao()->addSources(m_rec.id, toStore);
+    if (!toStore.isEmpty() && recordDao()) recordDao()->addSources(m_rec.id, toStore);   // [str-1]
     if (hintsGrew && m_active) findSources(true);
     if (!toStore.isEmpty() && m_deadEnd && m_errorState) {
         qCInfo(lcEngine) << m_rec.id << "new sources after giving up, trying again";
@@ -1621,6 +1622,7 @@ int Download::knownSources() const
 void Download::openMoreSources()
 {
     if (!m_active || isFinished() || m_completing || m_quitting || !store()) return;
+    if (m_streamIdle && streamRestricts()) return;   // [str-1] no player: the sources are let go
     if (m_part && !m_part->acceptingData()) return;
     const Tuning &t = m_host->tuning();
     int limit = t.maxOpenSourcesPerDownload;
@@ -1727,7 +1729,7 @@ void Download::closeSlot(SourceSlot *s, bool failed, const QString &why)
         ++s->failures;
         s->lastError = why.trimmed().isEmpty() ? QStringLiteral("File/User Unavailable") : why.left(80);
         s->retryAtMs = nowMs() + qMin<qint64>(30LL * 60 * 1000, qint64(m_host->tuning().sourceRetryBaseMs) << qMin(s->failures, 6));
-        if (m_host->dao()) m_host->dao()->markSourceFailed(m_rec.id, s->desc.net, s->desc.uri, s->desc.user.id);
+        if (recordDao()) recordDao()->markSourceFailed(m_rec.id, s->desc.net, s->desc.uri, s->desc.user.id);   // [str-1]
         qCDebug(lcEngine) << m_rec.id << "source" << s->key << "closed:" << why;
     }
     emit needsSchedule();
@@ -1769,7 +1771,7 @@ void Download::onSourceState(SourceSlot *s)
         const SearchSource d = rs->descriptor();
         if (d.extra != s->desc.extra && !d.extra.isEmpty()) {
             for (auto it = d.extra.constBegin(); it != d.extra.constEnd(); ++it) s->desc.extra.insert(it.key(), it.value());
-            if (m_host->dao()) m_host->dao()->addSources(m_rec.id, {s->desc});   // etag & co survive a restart
+            if (recordDao()) recordDao()->addSources(m_rec.id, {s->desc});   // etag & co survive a restart [str-1]
         }
         // unknown size / name from an HTTP-like source (http plugin contract)
         if (m_part && !m_torrent) {
@@ -1965,7 +1967,7 @@ void Download::schedule()
     Store *st = store();
     if (!m_active || !st || !st->acceptingData() || m_completing || m_promoting) return;
     if (m_host->bufferedGlobal() > m_host->tuning().maxBufferedBytes) return;
-    const RangeSet target = st->fetchTarget();
+    const RangeSet target = streamTarget(st->fetchTarget());   // [str-1] a stream: only what the players need
     RangeSet inflight;
     for (const auto &s : m_slots) inflight.add(s->inflight());
     if (target.isEmpty()) return;
@@ -1984,7 +1986,8 @@ void Download::schedule()
     if (ready.isEmpty()) return;
     const qint64 left = target.total();
     const bool endgame = freeSet.isEmpty() && !inflight.isEmpty()
-                         && (ext > 0 && (left * 100 <= ext * t.endgamePercent || left <= avgChunk * t.endgameChunks));
+                         && (ext > 0 && (left * 100 <= ext * t.endgamePercent || left <= avgChunk * t.endgameChunks))
+                         && (!streamRestricts() || !m_streamUrgentWaiting.isEmpty());   // [str-1] a stream: only for a waiting player
     const qint64 now = m_lastScheduleMs;
     std::stable_sort(ready.begin(), ready.end(), [now](const SourceSlot *a, const SourceSlot *b) {
         if (a->priority != b->priority) return a->priority > b->priority;   // [glue-2] user priority first
@@ -2081,6 +2084,7 @@ bool Download::pickChunk(SourceSlot *s, const RangeSet &freeSet, const RangeSet 
         RangeSet dup = inflight;
         dup.remove(s->inflight());
         dup.remove(foreignOwned);
+        if (streamRestricts()) dup = dup.intersected(m_streamUrgentWaiting);   // [str-1] what a player waits for, twice at most
         dup = dup.intersected(avail);
         restrictTrust(dup);
         if (dup.isEmpty()) return false;
@@ -2099,7 +2103,7 @@ bool Download::pickChunk(SourceSlot *s, const RangeSet &freeSet, const RangeSet 
     // [dl-1] download order first (sequential / first and last); a priority, never a condition:
     // nothing of it in this source's candidates → rarest-first below
     qint64 bestPos = -1;
-    if ((m_seq || m_firstLast) && orderedStart(s, cand, peerAvail, &bestPos)) {
+    if ((m_seq || m_firstLast || m_streamOn) && orderedStart(s, cand, peerAvail, &bestPos)) {   // [str-1] the players first
         const Range u = st->unitAt(bestPos);
         const qint64 end = qMin(qMin(cand.runEnd(bestPos), bestPos + pref), qMin(qMax(u.second, bestPos + 1), fileEnd));
         if (end > bestPos) {
@@ -2438,6 +2442,7 @@ void Download::publishLinks(const FileHashes &all)
 void Download::maybeComplete()
 {
     if (m_completing || isFinished() || !m_active) return;
+    if (streamRestricts()) return;   // [str-1] a stream's cache never becomes a finished file
     if (m_torrent) {
         if (!m_torrent->hasMetadata() || !m_torrent->snap().finished || m_torrent->reservedCount() != 0) return;
         if (m_checkFirst) return;   // [safe-1] the recheck decides first
@@ -3170,6 +3175,7 @@ void Download::onTorrentChanged()
 void Download::onTorrentPieceFinished(int piece)
 {
     if (m_torrent) m_torrent->onPieceFinished(piece);
+    streamPieceDone(piece);   // [str-1]
 }
 
 void Download::onTorrentPieceFailed(int piece)
@@ -3388,7 +3394,7 @@ void Download::setState(TransferState st, const QString &text)
     m_rec.state = int(st);
     m_rec.statusText = text;
     if (changed) {
-        if (m_host->dao()) m_host->dao()->updateProgress(m_rec.id, m_rec.state, m_rec.done, m_rec.statusText);
+        if (recordDao()) recordDao()->updateProgress(m_rec.id, m_rec.state, m_rec.done, m_rec.statusText);   // [str-1]
         markDirty(true);
     }
 }
@@ -3698,6 +3704,10 @@ TransferInfo Download::info() const
         t.statusText = m_verify.running ? t.statusText + QStringLiteral(" (OctoMX was not closed properly)")
                                         : (m_userPaused ? QStringLiteral("Paused, waiting to be checked (OctoMX was not closed properly)")
                                                         : QStringLiteral("Waiting to be checked (OctoMX was not closed properly)"));
+    if (m_streamOn && !m_streamNote.isEmpty() && !isFinished()) {   // [str-1] what the API does with it
+        t.statusText = m_streamRestrict ? m_streamNote : m_streamNote + QStringLiteral(" (") + t.statusText + QLatin1Char(')');
+        if (m_streamRestrict) t.etaSec = -1;
+    }
     return t;
 }
 

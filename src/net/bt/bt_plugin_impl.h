@@ -64,6 +64,8 @@ public:
     QByteArray pieceHash(const QString &id, int piece) const override;
     void reservePieces(const QString &id, const QList<int> &pieces, bool reserve) override;
     bool setDownloadOrder(const QString &id, bool sequential, bool firstLast) override;   // [dl-1]
+    bool setStreamPieces(const QString &id, const QList<QPair<int, int>> &pieceDeadlines, bool restrict, int mode) override;   // [str-1]
+    void setStreamCacheDir(const QString &dir) override;   // [str-1]
     void injectPiece(const QString &id, int piece, const QByteArray &data) override;
     bool seedLocalFile(const QString &path, QString *error) override;
     QObject *torrentEvents() override { return m_events; }
@@ -110,6 +112,7 @@ private:
     PluginContext m_ctx;
     QString m_dataDir;
     Config m_cfg;
+    QString m_streamDir;   // [str-1] stream caches: sparse, not persisted
     bool m_inited = false;
     bool m_started = false;
     bool m_quitPrepared = false, m_quitHurry = false;   // [safe-1]

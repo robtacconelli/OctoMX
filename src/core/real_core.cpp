@@ -14,6 +14,7 @@
 #include "core/rate_limiter.h"
 #include "core/search_manager.h"
 #include "core/search_merge.h"
+#include "core/stream/stream_service.h"
 #include "core/upload_tracker.h"
 #include "core/user_manager.h"
 
@@ -136,6 +137,9 @@ RealCore::RealCore(const QString &profileDir, const QList<NetworkPlugin *> &plug
     // [diag-1] Connection Test + the shared port mapper
     m_diag = new DiagnosticsManager(m_settings, m_network, m_engine, m_limiter, m_profile, this);
     m_diag->setTorrentBackend(ctx.torrents);
+    // [str-1] the local streaming API (off by default)
+    m_streams = new stream::StreamService(m_settings, m_search, m_engine, m_network, ctx.torrents, m_profile, this);
+    connect(m_streams, &stream::StreamService::stateChanged, this, &Core::streamApiChanged);
 
     // ---- wiring
     connect(m_library, &Library::sharedFilesUpdated, m_network, &NetworkManager::setSharedFiles);
@@ -176,6 +180,7 @@ RealCore::~RealCore()
     if (m_started && !m_shutDown) {
         // emergency path (no shutdown() called): still persist what we can; [safe-1] the downloads
         // first (sources stop, every part file synced), as in shutdown()
+        m_streams->shutdown();   // [str-1]
         m_engine->shutdown();
         m_diag->shutdown(500);
         m_network->stopAll();
@@ -185,6 +190,7 @@ RealCore::~RealCore()
         m_db->close();
     }
     // explicit reverse-order teardown: plugins and services may use settings/db in their destructors
+    delete m_streams;   // [str-1]
     delete m_diag;
     delete m_engine;
     delete m_chat;
@@ -226,6 +232,7 @@ void RealCore::start()
     m_bandwidth->start();
     m_network->startNetworks();
     m_engine->start();
+    m_streams->start();   // [str-1] after the engine: old stream caches go, the API listens if switched on
     m_diag->start();
     if (!m_settings->b(keys::internal::FirstRunDone)) m_settings->setValue(keys::internal::FirstRunDone, true);
     m_settings->setValue(keys::internal::LastVersion, QStringLiteral(MX_VERSION_STRING));
@@ -238,6 +245,7 @@ void RealCore::beginShutdown()
 {
     if (!m_started || m_shutDown || m_closing) return;
     m_closing = true;
+    m_streams->shutdown();   // [str-1] streams end first (kept as downloads or dropped)
     m_engine->beginShutdown();
     for (NetworkPlugin *p : m_network->plugins()) p->prepareStop(false);
 }
@@ -265,6 +273,8 @@ void RealCore::closeNow()
 
 bool RealCore::lastStopWasUnclean() const { return m_engine->uncleanStart(); }
 
+StreamApiState RealCore::streamApiState() const { return m_streams->state(); }
+
 void RealCore::shutdown()
 {
     if (m_shutDown) {
@@ -275,6 +285,7 @@ void RealCore::shutdown()
     QElapsedTimer t;
     t.start();
     if (m_started) {
+        m_streams->shutdown();   // [str-1]
         m_engine->shutdown();
         m_diag->shutdown(2000);   // [diag-1] remove the router mappings while the sockets still exist
         m_network->stopAll();

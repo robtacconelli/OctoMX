@@ -532,7 +532,9 @@ QString BtPlugin::addParams(std::shared_ptr<lt::add_torrent_params> atp, Record 
         atp->flags |= lt::torrent_flags::disable_pex;
     if (m_cfg.superSeeding)
         atp->flags |= lt::torrent_flags::super_seeding;
-    atp->storage_mode = m_cfg.preallocate ? lt::storage_mode_allocate : lt::storage_mode_sparse;
+    // [str-1] a stream cache is never allocated in full
+    const bool streamCache = !m_streamDir.isEmpty() && QDir::cleanPath(rec.savePath).startsWith(m_streamDir + QLatin1Char('/'));
+    atp->storage_mode = (m_cfg.preallocate && !streamCache) ? lt::storage_mode_allocate : lt::storage_mode_sparse;
     atp->max_connections = m_cfg.maxConnectionsPerTorrent;
     atp->max_uploads = m_cfg.maxUploadsPerTorrent;
     stripWebSeeds(*atp, m_cfg.webSeeds);   // [net-3]
@@ -733,6 +735,24 @@ bool BtPlugin::setDownloadOrder(const QString &id, bool sequential, bool firstLa
     Worker *w = m_worker;
     toWorker([w, id, sequential, firstLast] { w->setOrder(id, sequential, firstLast); });
     return true;
+}
+
+// [str-1] streaming: libtorrent's piece deadlines (time-critical pieces) and piece priorities
+bool BtPlugin::setStreamPieces(const QString &id, const QList<QPair<int, int>> &pieceDeadlines, bool restrict, int mode)
+{
+    if (!m_snap.contains(id))
+        return false;
+    Worker *w = m_worker;
+    toWorker([w, id, pieceDeadlines, restrict, mode] { w->setStream(id, pieceDeadlines, restrict, mode); });
+    return true;
+}
+
+void BtPlugin::setStreamCacheDir(const QString &dir)
+{
+    m_streamDir = QDir::cleanPath(dir);
+    Worker *w = m_worker;
+    const QString d = m_streamDir;
+    toWorker([w, d] { w->setStreamCacheDir(d); });
 }
 
 void BtPlugin::injectPiece(const QString &id, int piece, const QByteArray &data)

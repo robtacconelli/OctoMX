@@ -70,7 +70,7 @@ Range TorrentStore::pieceRange(int p) const
 
 bool TorrentStore::pieceWanted(int p) const
 {
-    return p >= 0 && p < m_wanted.size() && m_wanted.testBit(p);
+    return p >= 0 && p < m_wanted.size() && m_wanted.testBit(p) && (!m_streamRestrict || m_streamSet.contains(p));   // [str-1]
 }
 
 void TorrentStore::fillPads(Piece &pc)
@@ -106,7 +106,9 @@ void TorrentStore::plan(const QList<Lane> &lanes, qint64 nowMs)
                                   : (nowMs - pc.reservedMs > m_tuning->reservationIdleMs
                                      && nowMs - m_lastProgressMs > m_tuning->reservationIdleMs);
         const bool tooOld = nowMs - pc.reservedMs > m_tuning->reservationMaxMs;
-        if (m_snap.have.testBit(p) || idle || tooOld) {
+        // [str-1] a reserved piece no player waits for any more, nothing received yet: back to the pool
+        const bool unwanted = m_streamRestrict && !m_streamSet.contains(p) && !started;
+        if (m_snap.have.testBit(p) || idle || tooOld || unwanted) {
             if (idle || tooOld) {
                 qCInfo(lcEngine) << "torrent" << m_id.left(8) << "reservation of piece" << p << "timed out, returned to libtorrent";
                 m_cooldown.insert(p, nowMs + 4LL * m_tuning->reservationIdleMs);   // let libtorrent have it
@@ -164,6 +166,7 @@ void TorrentStore::plan(const QList<Lane> &lanes, qint64 nowMs)
         taken.insert(p);
         --need;
     };
+    for (int p : std::as_const(m_streamOrder)) consider(p);   // [str-1] the players' pieces first
     QList<Lane> ordered = lanes;
     if (m_seq || m_firstLast)   // [dl-1] the order flags follow the file order of the torrent
         std::sort(ordered.begin(), ordered.end(), [](const Lane &a, const Lane &b) { return a.file < b.file; });

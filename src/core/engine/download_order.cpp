@@ -102,6 +102,10 @@ void Download::applyTorrentOrder()
     if (!m_torrent || m_torrentId.isEmpty() || !m_host->backend()) return;
     m_orderBackendOk = m_host->backend()->setDownloadOrder(m_torrentId, m_seq, m_firstLast);
     m_torrent->setOrder(m_seq, m_firstLast);
+    if (m_streamOn) {   // [str-1] at every (re)attach and when the file list is known: told again
+        m_streamSentMs = 0;
+        applyStreamToTorrent();
+    }
 }
 
 QList<Range> Download::orderFiles() const
@@ -124,6 +128,8 @@ QList<Range> Download::orderFiles() const
 bool Download::orderedStart(SourceSlot *s, const RangeSet &cand, const QList<RangeSet> &peerAvail, qint64 *pos)
 {
     if (cand.isEmpty()) return false;
+    if (m_streamOn && streamStart(s, cand, pos)) return true;   // [str-1] the bytes players wait for, nearest first
+    if (!m_seq && !m_firstLast) return false;
     const QList<Range> files = orderFiles();
     if (files.isEmpty()) return false;
     // rare-part protection (qBittorrent semantics: sequential weakens rarest-first, it does not end

@@ -152,6 +152,24 @@ Each network can be switched on and off on the Networks page and in the settings
 | **Web** | Searches public torrent index sites and the Internet Archive over HTTPS (search only; the results are downloaded through BitTorrent / HTTP). |
 | **Rats** | The rats-search P2P torrent search network (search only). |
 
+## Streaming API (for players and other programs)
+
+OctoMX can serve another program: it searches every network, picks a result and gets a link that any
+video player opens (mpv, VLC, ffplay, a browser). OctoMX then fetches only what the player reads, when
+it reads it (the beginning, the index at the end, sequentially with a buffer ahead, any place after a
+skip), from every network that has the file, and deletes the cache afterwards. **It is off by
+default**: switch it on in Settings, Other Networks, Streaming API, where the access token is shown.
+It listens on this computer only unless you allow your home network. The three calls:
+
+    curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+         -d '{"text": "big buck bunny", "type": "video"}' http://127.0.0.1:17580/api/v1/searches
+    curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:17580/api/v1/searches/1
+    curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+         -d '{"search": 1, "result": "<key>", "file": 1}' http://127.0.0.1:17580/api/v1/streams
+
+The last answer has the `url` for the player. Every call, the status of a stream and the safety rules
+are in [docs/API.md](docs/API.md).
+
 ## Where your data lives (profile)
 
 Everything the program remembers is in one profile folder: settings (`settings.json`), the

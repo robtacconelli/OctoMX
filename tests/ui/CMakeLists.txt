@@ -79,3 +79,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/logo1_tests.cmake OPTIONAL)
 
 # [upd-2] legacy starter files kept across updates, a journal of an earlier version
 include(${CMAKE_CURRENT_SOURCE_DIR}/upd2_tests.cmake OPTIONAL)
+
+# [str-1] the local streaming API: its Settings page and a stream in the Transfers window
+include(${CMAKE_CURRENT_SOURCE_DIR}/str1_tests.cmake OPTIONAL)

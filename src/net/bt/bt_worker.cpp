@@ -222,6 +222,7 @@ void Worker::init(const Config &cfg, const QStringList &userNodes, const QString
     }
     sp.settings = makeSettingsPack(m_cfg, false, m_port, m_userNodes, m_downBps, m_upBps);
     m_ses = std::make_unique<lt::session>(std::move(sp), lt::session::paused);
+    m_streamPeersKept = false;   // [str-1] a new session starts with the defaults
     m_ses->add_extension(makePacingPlugin(m_pacing));   // [bw-2] per-peer queue under a limit
     m_ses->set_alert_notify([this] { scheduleAlerts(); });
 
@@ -363,6 +364,11 @@ void Worker::loadPersisted()
 }
 
 // ------------------------------------------------------------------------------------------------ persistence
+bool Worker::inStreamCache(const QString &savePath) const
+{
+    return !m_streamDir.isEmpty() && QDir::cleanPath(savePath).startsWith(m_streamDir + QLatin1Char('/'));
+}
+
 void Worker::persistRecord(const Torrent &t)
 {
     const QByteArray json = QJsonDocument(QJsonObject::fromVariantMap(t.rec.toVariant())).toJson(QJsonDocument::Indented);
@@ -717,13 +723,19 @@ void Worker::addTorrent(const AddRequest &req)
     t.id = req.id;
     t.rec = req.rec;
     t.ti = req.atp->ti;
-    // persist first so that a crash right now still restores the torrent
+    // persist first so that a crash right now still restores the torrent ([str-1] a stream's torrent
+    // too: it survives a restart of the plugin; the stream service removes it at the next start)
+    const bool streamCache = inStreamCache(t.rec.savePath);
     persistRecord(t);
     if (!req.torrentFile.isEmpty()) {
         writeFileAtomic(torrentFile(m_dataDir, req.id), req.torrentFile);
         t.torrentFileWritten = true;
     }
     lt::add_torrent_params atp = *req.atp;
+    if (streamCache && atp.ti) {   // [str-1] a stream fetches nothing until the engine names the pieces players read
+        atp.piece_priorities.assign(std::size_t(atp.ti->num_pieces()), lt::dont_download);
+        t.streamOn = t.streamRestrict = true;
+    }
     if (!atp.ti || !atp.ti->priv()) {
         for (const QString &u : m_userTrackers)
             if (std::find(atp.trackers.begin(), atp.trackers.end(), u.toStdString()) == atp.trackers.end())
@@ -868,6 +880,28 @@ void Worker::removeTorrent(const QString &id, bool deleteFiles)
     if (t->inSession)
         m_ses->remove_torrent(t->h, deleteFiles ? lt::session::delete_files : lt::remove_flags_t{});
     // else: removed when its add_torrent_alert arrives
+    applyStreamPeers();   // [str-1]
+}
+
+// [str-1] A stream torrent fetches only the pieces a player reads: between two reads it is
+// "finished" for libtorrent, which then closes its connections to seeds as redundant; reconnecting
+// to the same seed waits for min_reconnect_time (60 s) and its next unchoke round, so a seek would
+// stall that long. While a stream torrent exists those idle connections are kept.
+void Worker::applyStreamPeers()
+{
+    if (!m_ses)
+        return;
+    bool any = false;
+    for (const auto &kv : m_t)
+        if (kv.second.streamOn && kv.second.streamRestrict && !kv.second.removing)
+            any = true;
+    if (any == m_streamPeersKept)
+        return;
+    m_streamPeersKept = any;
+    lt::settings_pack p;
+    p.set_bool(lt::settings_pack::close_redundant_connections, !any);
+    m_ses->apply_settings(std::move(p));
+    qCInfo(lcBt) << (any ? "streams: idle connections to seeds are kept" : "no stream any more: redundant connections are closed again");
 }
 
 void Worker::pauseTorrent(const QString &id)
@@ -921,6 +955,7 @@ void Worker::applyWanted(Torrent &t, const QList<int> &indexes)
     t.filePrio = v;
     applyFirstLast(t);      // [dl-1] file priorities overwrite piece priorities: band pieces again
     applyReservations(t);   // file priorities overwrite piece priorities: re-assert reservations
+    applyStreamPriorities(t);   // [str-1] ... and a stream's (else the whole file would be fetched)
     // status() is executed after the posted priority jobs → is_finished reflects the new wishes
     t.st = t.h.status(kStatusFlags);
     t.haveStatus = true;
@@ -1024,6 +1059,13 @@ lt::download_priority_t Worker::naturalPiecePriority(const Torrent &t, int piece
     // [dl-1] first and last pieces first: the band pieces of wanted files go to the top
     if (best > 0 && t.firstLast && t.bandPieces.count(piece))
         best = static_cast<std::uint8_t>(lt::top_priority);
+    // [str-1] streaming: the pieces a player waits for at the top; restrict: nothing else
+    if (t.streamOn) {
+        if (t.streamPieces.count(piece))
+            return best > 0 ? lt::top_priority : lt::dont_download;
+        if (t.streamRestrict)
+            return lt::dont_download;
+    }
     return lt::download_priority_t(best);
 }
 
@@ -1081,6 +1123,70 @@ void Worker::setOrder(const QString &id, bool sequential, bool firstLast)
     if (changed)
         qCInfo(lcBt).noquote() << "download order of" << id.left(8) << (sequential ? "sequential" : "normal")
                                << (firstLast ? "+ first and last pieces first" : "") << "(" << t->bandPieces.size() << "band pieces)";
+}
+
+// [str-1] streaming. mode 0: libtorrent's time-critical pieces (set_piece_deadline: requested from
+// the fastest peers, re-requested from others when late) on top of the top priority; mode 1: the top
+// priority only. With restrict every other piece gets priority 0 (nothing but what players read).
+void Worker::setStream(const QString &id, const QList<QPair<int, int>> &pieces, bool restrict, int mode)
+{
+    Torrent *t = find(id);
+    if (defer(t, [this, id, pieces, restrict, mode] { setStream(id, pieces, restrict, mode); }))
+        return;
+    if (!t || !t->inSession || !t->ti)
+        return;
+    const int n = t->ti->num_pieces();
+    std::set<int> want;
+    for (const auto &p : pieces)
+        if (p.first >= 0 && p.first < n)
+            want.insert(p.first);
+    const bool wasOn = t->streamOn, wasRestrict = t->streamRestrict;
+    const std::set<int> old = t->streamPieces;
+    t->streamOn = !want.empty() || restrict;
+    t->streamRestrict = restrict;
+    t->streamPieces = want;
+    const bool wasLtFinished = t->haveStatus && t->st.is_finished;
+    // restrict: every piece, every time (a change of the file priorities by anyone resets libtorrent's
+    // piece priorities; a piece left at its file priority would be fetched)
+    if (restrict || wasOn != t->streamOn || wasRestrict != t->streamRestrict) {
+        applyStreamPriorities(*t, true);
+    } else {
+        std::vector<std::pair<lt::piece_index_t, lt::download_priority_t>> v;
+        std::set<int> touch = old;
+        touch.insert(want.begin(), want.end());
+        for (int p : touch)
+            if (!t->reserved.count(p) && (old.count(p) != want.count(p)))
+                v.emplace_back(lt::piece_index_t(p), naturalPiecePriority(*t, p));
+        if (!v.empty())
+            t->h.prioritize_pieces(v);
+    }
+    for (int p : old)
+        if (!want.count(p))
+            t->h.reset_piece_deadline(lt::piece_index_t(p));
+    if (mode == 0)
+        for (const auto &p : pieces)
+            if (want.count(p.first) && !t->reserved.count(p.first) && !t->h.have_piece(lt::piece_index_t(p.first)))
+                t->h.set_piece_deadline(lt::piece_index_t(p.first), qMax(0, p.second));
+    if (wasOn != t->streamOn)
+        qCInfo(lcBt).noquote() << "stream" << id.left(8) << (t->streamOn ? (restrict ? "on (only what players read)" : "on") : "off")
+                               << "mode" << (mode == 0 ? "deadlines" : "priorities");
+    t->st = t->h.status(kStatusFlags);
+    t->haveStatus = true;
+    if (wasLtFinished && !t->st.is_finished)
+        wakeTorrent(*t);   // a finished torrent drops its seeds: get them back for the new pieces
+    refreshSoon(id);
+    applyStreamPeers();
+}
+
+void Worker::applyStreamPriorities(Torrent &t, bool force)
+{
+    if (!t.inSession || !t.ti || (!t.streamOn && !force))
+        return;
+    const int n = t.ti->num_pieces();
+    std::vector<lt::download_priority_t> v(static_cast<std::size_t>(n), lt::dont_download);
+    for (int p = 0; p < n; ++p)
+        v[std::size_t(p)] = t.reserved.count(p) ? lt::dont_download : naturalPiecePriority(t, p);
+    t.h.prioritize_pieces(v);
 }
 
 void Worker::applyReservations(Torrent &t)
@@ -1251,10 +1357,13 @@ void Worker::refreshSoon(const QString &id)
                 t->h.prioritize_files(t->filePrio);
                 applyFirstLast(*t);   // [dl-1]
                 applyReservations(*t);
-            } else if (t->firstLast) {
-                // [dl-1] a file-priority job that landed after the band priorities overwrote them
+                applyStreamPriorities(*t);   // [str-1]
+            } else if (t->firstLast || t->streamOn) {
+                // [dl-1] a file-priority job that landed after the band priorities overwrote them; [str-1] the same
+                // for a stream's priorities
                 applyFirstLast(*t);
                 applyReservations(*t);
+                applyStreamPriorities(*t);
             }
             checkFinished(*t);
             const QList<TorrentSnapshot> snaps{makeSnapshot(*t)};
@@ -1333,6 +1442,11 @@ void Worker::onMetadata(Torrent &t)
             t.h.remove_url_seed(w.url);
     applyFirstLast(t);   // [dl-1] the band pieces are known now
     applyReservations(t);
+    if (inStreamCache(t.rec.savePath) && !t.streamOn) {   // [str-1] nothing until the engine names the pieces players read
+        t.streamOn = t.streamRestrict = true;
+        t.h.prioritize_pieces(std::vector<lt::download_priority_t>(std::size_t(ti->num_pieces()), lt::dont_download));
+        applyStreamPeers();
+    }
     if (t.rec.name.isEmpty()) {
         t.rec.name = qs(ti->name());
         persistRecord(t);

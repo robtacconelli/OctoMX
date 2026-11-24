@@ -100,6 +100,7 @@ void buildAppearancePages(SettingsDialog *d);
 void buildConnectionPages(SettingsDialog *d);
 void buildPeerNetworkPages(SettingsDialog *d);
 void buildOtherNetworkPages(SettingsDialog *d);
+void buildStreamApiPage(SettingsDialog *d);   // [str-1] settings_stream.cpp (under Other Networks)
 void buildMessagePages(SettingsDialog *d);
 void buildLibraryPages(SettingsDialog *d);
 void buildChatPages(SettingsDialog *d);

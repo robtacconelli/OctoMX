@@ -691,6 +691,7 @@ void buildOtherNetworkPages(SettingsDialog *d)
         f.endGroup();
         f.edit(rats::BootstrapPeers, QObject::tr("Bootstrap peers (host:port; separated by ;)"));
     }
+    buildStreamApiPage(d);   // [str-1]
 }
 
 } // namespace mx::ui

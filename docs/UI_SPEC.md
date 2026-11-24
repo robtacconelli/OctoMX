@@ -1352,6 +1352,19 @@ ultrapeers), `Uploads`/`Downloads`/`Other` unchanged.
   (new, below the radios).
 * File Transfers/Queuing/Throttle/File Launching/Misc/Appearance/Library/Channels/Search: unchanged.
 
+* [str-1] Other Networks ▸ **Streaming API** (new page, last child of Other Networks): group `Streaming API
+  (for players and other programs)`: `Switch on the streaming API` (off), `Port` (17580), `Allow other
+  devices on my network` (off), `Access token` (read-only edit) with `Copy` and `New`, `Address` (read-only,
+  the base address) with `Copy`, a two-line state (`Off: nothing listens.` / `Listening on 127.0.0.1, ::1,
+  port 17580.` / `Port 17580 is in use by another program: the streaming API does not listen. Choose
+  another port.`); group `Stream Cache (in the incomplete folder)`: `All stream caches at most [4096] MB`,
+  `Delete unread streams after [240] minutes`, `Keep what was streamed as a download` (off); a closing
+  line. Every change applies at once. The calls are in docs/API.md.
+* [str-1] Transfers: a stream is a download row whose status starts with `Streaming:` (`Streaming: 1
+  player, 10.2 MB buffered ahead`, `Streaming: a player waits for the bytes at 512.0 MB`, `Streaming:
+  paused by the player, ...`, `Streaming: idle, no player (the cache goes in 3 h 59 min)`); Pause and
+  Cancel work on it as on any download (Cancel deletes its cache, never to the trash).
+
 ### 8.10 Things to keep identical even if "meaningless"
 `Float/Dock`, the news bar, `Scan For Media`, `Ping` buttons, the three-colour legend, the chat
 warning, `__INCOMPLETE___` prefix (we may use our own temp names, but show WinMX-style names in the

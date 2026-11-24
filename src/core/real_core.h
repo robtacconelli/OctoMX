@@ -30,6 +30,7 @@ class UserManager;
 class ChatManager;
 class CoreBandwidth;
 class DiagnosticsManager;
+namespace stream { class StreamService; }
 
 class RealCore : public Core {
     Q_OBJECT
@@ -61,6 +62,7 @@ public:
     qint64 shutdownBytesLeft() const override;
     void closeNow() override;
     bool lastStopWasUnclean() const override;
+    StreamApiState streamApiState() const override;   // [str-1]
 
     // internals for the app / tests
     Database *database() const { return m_db; }
@@ -69,6 +71,7 @@ public:
     DownloadEngine *engine() const { return m_engine; }
     CoreRateLimiter *rateLimiter() const { return m_limiter; }
     DiagnosticsManager *diagnosticsImpl() const { return m_diag; }
+    stream::StreamService *streamService() const { return m_streams; }   // [str-1]
     bool isStarted() const { return m_started; }
 
 private:
@@ -89,6 +92,7 @@ private:
     ChatManager *m_chat = nullptr;
     CoreBandwidth *m_bandwidth = nullptr;
     DiagnosticsManager *m_diag = nullptr;   // [diag-1]
+    stream::StreamService *m_streams = nullptr;   // [str-1] the local streaming API
     bool m_started = false;
     bool m_shutDown = false;
     bool m_closing = false;    // [safe-1] beginShutdown() ran

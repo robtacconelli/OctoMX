@@ -59,6 +59,14 @@ public:
     // [dl-1] the order in which plan() reserves pieces for other networks: first and last = the head
     // and tail band of each lane's file first; sequential = ascending (else from the end backwards)
     void setOrder(bool sequential, bool firstLast) { m_seq = sequential; m_firstLast = firstLast; }
+    // [str-1] streaming: the pieces the players wait for, most urgent first; plan() reserves among them
+    // first and, with restrict, among them only (nothing else of the torrent is fetched)
+    void setStreamPieces(const QList<int> &ordered, bool restrict)
+    {
+        m_streamOrder = ordered;
+        m_streamSet = QSet<int>(ordered.begin(), ordered.end());
+        m_streamRestrict = restrict;
+    }
     // [safe-1] sync these files (written by the backend) to the disk on the store's queue, then done()
     void syncFiles(const QStringList &paths, std::function<void()> done);
 
@@ -110,6 +118,9 @@ private:
     qint64 m_injectedBytes = 0;
     int m_failTotal = 0;
     bool m_seq = false, m_firstLast = false;   // [dl-1]
+    QList<int> m_streamOrder;                  // [str-1]
+    QSet<int> m_streamSet;
+    bool m_streamRestrict = false;
 };
 
 } // namespace mx::engine

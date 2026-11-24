@@ -109,6 +109,12 @@ public:
     void reserve(const QString &id, const QList<int> &pieces, bool reserve);
     // [dl-1] sequential_download flag + top priority for the head / tail band pieces of each wanted file
     void setOrder(const QString &id, bool sequential, bool firstLast);
+    // [str-1] streaming: deadlines / top priority for the pieces players wait for (restrict: nothing
+    // else is fetched); a torrent saved below the cache folder fetches nothing until it is told
+    void setStream(const QString &id, const QList<QPair<int, int>> &pieces, bool restrict, int mode);
+    void setStreamCacheDir(const QString &dir) { m_streamDir = dir; }
+    bool inStreamCache(const QString &savePath) const;
+    void applyStreamPeers();   // keep idle connections to seeds while a stream fetches only what is read
     void inject(const QString &id, int piece, const QByteArray &data);
     void addPeer(const QString &id, const QString &endpoint);
     void banPeerAddress(const QString &address);
@@ -174,6 +180,9 @@ private:
         bool pauseAfterCheck = false;
         bool recheckOfFinished = false;   // the recheck began on a finished torrent
         std::set<int> bandPieces;         // pieces raised to top priority by firstLast
+        // [str-1] streaming (set by the engine each session, never persisted)
+        bool streamOn = false, streamRestrict = false;
+        std::set<int> streamPieces;
         // [ui-i] pieces in libtorrent's download queue with a block requested / being written
         // (TorrentSnapshot::downloading), refreshed with every status update
         QBitArray downloading;
@@ -200,6 +209,7 @@ private:
     void writeResume(const lt::add_torrent_params &p);
     void onMetadata(Torrent &t);
     void applyWanted(Torrent &t, const QList<int> &indexes);
+    void applyStreamPriorities(Torrent &t, bool force = false);   // [str-1] every piece by naturalPiecePriority()
     void applyReservations(Torrent &t);
     void applyFirstLast(Torrent &t);   // [dl-1] after anything that rewrites piece priorities
     lt::download_priority_t naturalPiecePriority(const Torrent &t, int piece) const;
@@ -226,6 +236,8 @@ private:
     QPointer<QObject> m_sinkObj;
     WorkerSink *m_sink;
     QString m_dataDir;
+    QString m_streamDir;   // [str-1]
+    bool m_streamPeersKept = false;
     std::unique_ptr<lt::session> m_ses;
     Config m_cfg;
     bool m_online = false;

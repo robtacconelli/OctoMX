@@ -480,6 +480,16 @@ public:
     // unsupported (the torrent then downloads in libtorrent's normal order).
     virtual bool setDownloadOrder(const QString &id, bool sequential, bool firstLast)
     { Q_UNUSED(id) Q_UNUSED(sequential) Q_UNUSED(firstLast) return false; }
+    // [str-1] streaming: the pieces a player waits for, most urgent first, each with a deadline in
+    // ms from now. restrict = nothing else of the torrent is fetched (every other piece gets
+    // priority 0); else the other pieces keep their priority. mode 0 = piece deadlines (libtorrent's
+    // time-critical picker) plus the top priority, mode 1 = the top priority only. An empty list
+    // with restrict = false ends streaming for the torrent. false = unsupported.
+    virtual bool setStreamPieces(const QString &id, const QList<QPair<int, int>> &pieceDeadlines, bool restrict, int mode)
+    { Q_UNUSED(id) Q_UNUSED(pieceDeadlines) Q_UNUSED(restrict) Q_UNUSED(mode) return false; }
+    // [str-1] torrents saved below this folder are stream caches: never preallocated, and they fetch
+    // nothing until setStreamPieces names pieces (also when restored after a restart of the backend)
+    virtual void setStreamCacheDir(const QString &dir) { Q_UNUSED(dir) }
 };
 // The QObject returned by TorrentBackend::torrentEvents() has these signals:
 class TorrentEvents : public QObject {

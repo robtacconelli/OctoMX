@@ -226,10 +226,69 @@ public:
     // not hash or share them as complete files.
     QStringList busyPaths() const;
 
+    // ---- [str-1] streaming (download_stream.cpp): a player reads the file through the local API.
+    // A stream download fetches only the bytes ahead of the open read positions (restrict = it was
+    // created for the stream: nothing else of the file is fetched, it is never stored in the
+    // database and never completes into the incoming folder); a stream that joined a normal
+    // download only moves those bytes to the front (restrict = false).
+    struct StreamRead {
+        qint64 pos = 0;          // store coordinates: the next byte the player wants
+        qint64 urgentEnd = 0;    // [pos, urgentEnd): needed now (deadlines, first in the order)
+        qint64 end = 0;          // [urgentEnd, end): the buffer ahead (read-ahead)
+        bool   waiting = false;  // the player waits for pos right now
+    };
+    void setStream(bool on, bool restrict, int fileIndex, const QString &partPath = QString());
+    bool streaming() const { return m_streamOn; }
+    bool streamRestricts() const { return m_streamOn && m_streamRestrict; }
+    int streamFile() const { return m_streamFile; }
+    void setStreamReads(const QList<StreamRead> &reads);
+    // The streamed file in store coordinates (empty while the size or the file list is not known)
+    Range streamSpan() const;
+    // What a player can be given from `pos` (store coordinates) on: the contiguous bytes that are on
+    // disk and right (verified; or received, where the only check is a large unit, see
+    // streamTrustsReceived()), the file they are in and its offset in store coordinates.
+    struct StreamServe {
+        QString path;            // the file on disk
+        qint64  fileBase = 0;    // store offset of byte 0 of that file
+        qint64  avail = 0;       // bytes servable at pos
+        bool    unverified = false;
+    };
+    StreamServe streamServable(qint64 pos) const;
+    RangeSet streamServableSet() const;   // everything servable now (store coordinates)
+    bool streamTrustsReceived() const;
+    // The stream ends: keep = it becomes a normal download (fetches the rest, completes into `dir`)
+    void endStream(bool keep, const QString &dir);
+    void setStreamNote(const QString &text) { m_streamNote = text; }
+    // no player for a while: every source is let go (a torrent pauses); a player that comes back
+    // opens them again
+    void setStreamIdle(bool idle);
+    bool streamIdle() const { return m_streamIdle; }
+    qint64 streamDiskBytes() const;       // what its cache holds on disk now
+    QString streamFileName() const;       // the streamed file's name (empty while a bundle's file list is not known)
+
 signals:
     void needsSchedule();
 
 private:
+    // [str-1]
+    RangeSet streamTarget(const RangeSet &target) const;
+    DownloadsDao *recordDao() const;      // the database, or none for a stream (never stored)
+    bool streamStart(SourceSlot *s, const RangeSet &cand, qint64 *pos);
+    void applyStreamToTorrent();
+    void dropStaleStreamRequests();
+    void streamPieceDone(int piece);
+    bool m_streamOn = false, m_streamRestrict = true;
+    bool m_streamIdle = false;
+    int m_streamFile = -1;
+    QList<StreamRead> m_streamReads;           // aligned to the check units where only checked bytes are served
+    QList<StreamRead> m_streamGiven;           // as the stream service gave them
+    RangeSet m_streamWant;                    // union of [pos, end) of every read
+    RangeSet m_streamUrgentWaiting;           // [pos, urgentEnd) of the reads whose player waits: endgame only there
+    QString m_streamNote;                     // "Streaming: ..." text the stream service sets
+    QBitArray m_streamHave;                   // torrent pieces finished (events, fresher than the snapshot)
+    QList<QPair<int, int>> m_streamSent;      // the piece deadlines the backend has now
+    qint64 m_streamSentMs = 0;
+    QString m_streamSentFor;                  // the torrent they were sent for
     // stores
     void ensureStore();
     void createPartStore();

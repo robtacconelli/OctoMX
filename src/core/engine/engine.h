@@ -28,6 +28,10 @@
 #include "core/transfer_base.h"
 #include "mx/plugin.h"
 
+namespace mx::engine {
+class Download;
+}
+
 namespace mx {
 
 class Database;
@@ -136,6 +140,19 @@ public:
     QList<diag::DownloadFacts> diagFacts() const;
     void setDiagnosis(const QString &id, const QString &text, int level);
     int activeDownloadCount() const;
+
+    // ---- [str-1] streaming (the stream service, src/core/stream)
+    engine::Download *downloadObject(const QString &id) const;
+    // The next download that download() / downloadHit() creates (not one it joins) is a stream
+    // download: it fetches only what players read (Download::setStream), its cache (part file or
+    // torrent folder) lies in `cacheDir`, sparse, and it is never stored. One call, one download.
+    void setNextStream(int fileIndex, const QString &cacheDir);
+    void clearNextStream();
+    // Remove a stream download from the list (its sources closed, its torrent out of the session);
+    // its cache is NOT moved to the trash: the stream service deletes it for good.
+    void dropStream(const QString &id);
+    // <incomplete>/Streams: every stream's cache lives below it
+    QString streamCacheRoot() const;
 
 private slots:
     void onUrlTorrentAdded(const QString &url, const QString &id);
