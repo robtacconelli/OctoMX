@@ -158,9 +158,15 @@ void noteWritten(const QString &path, qint64 off, qint64 len)
     j.unsynced[key(path)].append(qMakePair(off, len));
 }
 
+bool powerCutLies()
+{
+    static const bool on = qEnvironmentVariableIntValue("MX_TEST_POWERCUT_LIE") > 0;
+    return on;
+}
+
 void noteSynced(const QString &path)
 {
-    if (!powerCutTest()) return;
+    if (!powerCutTest() || powerCutLies()) return;
     Journal &j = journal();
     QMutexLocker l(&j.mutex);
     j.unsynced.remove(key(path));

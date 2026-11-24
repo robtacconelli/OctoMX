@@ -52,6 +52,11 @@ private slots:
     void interruptedCopyRedone();
     void uncleanStopMark();
     void torrentRecheckedAfterUncleanStop();
+    void checkAfterUncleanStop_data();
+    void checkAfterUncleanStop();
+    void checksTwoAtATime();
+    void quitDuringCheck();
+    void repairInPlaceCrash();
     void databaseTornWrite();
 };
 
@@ -244,17 +249,240 @@ void TstEngineSafe::uncleanStopMark()
     QVERIFY(QFileInfo::exists(mark));
     env.engineUp();
     QVERIFY(env.engine->uncleanStart());
-    QVERIFY(env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool());
-    QVERIFY2(env.info(id).statusText.contains(QLatin1String("not closed properly")), qPrintable(env.info(id).statusText));
-    env.engineDown(true);   // the safe quit clears the mark; the flag is stored with the download
+    // [step D] no block hashes (OctoMX, a whole-file checksum only): the check has nothing to read, the
+    // flag goes at once and the current rule applies (the whole file is checked at completion)
+    QVERIFY(QTest::qWaitFor([&] { return !env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool(); }, 10000));
+    env.engineDown(true);   // the safe quit clears the mark
     QVERIFY(!QFileInfo::exists(mark));
     env.engineUp();
     QVERIFY(!env.engine->uncleanStart());
-    QVERIFY(env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool());
-    // the whole-file check at the end is a check: the flag goes
-    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
     QVERIFY(!env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool());
+    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
     QCOMPARE(readFile(env.info(id).savePath), data);
+}
+
+namespace {
+qint64 served(TestPlugin *p)
+{
+    qint64 n = 0;
+    for (const auto &st : std::as_const(p->stats)) n += st->served;
+    return n;
+}
+void corruptAt(const QString &path, qint64 off)
+{
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::ReadWrite));
+    QVERIFY(f.seek(off));
+    f.write(QByteArray(4096, char(0)));   // what a disk that lied about a sync leaves: zeros
+}
+} // namespace
+
+// [step D] after an unclean stop the download is verified before it runs or is shared: a part the
+// disk lost (zeroed although the record claims it verified) is found and fetched again, nobody is
+// blamed, there is no notice of its own, a paused download stays paused through its check
+void TstEngineSafe::checkAfterUncleanStop()
+{
+    QFETCH(bool, paused);
+    Env env(paused ? QStringLiteral("safe-d-paused") : QStringLiteral("safe-d"));
+    auto *ed = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges | NetworkPlugin::CanFindSources);
+    const qint64 P = hash::Ed2kHasher::PartSize;
+    const QByteArray data = randomBytes(4 * P + 777, 69);
+    ed->hashSetOnFind << qMakePair(P, ed2kParts(data));
+    SourceConfig c;
+    c.data = data;
+    c.bytesPerSec = 6 << 20;
+    c.chunk = 128 * 1024;
+    const SearchSource s = ed->addSource(QStringLiteral("ed2k://d"), c, QStringLiteral("30.0.0.1:4662"));
+    env.engineUp();
+    DownloadRequest r;
+    r.name = QStringLiteral("d.bin");
+    r.size = data.size();
+    r.hashes = hashesOf(data, 2);
+    r.sources = {s};
+    const QString id = env.engine->download(r);
+    // two parts verified and recorded
+    QVERIFY(QTest::qWaitFor([&] {
+        env.db->flush();
+        DownloadsDao dao(env.db.get());
+        for (const DownloadRecord &x : dao.all())
+            if (x.id == id) {
+                const QVariantMap m = QCborValue::fromCbor(x.engineState).toVariant().toMap();
+                return engine::RangeSet::fromVariant(m.value(QStringLiteral("verified")).toList()).contains(0, 2 * P);
+            }
+        return false;
+    }, 30000));
+    if (paused) {
+        env.engine->pause(id);
+        QVERIFY(env.waitState(id, TransferState::Paused, 5000));
+    }
+    env.engineDown(false);   // a crash
+    corruptAt(env.root + QStringLiteral("/incomplete/") + id + QStringLiteral(".part"), P + 1000);   // part 1, recorded verified
+    const qint64 servedBefore = served(ed);
+    env.engineUp();
+    QSignalSpy notices(env.engine.get(), &TransferService::downloadNotice);
+    QVERIFY(env.engine->uncleanStart());
+    QVERIFY(env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool() || env.info(id).statusText.contains(QLatin1String("damaged")));
+    QVERIFY(QTest::qWaitFor([&] { return !env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool(); }, 20000));
+    qInfo("after the check: %s, done %lld", qPrintable(env.info(id).statusText), env.info(id).done);
+    QCOMPARE(notices.count(), 0);   // the program says it once, not per download
+    if (paused) {
+        QTest::qWait(1500);
+        QCOMPARE(env.info(id).state, TransferState::Paused);
+        QCOMPARE(served(ed), servedBefore);   // nothing fetched while paused
+        QVERIFY(env.info(id).done < 2 * P);    // the lost part is no longer counted
+        env.engine->resume(id);
+    }
+    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
+    QCOMPARE(readFile(env.info(id).savePath), data);
+    for (const TransferSource &ts : env.info(id).sources)
+        QVERIFY2(!ts.statusText.contains(QLatin1String("anned")) && !ts.statusText.contains(QLatin1String("Mismatch")), qPrintable(ts.statusText));
+    QCOMPARE(notices.count(), 0);
+}
+
+void TstEngineSafe::checkAfterUncleanStop_data()
+{
+    QTest::addColumn<bool>("paused");
+    QTest::newRow("running") << false;
+    QTest::newRow("paused") << true;
+}
+
+// [step D] many downloads after an unclean stop: at most two checks at a time, the others say they wait
+void TstEngineSafe::checksTwoAtATime()
+{
+    Env env(QStringLiteral("safe-d-many"));
+    env.tuning.verifyBlockPauseMs = 400;   // a slow disk: each check takes a while
+    auto *ed = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges | NetworkPlugin::CanFindSources);
+    const qint64 P = hash::Ed2kHasher::PartSize;
+    QStringList ids;
+    QList<QByteArray> datas;
+    for (int i = 0; i < 4; ++i) {
+        const QByteArray data = randomBytes(3 * P + 100 + i, 70 + i);
+        datas << data;
+        ed->hashSetOnFind << qMakePair(P, ed2kParts(data));
+        SourceConfig c;
+        c.data = data;
+        c.bytesPerSec = 4 << 20;
+        c.chunk = 128 * 1024;
+        const SearchSource s = ed->addSource(QStringLiteral("ed2k://m%1").arg(i), c, QStringLiteral("30.0.0.%1:4662").arg(i + 10));
+        DownloadRequest r;
+        r.name = QStringLiteral("m%1.bin").arg(i);
+        r.size = data.size();
+        r.hashes = hashesOf(data, 2);
+        r.sources = {s};
+        r.startPaused = true;
+        if (i == 0) env.engineUp();
+        ids << env.engine->download(r);
+    }
+    // each holds data: resume, wait for some parts, pause again, then a crash
+    for (const QString &id : std::as_const(ids)) env.engine->resume(id);
+    QVERIFY(QTest::qWaitFor([&] {
+        for (const QString &id : std::as_const(ids)) if (env.info(id).done < P) return false;
+        return true;
+    }, 30000));
+    for (const QString &id : std::as_const(ids)) env.engine->pause(id);
+    QTest::qWait(1500);   // synced and recorded
+    for (const QString &id : std::as_const(ids)) QVERIFY(env.info(id).state == TransferState::Paused);
+    env.engineDown(false);
+    env.engineUp();
+    int maxAtOnce = 0, waitingSeen = 0;
+    QVERIFY(QTest::qWaitFor([&] {
+        int verifying = 0, flagged = 0;
+        for (const QString &id : std::as_const(ids)) {
+            const TransferInfo t = env.info(id);
+            const bool flag = env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool();
+            if (flag) ++flagged;
+            if (flag && t.state == TransferState::Verifying) ++verifying;
+            if (flag && t.statusText.startsWith(QLatin1String("Paused, waiting to be checked"))) ++waitingSeen;
+        }
+        maxAtOnce = qMax(maxAtOnce, verifying);
+        return flagged == 0;
+    }, 60000));
+    qInfo("at most %d checks at once; a waiting status seen %d times", maxAtOnce, waitingSeen);
+    QVERIFY(maxAtOnce >= 1 && maxAtOnce <= 2);
+    QVERIFY(waitingSeen > 0);
+    for (const QString &id : std::as_const(ids)) QCOMPARE(env.info(id).state, TransferState::Paused);   // stayed paused
+}
+
+// [step D] a quit while a check runs: the quit does not wait for it, the check runs again next time
+void TstEngineSafe::quitDuringCheck()
+{
+    Env env(QStringLiteral("safe-d-quit"));
+    env.tuning.verifyBlockPauseMs = 2000;
+    auto *ed = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges | NetworkPlugin::CanFindSources);
+    const qint64 P = hash::Ed2kHasher::PartSize;
+    const QByteArray data = randomBytes(4 * P, 75);
+    ed->hashSetOnFind << qMakePair(P, ed2kParts(data));
+    SourceConfig c;
+    c.data = data;
+    c.chunk = 1 << 20;
+    const SearchSource s = ed->addSource(QStringLiteral("ed2k://q"), c, QStringLiteral("30.0.0.1:4662"));
+    env.engineUp();
+    DownloadRequest r;
+    r.name = QStringLiteral("q.bin");
+    r.size = data.size();
+    r.hashes = hashesOf(data, 2);
+    r.sources = {s};
+    const QString id = env.engine->download(r);
+    QVERIFY(QTest::qWaitFor([&] { return env.info(id).done >= 3 * P; }, 30000));
+    env.engine->pause(id);
+    QTest::qWait(1500);
+    env.engineDown(false);
+    env.engineUp();
+    QVERIFY(QTest::qWaitFor([&] { return env.info(id).state == TransferState::Verifying; }, 10000));
+    QElapsedTimer t;
+    t.start();
+    env.engine->beginShutdown();
+    QCOMPARE(env.engine->unsavedBytes(), qint64(0));   // a check writes nothing: the closing window does not wait for it
+    env.engineDown(true);
+    qInfo("quit during the check took %lld ms", t.elapsed());
+    QVERIFY(t.elapsed() < 3000);
+    env.engineUp();   // clean start: the check that did not end runs again
+    QVERIFY(!env.engine->uncleanStart());
+    QVERIFY(env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool());
+    QVERIFY(QTest::qWaitFor([&] { return !env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool(); }, 60000));
+    QCOMPARE(env.info(id).state, TransferState::Paused);
+}
+
+// [step D x ver-1] a finished file repaired in place, then a crash in the middle of the repair: the
+// part store sits on the finished file in the incoming folder; the next start checks it and finishes
+// the repair there (no copy, no "name (1)", nobody blamed)
+void TstEngineSafe::repairInPlaceCrash()
+{
+    Env env(QStringLiteral("safe-d-repair"));
+    auto *ed = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges | NetworkPlugin::CanFindSources);
+    const qint64 P = hash::Ed2kHasher::PartSize;
+    const QByteArray data = randomBytes(4 * P + 11, 76);
+    ed->hashSetOnFind << qMakePair(P, ed2kParts(data));
+    SourceConfig c;
+    c.data = data;
+    c.chunk = 256 * 1024;
+    const SearchSource s = ed->addSource(QStringLiteral("ed2k://r"), c, QStringLiteral("30.0.0.1:4662"));
+    env.engineUp();
+    DownloadRequest r;
+    r.name = QStringLiteral("r.bin");
+    r.size = data.size();
+    r.hashes = hashesOf(data, 2);
+    r.sources = {s};
+    const QString id = env.engine->download(r);
+    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
+    const QString target = env.info(id).savePath;
+    // two parts damaged on disk; a slow source for the repair
+    corruptAt(target, 1000);
+    corruptAt(target, 3 * P + 1000);
+    env.engineDown(true);
+    ed->configs[QStringLiteral("ed2k://r")].bytesPerSec = 2 << 20;
+    env.engineUp();
+    QVERIFY(env.engine->verifyDownload(id));
+    QVERIFY(QTest::qWaitFor([&] { return !env.info(id).sources.isEmpty() && env.info(id).state == TransferState::Transferring; }, 20000));
+    QTest::qWait(2500);   // a part of the repair written (and synced)
+    env.engineDown(false);   // a crash in the middle of the repair
+    env.engineUp();
+    QVERIFY(env.engine->uncleanStart());
+    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
+    QCOMPARE(env.info(id).savePath, target);
+    QCOMPARE(readFile(target), data);
+    QCOMPARE(QDir(env.root + QStringLiteral("/incoming")).entryList(QDir::Files | QDir::Hidden), QStringList{QStringLiteral("r.bin")});
+    QVERIFY(!env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool());
 }
 
 void TstEngineSafe::torrentRecheckedAfterUncleanStop()

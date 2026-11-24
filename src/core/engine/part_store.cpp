@@ -570,6 +570,7 @@ void PartStore::recheckResult(qint64 s, qint64 e, bool ok)
     } else {
         m_have.remove(s, e);
         m_durable.remove(s, e);
+        m_synced.remove(s, e);   // [safe-1] fetched again: claimed again only once rewritten and synced
         m_verified.remove(s, e);
     }
     publishVerified();

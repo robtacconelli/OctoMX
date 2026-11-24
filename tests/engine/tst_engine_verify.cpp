@@ -184,7 +184,8 @@ void TstEngineVerify::repairOneBlock()
     const QString text = notices.last().at(1).toString();
     QVERIFY2(text.contains(QLatin1String("damaged")) && text.contains(QLatin1String("being downloaded again")), qPrintable(text));
     QVERIFY2(text.startsWith(QLatin1String("Verified: 1 ")), qPrintable(text));
-    QVERIFY(env.info(id).state != TransferState::Completed);
+    // [safe-1] not finished any more, unless the repair of a small block was already done (seen under wine)
+    QVERIFY(env.info(id).state != TransferState::Completed || p->served(uri) > data.size());
     QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
     // exactly that block came again, the file is right, where it was, with its name
     QCOMPARE(p->served(uri) - data.size(), blockEnd - blockStart);

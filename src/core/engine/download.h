@@ -104,6 +104,10 @@ public:
     // recheck through the backend, the whole-file check at completion (and Verify File, step D)
     bool checkFirst() const { return m_checkFirst; }
     void setCheckFirst(bool on);
+    // [safe-1] step D: start that check (Verify File, without a notice of its own; the engine runs one or
+    // two at a time). false = not started: later (busy now) or nothing to check (the flag is cleared and
+    // the current rules apply: the whole-file check at completion)
+    bool startCheckFirst();
     // [safe-1] a move to the target folder that a stop interrupted (PartStore's "<part>.moving"):
     // finished when the file arrived, else the completion runs again (called at start)
     void resolveInterruptedMove();
@@ -392,8 +396,11 @@ private:
     bool m_completing = false;
     bool m_quitting = false;                  // [safe-1] beginShutdown() ran
     bool m_checkFirst = false;                // [safe-1] see checkFirst()
-    bool m_recheckAsked = false, m_recheckSeen = false;
-    qint64 m_recheckAtMs = 0;
+    bool m_checkFirstRun = false;             // [safe-1] the check running now is the one after an unclean stop
+    // [safe-1] bytes held from before an unclean stop that no check proved yet (in units not complete
+    // then): a unit with them that fails its check is the disk's fault, nobody is blamed (persisted)
+    RangeSet m_suspect;
+    qint64 m_checkFirstSinceMs = 0;
     bool m_singleSource = false;               // whole-file failure policy
     int m_wholeFileFailures = 0;
     qint64 m_awaitHashSetUntil = 0;             // whole-file failure: wait for a hash set first

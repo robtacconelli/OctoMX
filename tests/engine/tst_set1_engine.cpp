@@ -144,7 +144,11 @@ private slots:
         env.engineUp();
         const QString id = env.engine->download(req(QStringLiteral("space.iso"), d, hashesOf(d, 1), {s}));
         QTRY_VERIFY_WITH_TIMEOUT(env.info(id).done > 0, 10000);
-        const qint64 freeMb = QStorageInfo(env.engine->incompleteDir()).bytesAvailable() >> 20;
+        const QStorageInfo si(env.engine->incompleteDir());
+        // [safe-1] wine reports no valid storage information for folders below this mount (available -1)
+        if (!si.isValid() || si.bytesAvailable() < 0)
+            QSKIP("the storage information of the incomplete folder is not valid here (wine, a path below a mount it does not know)");
+        const qint64 freeMb = si.bytesAvailable() >> 20;
         QVERIFY(freeMb > 10);
         env.settings.setValue(QString(keys::transfers::MinFreeSpaceMB), int(qMin<qint64>(freeMb + 1000, 1048576)));
         QTRY_VERIFY_WITH_TIMEOUT(env.info(id).state == TransferState::Paused, 15000);

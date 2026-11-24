@@ -10,6 +10,8 @@
 //   cut       a safe quit, then a power cut in the next run (and so on): what was written since the
 //             last sync to the disk, in this run or the one before, is zeroed, then SIGKILL
 //             (mx/durable_file.h; the database keeps every commit, the worst case for a record)
+//   lie       a power cut every run on a disk that acknowledges syncs it did not do: the record is ahead
+//             of the disk on purpose; the check after the unclean stop (Verify File) must catch it
 //   movekill  (whole) the completion copy to the incoming folder (another volume) is killed
 // on each store: ed2k (part file, eD2k part hashes), tth (part file, tiger tree leaves), whole
 // (part file without block hashes: OctoMX / HTTP, the whole file checked at the end), torrent
@@ -89,6 +91,8 @@ private slots:
     void kill() { run(QStringLiteral("kill"), 50); }
     void cut_data() { stores(); }
     void cut() { run(QStringLiteral("cut"), 15); }
+    void lie_data() { stores(); }
+    void lie() { run(QStringLiteral("lie"), 12); }
     void movekill();
     void throughput();
 
@@ -181,7 +185,8 @@ Outcome TstEngineCrash::scenario(const QString &store, const QString &method, in
         env.insert(QStringLiteral("MX_TEST_SLOW_WRITE_MS"), QStringLiteral("25"));
         fastRate = rate * 4;   // the source is faster than the disk: writes pile up
     }
-    if (method == QLatin1String("cut")) env.insert(QStringLiteral("MX_TEST_POWERCUT"), QStringLiteral("1"));
+    if (method == QLatin1String("cut") || method == QLatin1String("lie")) env.insert(QStringLiteral("MX_TEST_POWERCUT"), QStringLiteral("1"));
+    if (method == QLatin1String("lie")) env.insert(QStringLiteral("MX_TEST_POWERCUT_LIE"), QStringLiteral("1"));
     const QString exe = QCoreApplication::applicationDirPath() + QStringLiteral("/crash_child");
     QStringList base = {QStringLiteral("--root"), root, QStringLiteral("--store"), store, QStringLiteral("--size"), QString::number(size),
                         QStringLiteral("--seed"), QString::number(m_seed), QStringLiteral("--rate"), QString::number(fastRate)};
@@ -194,6 +199,8 @@ Outcome TstEngineCrash::scenario(const QString &store, const QString &method, in
             args << QStringLiteral("--stop") << QStringLiteral("quit") << QStringLiteral("--after") << QString::number(alive);
         else if (method == QLatin1String("closenow"))
             args << QStringLiteral("--stop") << QStringLiteral("closenow") << QStringLiteral("--after") << QString::number(alive);
+        else if (method == QLatin1String("lie"))   // a power cut every run, on a disk that lies about its syncs
+            args << QStringLiteral("--stop") << QStringLiteral("cut") << QStringLiteral("--after") << QString::number(alive);
         else if (method == QLatin1String("cut"))   // a quit, then a power cut in the next run, and so on
             args << QStringLiteral("--stop") << (round % 2 ? QStringLiteral("quit") : QStringLiteral("cut")) << QStringLiteral("--after")
                  << QString::number(alive);

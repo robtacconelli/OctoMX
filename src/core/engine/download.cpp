@@ -146,7 +146,8 @@ bool Download::isFinished() const
 // [ver-1] not while it is checked (Verify File) or while a restart waits for its old files to go
 bool Download::wantsToRun() const
 {
-    return !isFinished() && !m_userPaused && !m_errorState && !m_verify.running && !m_restartPending;
+    return !isFinished() && !m_userPaused && !m_errorState && !m_verify.running && !m_restartPending
+           && !m_checkFirst;   // [safe-1] checked first after an unclean stop
 }
 
 QString Download::partPath() const
@@ -222,6 +223,7 @@ void Download::restoreState(const QByteArray &blob)
     m_restartPending = m.value(QStringLiteral("restartPending")).toBool();
     m_repairWhole = !m_repairPath.isEmpty() && m.value(QStringLiteral("repairWhole")).toBool();
     m_checkFirst = m.value(QStringLiteral("checkFirst")).toBool();   // [safe-1]
+    m_suspect = RangeSet::fromVariant(m.value(QStringLiteral("suspect")).toList(), clamp);
     // [merge-1] networks matched by name and size: confirmed / dropped
     const QVariantMap cn = m.value(QStringLiteral("candNets")).toMap();
     for (auto it = cn.constBegin(); it != cn.constEnd(); ++it) {
@@ -325,6 +327,7 @@ QByteArray Download::saveState() const
     if (m_restartPending) m.insert(QStringLiteral("restartPending"), true);
     if (m_repairWhole) m.insert(QStringLiteral("repairWhole"), true);
     if (m_checkFirst) m.insert(QStringLiteral("checkFirst"), true);   // [safe-1]
+    if (!m_suspect.isEmpty()) m.insert(QStringLiteral("suspect"), m_suspect.toVariant());
     if (!m_candNets.isEmpty()) {   // [merge-1]
         QVariantMap cn;
         for (auto it = m_candNets.constBegin(); it != m_candNets.constEnd(); ++it) {
@@ -544,13 +547,6 @@ bool Download::startTorrent(QString *error)
     if (raw.size() == 20 && m_rec.hashes.btih.isEmpty()) m_rec.hashes.btih = raw;
     m_torrent = std::make_unique<TorrentStore>(be, id, m_host->pool(), &m_host->tuning());
     attachStore(m_torrent.get());
-    if (m_checkFirst && !m_recheckAsked) {   // [safe-1] after an unclean stop: the backend checks every piece on disk first
-        be->recheck(id);
-        m_recheckAsked = true;
-        m_recheckSeen = false;
-        m_recheckAtMs = nowMs();
-        qCInfo(lcEngine) << m_rec.id << "rechecking torrent" << id.left(8) << "after an unclean stop";
-    }
     applyTorrentOrder();   // [dl-1] before resuming (the backend does not persist the order flags)
     if (m_active) be->resumeTorrent(id);
     else be->pauseTorrent(id);
@@ -949,10 +945,44 @@ void Download::setCheckFirst(bool on)
 {
     if (m_checkFirst == on) return;
     m_checkFirst = on;
-    m_recheckAsked = m_recheckSeen = false;
+    m_checkFirstSinceMs = on ? nowMs() : 0;
+    if (!on) m_checkFirstRun = false;
+    if (on) m_suspect = m_part ? m_part->held() : m_restoreHeld;
     qCInfo(lcEngine) << m_rec.id << (on ? "to be checked before its data is trusted (the last session ended unexpectedly)"
                                         : "checked: its data is trusted again");
     markDirty(true);
+}
+
+static bool torrentData(bool hasTorrentStore, bool hasPart, const QString &partPath, const QString &torrentId);
+
+bool Download::startCheckFirst()
+{
+    if (!m_checkFirst || m_verify.running || m_quitting) return false;
+    if (isFinished()) {
+        setCheckFirst(false);
+        return false;
+    }
+    QString why;
+    if (!canVerify(&why)) {
+        // busy for a moment (finishing, a promotion, a move, BitTorrent checking its resume data, the
+        // backend still restoring the torrent at start): later; else there is nothing to check
+        const bool torrentish = torrentData(m_torrent != nullptr, m_part != nullptr, m_partPath, m_torrentId);
+        const bool soon = m_completing || m_promoting || !m_movingTo.isEmpty() || m_restartPending
+                          || (torrentish && m_rec.done > 0 && nowMs() - m_checkFirstSinceMs < 60000);
+        if (soon) return false;
+        qCInfo(lcEngine).noquote() << m_rec.id << "check after an unclean stop: nothing to check (" << why << ")";
+        setCheckFirst(false);
+        persist(true);
+        m_host->finished(this);   // it may run now
+        return false;
+    }
+    m_checkFirstRun = true;
+    qCInfo(lcEngine) << m_rec.id << "check after an unclean stop: verifying" << (m_userPaused ? "(paused, stays paused)" : "");
+    if (!startVerify()) {
+        m_checkFirstRun = false;
+        return false;
+    }
+    return m_verify.running || !m_checkFirst;
 }
 
 void Download::resolveInterruptedMove()
@@ -2190,6 +2220,10 @@ void Download::cancelRedundant()
 
 void Download::onUnitVerified(qint64 s, qint64 e)
 {
+    if (m_suspect.intersects(s, e)) {   // [safe-1] proven now
+        m_suspect.remove(s, e);
+        m_dirtyBlob = true;
+    }
     const QSet<QString> struck = m_failedBy.take(s);
     m_isolated.remove(s);
     m_unitOwner.remove(s);
@@ -2247,6 +2281,17 @@ void Download::onUnitFailed(qint64 s, qint64 e)
     if (m_part && !m_torrent && !contributors.isEmpty() && untrusted.isEmpty()) recordBlackBox(s, e, contributors);
     for (SourceSlot *c : std::as_const(contributors)) c->contributed.remove(s, e);
     qCInfo(lcEngine) << m_rec.id << "unit" << s << "-" << e << "failed verification;" << contributors.size() << "contributors";
+    if (m_suspect.intersects(s, e)) {
+        // [safe-1] it holds bytes written before an unclean stop that no check had proven: the disk lost
+        // them (a sync it did not do); nobody is blamed, the unit is fetched again
+        qCInfo(lcEngine) << m_rec.id << "the unit held bytes from before the unclean stop: nobody is blamed";
+        m_suspect.remove(s, e);
+        m_unitOwner.remove(s);
+        m_dirtyBlob = true;
+        markDirty();
+        emit needsSchedule();
+        return;
+    }
     if (contributors.isEmpty() && !m_repairPath.isEmpty()) {
         // [ver-1] a finished file repaired in place: these bytes came from the disk, not from a source
         m_unitOwner.remove(s);
@@ -2503,6 +2548,20 @@ void Download::wholeFileFailed(const QStringList &mismatch)
     ++m_wholeFileFailures;
     qCWarning(lcEngine) << m_rec.id << "whole-file verification failed (" << mismatch.join(QLatin1Char(',')) << ") attempt"
                         << m_wholeFileFailures;
+    if (!m_suspect.isEmpty() && m_part) {
+        // [safe-1] the file holds bytes from before an unclean stop that no block hash could prove: the
+        // disk may have lost them; nobody is blamed, everything not verified is fetched again
+        qCInfo(lcEngine) << m_rec.id << "the file held bytes from before the unclean stop: nobody is blamed";
+        --m_wholeFileFailures;
+        m_suspect.clear();
+        for (auto &sp : m_slots) sp->contributed.clear();
+        m_part->discardUnverified();
+        persist(true);
+        updateStatus();
+        openMoreSources();
+        emit needsSchedule();
+        return;
+    }
     QList<SourceSlot *> contributors;
     for (auto &sp : m_slots) if (!sp->contributed.isEmpty()) contributors << sp.get();
     // [engine-4] candidates used provisionally are the suspects: ban them, reject their claim and
@@ -2617,6 +2676,7 @@ void Download::completeAt(const QString &path, const FileHashes &all, const QLis
         else lib->requestHash(path);
     }
     m_completing = false;
+    m_suspect.clear();   // [safe-1] the whole file is proven now
     if (!m_repairPath.isEmpty()) {   // [ver-1] a repaired file: where it was, with its name
         qCInfo(lcEngine) << m_rec.id << "repaired in place:" << path;
         m_repairPath.clear();
@@ -3102,10 +3162,6 @@ void Download::onTorrentChanged()
     const TorrentSnapshot &sn = m_torrent->snap();
     if (m_btBytesAtStart < 0 && sn.hasMetadata) m_btBytesAtStart = sn.totalDone;
     if (sn.rateDownBps > 0) m_lastDataMs = nowMs();
-    if (m_checkFirst && m_recheckAsked) {   // [safe-1] the recheck ran: checking seen, then over (or quick: 20 s)
-        if (sn.state == TransferState::Verifying) m_recheckSeen = true;
-        else if (sn.hasMetadata && (m_recheckSeen || nowMs() - m_recheckAtMs > 20000)) setCheckFirst(false);
-    }
     markDirty();
     if (m_verify.running && m_verify.torrent) pollTorrentVerify();   // [ver-1]
     if (sn.finished) QTimer::singleShot(0, this, [this] { maybeComplete(); });
@@ -3221,12 +3277,6 @@ void Download::onUrlTorrentFailed(const QString &url, const QString &error)
 
 void Download::tick(qint64 now)
 {
-    // [safe-1] a recheck that never showed "checking" (a small torrent, quick): over after 20 s
-    if (m_torrent && m_checkFirst && m_recheckAsked && !m_recheckSeen && now - m_recheckAtMs > 20000
-        && m_torrent->snap().state != TransferState::Verifying) {
-        setCheckFirst(false);
-        QTimer::singleShot(0, this, [this] { maybeComplete(); });
-    }
     if (m_errorState && !(m_deadEnd && m_deadEndBanned) && !isFinished() && m_host->settings() && m_host->settings()->b(keys::transfers::AutoRetry)) {
         const qint64 interval = qint64(qMax(5, m_host->settings()->i(keys::transfers::RetryIntervalSec))) * 1000;
         const int maxAttempts = m_host->settings()->i(keys::transfers::RetryMaxAttempts);
@@ -3548,9 +3598,6 @@ TransferInfo Download::info() const
     t.done = m_rec.done;
     t.state = TransferState(m_rec.state);
     t.statusText = m_rec.statusText.isEmpty() ? transferStateText(t.state) : m_rec.statusText;
-    if (m_checkFirst && !isFinished())   // [safe-1]
-        t.statusText += m_recheckAsked ? QStringLiteral(" (checking: OctoMX was not closed properly)")
-                                       : QStringLiteral(" (to be checked: OctoMX was not closed properly)");
     t.errorText = m_rec.errorText;
     t.hashes = m_rec.hashes;
     t.isBundle = m_rec.isBundle;
@@ -3647,6 +3694,10 @@ TransferInfo Download::info() const
         t.rateDownBps = 0;
         t.etaSec = -1;
     }
+    if (m_checkFirst && !isFinished())   // [safe-1]
+        t.statusText = m_verify.running ? t.statusText + QStringLiteral(" (OctoMX was not closed properly)")
+                                        : (m_userPaused ? QStringLiteral("Paused, waiting to be checked (OctoMX was not closed properly)")
+                                                        : QStringLiteral("Waiting to be checked (OctoMX was not closed properly)"));
     return t;
 }
 
@@ -5327,6 +5378,7 @@ Download::ServeView Download::serveView() const
 {
     ServeView v;
     if (isFinished() || m_completing || m_promoting || m_rec.isBundle || m_rec.size <= 0 || m_rec.hashes.isEmpty()) return v;
+    if (m_checkFirst) return v;   // [safe-1] nothing of it is served before its check after an unclean stop
     if (m_part) {
         // only units checked against trusted hashes: a provisional eD2k set (from a source nobody
         // vouches for) does not make data servable
@@ -5489,7 +5541,17 @@ bool Download::startVerify()
     m_verifyNoteUntilMs = 0;
     const QString n = quotedName(m_rec.name);
     auto answer = [this](const QString &notice, const QString &status) {
-        // nothing is changed: the answer only
+        // nothing is changed: the answer only; [safe-1] the check after an unclean stop ends here too
+        const bool firstRun = m_checkFirstRun;
+        m_checkFirstRun = false;
+        if (firstRun) {
+            setCheckFirst(false);
+            qCInfo(lcEngine).noquote() << m_rec.id << "check after an unclean stop:" << notice;
+            persist(true);
+            m_host->finished(this);
+            markDirty(true);
+            return true;
+        }
         if (isFinished() && !status.isEmpty()) setState(TransferState(m_rec.state), status);
         else if (!isFinished()) {
             setVerifyNote(status, m_userPaused);
@@ -5685,6 +5747,7 @@ void Download::onVerifyBlock(qint64 s, qint64 e, bool ok, bool readable)
         // what was read has its new status at once (a Pause or a crash keeps it): a damaged block is
         // no longer held, so it is fetched again; nobody is blamed, the damage is the disk's
         m_part->recheckResult(s, e, good);
+        m_suspect.remove(s, e);   // [safe-1] checked: proven good, or fetched again
         if (!good) {
             for (auto &sp : m_slots) sp->contributed.remove(s, e);
             persist(false);
@@ -5783,6 +5846,11 @@ void Download::onVerifyWhole(const VerifyJob::Whole &w)
 void Download::endVerify(const QString &text, const QString &status)
 {
     m_verify.running = false;
+    // [safe-1] the check after an unclean stop: the flag goes only when it ran to its end; no notice of
+    // its own (the program says once that the downloads are checked), the status text tells the outcome
+    const bool firstRun = m_checkFirstRun;
+    m_checkFirstRun = false;
+    if (firstRun && !m_verify.stopped) setCheckFirst(false);
     if (m_verifyJob) {
         disconnect(m_verifyJob.get(), nullptr, this, nullptr);
         m_verifyJob->stop();
@@ -5794,9 +5862,9 @@ void Download::endVerify(const QString &text, const QString &status)
         if (!status.isEmpty()) setVerifyNote(status, m_userPaused);
         updateStatus();
     }
-    qCInfo(lcEngine).noquote() << m_rec.id << "Verify File:" << text;
+    qCInfo(lcEngine).noquote() << m_rec.id << (firstRun ? "check after an unclean stop:" : "Verify File:") << text;
     persist(true);
-    m_host->notice(this, text);
+    if (!firstRun) m_host->notice(this, text);
     m_host->sharingChanged();
     m_host->finished(this);   // a download that was running goes on (rebalance)
     markDirty(true);
@@ -6150,6 +6218,7 @@ void Download::stopForRestart(bool keepTorrent)
     }
     if (be && !m_promoteTorrent.isEmpty()) be->removeTorrent(m_promoteTorrent, false);
     if (m_part) m_part->close();
+    QFile::remove(PartStore::moveMarkerPath(partPath()));   // [safe-1] a move of the old data is history now
     dropPreview();
 }
 

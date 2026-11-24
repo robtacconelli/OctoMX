@@ -36,6 +36,9 @@ int testWriteDelayMs();
 // remembered per file until noteSynced(); simulatePowerCut() then overwrites every range that was
 // not synced with zeros (what a power cut loses), and the test kills the process.
 bool powerCutTest();
+// MX_TEST_POWERCUT_LIE=1 (with MX_TEST_POWERCUT): a disk that acknowledges a sync it did not do: the
+// journal forgets nothing at noteSynced(), so the cut also zeroes what the record claims as synced
+bool powerCutLies();
 // seek + write + journal, under the journal's lock while the power cut test runs (so a cut never
 // lands between a write and its note). Returns the bytes written (-1 on error).
 qint64 journalWrite(QFileDevice &f, const QString &path, qint64 off, const QByteArray &data);

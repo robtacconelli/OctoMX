@@ -275,6 +275,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
     void finished(Download *) override
     {
         requestRebalance();
+        requestChecks();   // [safe-1] a check after an unclean stop ended: the next one
         updatePartials();   // [up-1] the finished file is no longer busy: the library may share it now
     }
     void completedFile(Download *d) override
@@ -433,6 +434,29 @@ struct DownloadEngine::Private : public engine::EngineHost {
             Download *d = byId.value(id);
             if (!d) { dirty.remove(id); continue; }
             if (now - lastEmit.value(id) >= 1000) emitNow(d);
+        }
+    }
+    // [safe-1] step D: after an unclean stop every unfinished download that holds data is verified
+    // before it runs or is shared, kChecksAtOnce at a time (the others wait, their status says so)
+    static constexpr int kChecksAtOnce = 2;
+    bool checksPending = false;
+    void requestChecks()
+    {
+        if (checksPending || stopped) return;
+        checksPending = true;
+        QTimer::singleShot(0, q, [this] { checksPending = false; startChecks(); });
+    }
+    void startChecks()
+    {
+        if (!started || stopped || closing) return;
+        int running = 0;
+        for (Download *d : std::as_const(list))
+            if (d->checkFirst() && d->isVerifying()) ++running;
+        const QList<Download *> l = list;   // a check that ends at once may change the list order
+        for (Download *d : l) {
+            if (running >= kChecksAtOnce) break;
+            if (!byId.contains(d->id()) || !d->checkFirst() || d->isVerifying()) continue;
+            if (d->startCheckFirst() && d->isVerifying()) ++running;
         }
     }
     void requestRebalance()
@@ -698,6 +722,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
         if (now - lastTick >= 950) {
             lastTick = now;
             for (Download *d : std::as_const(list)) d->tick(now);
+            startChecks();   // [safe-1]
             startNameSearches(now);
             updatePartials();
             if (now - lastKeptCheck > 30000) {   // [ui-j]
@@ -978,7 +1003,7 @@ void DownloadEngine::start()
             Download *x = d->adopt(r);
             x->restoreState(r.engineState);
             x->resolveInterruptedMove();   // [safe-1]
-            if (d->uncleanStart && !x->isFinished() && (r.done > 0 || !x->torrentId().isEmpty())) x->setCheckFirst(true);
+            if (d->uncleanStart && !x->isFinished()) x->setCheckFirst(true);   // one with nothing to check is cleared at once
             QList<SearchSource> srcs;
             for (const SourceRecord &s : d->daoPtr->sources(r.id)) srcs << s.source;
             x->addSources(srcs, nullptr, true);
@@ -1008,9 +1033,15 @@ void DownloadEngine::start()
             QTimer::singleShot(0, this, [this, p] { d->runDelete(p); });
         }
     }
+    // [safe-1] torrents to be checked are paused in the backend until their check (nothing of them is
+    // sent to peers before it); the check runs a paused torrent and pauses it again
+    if (TorrentBackend *be = d->ctx.torrents)
+        for (Download *x : std::as_const(d->list))
+            if (x->checkFirst() && !x->torrentId().isEmpty() && be->torrents().contains(x->torrentId())) be->pauseTorrent(x->torrentId());
     for (Download *x : std::as_const(d->list)) emit transferAdded(x->info());
     d->tickTimer.start();
     d->rebalance();
+    d->startChecks();
     d->updatePartials();
 }
 
