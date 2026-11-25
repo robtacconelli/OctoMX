@@ -7,6 +7,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QSet>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -159,6 +160,7 @@ public:
     void onTorrentPieceFinished(int piece);
     void onTorrentPieceFailed(int piece);
     void onTorrentFinished();
+    void onTorrentFlushed();   // [safe-1] the backend wrote what it had verified
     void onTorrentError(const QString &text);
     void onTorrentRemoved();
     void torrentReAdd();              // [ui-j] the removal of an earlier download of this torrent finished
@@ -265,6 +267,8 @@ public:
     bool streamIdle() const { return m_streamIdle; }
     qint64 streamDiskBytes() const;       // what its cache holds on disk now
     QString streamFileName() const;       // the streamed file's name (empty while a bundle's file list is not known)
+    // the torrent backend says: the bytes of this verified piece are in its file now
+    void streamPieceOnDisk(int piece);
 
 signals:
     void needsSchedule();
@@ -277,6 +281,10 @@ private:
     void applyStreamToTorrent();
     void dropStaleStreamRequests();
     void streamPieceDone(int piece);
+    bool streamPieceGot(qint64 piece) const;        // verified by the torrent backend
+    bool streamPieceReadable(qint64 piece) const;   // ... and its bytes are in the file
+    bool streamWholeFileReadable() const;
+    void askStreamPiecesOnDisk();
     bool m_streamOn = false, m_streamRestrict = true;
     bool m_streamIdle = false;
     int m_streamFile = -1;
@@ -285,7 +293,12 @@ private:
     RangeSet m_streamWant;                    // union of [pos, end) of every read
     RangeSet m_streamUrgentWaiting;           // [pos, urgentEnd) of the reads whose player waits: endgame only there
     QString m_streamNote;                     // "Streaming: ..." text the stream service sets
-    QBitArray m_streamHave;                   // torrent pieces finished (events, fresher than the snapshot)
+    QBitArray m_streamGot;                    // torrent pieces finished (events, fresher than the snapshot)
+    // A finished piece is not at once in its file (the backend verifies it in memory and writes it
+    // later): a player gets the pieces the backend confirmed in the file (confirmPiecesOnDisk)
+    QBitArray m_streamHave;
+    QHash<int, qint64> m_streamAsked;         // piece -> when the backend was asked for that
+    bool m_streamTrustHave = false;           // the backend cannot tell: a finished piece is taken as written
     QList<QPair<int, int>> m_streamSent;      // the piece deadlines the backend has now
     qint64 m_streamSentMs = 0;
     QString m_streamSentFor;                  // the torrent they were sent for
@@ -453,6 +466,7 @@ private:
     bool m_userPaused = false;
     bool m_errorState = false;
     bool m_completing = false;
+    std::function<void()> m_afterFlush;   // [safe-1] the rest of the completion, once the backend wrote everything
     bool m_quitting = false;                  // [safe-1] beginShutdown() ran
     bool m_checkFirst = false;                // [safe-1] see checkFirst()
     bool m_checkFirstRun = false;             // [safe-1] the check running now is the one after an unclean stop

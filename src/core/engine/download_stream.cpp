@@ -11,7 +11,9 @@
 //   * a seek: requests nobody waits for any more are cancelled unless little of them is left.
 // Only right data reaches a player: verified bytes (torrent pieces, tiger tree leaves, eD2k parts)
 // or, where the only check is a large unit (an eD2k part of 9.28 MB, no fine hash at all), the
-// received bytes at once (streamTrustsReceived(); the status says so).
+// received bytes at once (streamTrustsReceived(); the status says so). A torrent piece is verified
+// in the backend's memory and written to its file afterwards, so a player gets it only once the
+// backend has compared the file with it (streamPieceReadable()).
 #include "core/engine/download.h"
 
 #include "core/dao.h"
@@ -31,6 +33,8 @@ namespace {
 constexpr qint64 kStreamWaitUnitMax = qint64(2) << 20;
 // a request nobody waits for any more is left to finish when this little of it is left
 constexpr qint64 kStreamFinishLeft = 256 * 1024;
+// the backend is asked again whether a finished piece is in its file when it did not answer for this long
+constexpr qint64 kStreamAskAgainMs = 3000;
 } // namespace
 
 DownloadsDao *Download::recordDao() const { return streamRestricts() ? nullptr : m_host->dao(); }
@@ -41,6 +45,8 @@ void Download::setStream(bool on, bool restrict, int fileIndex, const QString &p
     m_streamOn = on;
     m_streamRestrict = restrict;
     m_streamFile = fileIndex;
+    m_streamHave.clear();   // asked again: the files may have changed since (a restart, a check)
+    m_streamAsked.clear();
     if (!on) {
         m_streamReads.clear();
         m_streamGiven.clear();
@@ -85,7 +91,7 @@ RangeSet Download::streamServableSet() const
     RangeSet out;
     const Range span = streamSpan();
     if (span.second <= span.first) return out;
-    if (isFinished()) {
+    if (streamWholeFileReadable()) {
         out.add(span.first, span.second);
         return out;
     }
@@ -93,10 +99,8 @@ RangeSet Download::streamServableSet() const
         const TorrentSnapshot &sn = m_torrent->snap();
         const qint64 L = sn.pieceLength;
         if (L <= 0) return out;
-        for (qint64 p = span.first / L; p * L < span.second; ++p) {
-            const bool have = (p < sn.have.size() && sn.have.testBit(int(p))) || (p < m_streamHave.size() && m_streamHave.testBit(int(p)));
-            if (have) out.add(qMax(span.first, p * L), qMin(span.second, (p + 1) * L));
-        }
+        for (qint64 p = span.first / L; p * L < span.second; ++p)
+            if (streamPieceReadable(p)) out.add(qMax(span.first, p * L), qMin(span.second, (p + 1) * L));
         return out;
     }
     if (!m_part) return out;
@@ -120,7 +124,7 @@ Download::StreamServe Download::streamServable(qint64 pos) const
     } else if (m_part) {
         sv.path = m_part->path();
     }
-    if (isFinished()) {
+    if (streamWholeFileReadable()) {
         sv.avail = span.second - pos;
         return sv;
     }
@@ -131,8 +135,7 @@ Download::StreamServe Download::streamServable(qint64 pos) const
         if (L <= 0) return sv;
         qint64 e = pos;
         for (qint64 p = pos / L; e < span.second; ++p) {
-            const bool have = (p < sn.have.size() && sn.have.testBit(int(p))) || (p < m_streamHave.size() && m_streamHave.testBit(int(p)));
-            if (!have) break;
+            if (!streamPieceReadable(p)) break;
             e = qMin(span.second, (p + 1) * L);
         }
         sv.avail = e - pos;
@@ -186,6 +189,7 @@ void Download::setStreamReads(const QList<StreamRead> &reads)
             m_streamSentMs = 0;
             applyStreamToTorrent();
         }
+        askStreamPiecesOnDisk();
         return;
     }
     m_streamGiven = reads;
@@ -208,6 +212,7 @@ void Download::setStreamReads(const QList<StreamRead> &reads)
     }
     dropStaleStreamRequests();
     applyStreamToTorrent();
+    askStreamPiecesOnDisk();
     emit needsSchedule();
 }
 
@@ -263,8 +268,7 @@ void Download::applyStreamToTorrent()
             // the urgent part is due within about 4 s of playing: its size gives the pace
             const qint64 pace = qMax<qint64>(256 * 1024, (r.urgentEnd - r.pos) / 4);
             for (qint64 p = r.pos / L; p * L < r.end && p < sn.numPieces; ++p) {
-                const bool have = (p < sn.have.size() && sn.have.testBit(int(p))) || (p < m_streamHave.size() && m_streamHave.testBit(int(p)));
-                if (have) continue;
+                if (streamPieceGot(p)) continue;
                 const qint64 ahead = qMax<qint64>(0, p * L - r.pos);
                 const int ms = int(qMin<qint64>(60000, 50 + ahead * 1000 / pace));
                 auto it = deadline.find(int(p));
@@ -321,9 +325,63 @@ void Download::setStreamIdle(bool idle)
 void Download::streamPieceDone(int piece)
 {
     if (!m_streamOn || piece < 0) return;
+    if (m_streamGot.size() <= piece) m_streamGot.resize(piece + 1);
+    m_streamGot.setBit(piece);
+    if (m_torrent) applyStreamToTorrent();   // that piece leaves the deadline list
+    askStreamPiecesOnDisk();
+}
+
+bool Download::streamPieceGot(qint64 p) const
+{
+    if (!m_torrent || p < 0) return false;
+    const TorrentSnapshot &sn = m_torrent->snap();
+    return (p < sn.have.size() && sn.have.testBit(int(p))) || (p < m_streamGot.size() && m_streamGot.testBit(int(p)));
+}
+
+bool Download::streamPieceReadable(qint64 p) const
+{
+    if (!streamPieceGot(p)) return false;
+    return m_streamTrustHave || (p < m_streamHave.size() && m_streamHave.testBit(int(p)));
+}
+
+// a finished download is served whole; one that a torrent backend still holds piece by piece, as
+// its last pieces may be verified and not written yet
+bool Download::streamWholeFileReadable() const
+{
+    return isFinished() && (!m_torrent || !m_torrent->hasMetadata() || m_streamTrustHave);
+}
+
+void Download::streamPieceOnDisk(int piece)
+{
+    if (piece < 0) return;
     if (m_streamHave.size() <= piece) m_streamHave.resize(piece + 1);
     m_streamHave.setBit(piece);
-    if (m_torrent) applyStreamToTorrent();   // that piece leaves the deadline list
+    m_streamAsked.remove(piece);
+}
+
+// the finished pieces the players read or will read soon that the backend did not confirm in the
+// file yet: it is asked (the backend also tells by itself for a piece that finishes while a stream
+// is on; this covers the pieces that were there before, and a backend that was restarted)
+void Download::askStreamPiecesOnDisk()
+{
+    if (!m_streamOn || !m_torrent || !m_torrent->hasMetadata() || m_torrentId.isEmpty()) return;
+    const TorrentSnapshot &sn = m_torrent->snap();
+    const qint64 L = sn.pieceLength;
+    if (L <= 0) return;
+    const qint64 now = nowMs();
+    QList<int> ask;
+    for (const StreamRead &r : std::as_const(m_streamReads)) {
+        for (qint64 p = r.pos / L; p * L < r.end && p < sn.numPieces; ++p) {
+            if (!streamPieceGot(p) || (p < m_streamHave.size() && m_streamHave.testBit(int(p)))) continue;
+            const auto it = m_streamAsked.constFind(int(p));
+            if (it != m_streamAsked.constEnd() && now - it.value() < kStreamAskAgainMs) continue;
+            m_streamAsked.insert(int(p), now);
+            ask << int(p);
+        }
+    }
+    if (ask.isEmpty()) return;
+    TorrentBackend *be = m_host->backend();
+    m_streamTrustHave = !be || !be->confirmPiecesOnDisk(m_torrentId, ask);
 }
 
 void Download::endStream(bool keep, const QString &dir)

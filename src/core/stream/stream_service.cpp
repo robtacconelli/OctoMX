@@ -265,11 +265,16 @@ StreamService::StreamService(Settings *settings, SearchService *search, Download
         });
     if (m_torrents)
         if (auto *ev = qobject_cast<TorrentEvents *>(m_torrents->torrentEvents()))
-            connect(ev, &TorrentEvents::torrentPieceFinished, this, [this](const QString &, int) {
-                // a piece is there: the players waiting for it get it now, not at the next poll
+        {
+            // a piece is there (finished, then in its file): the players waiting for it get it now,
+            // not at the next poll
+            const auto pieceThere = [this](const QString &, int) {
                 for (Stream *s : std::as_const(m_streams))
                     if (!s->ended) pushReads(s);
-            });
+            };
+            connect(ev, &TorrentEvents::torrentPieceFinished, this, pieceThere);
+            connect(ev, &TorrentEvents::torrentPieceOnDisk, this, pieceThere);
+        }
 }
 
 StreamService::~StreamService()

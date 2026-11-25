@@ -66,6 +66,8 @@ public:
     bool setDownloadOrder(const QString &id, bool sequential, bool firstLast) override;   // [dl-1]
     bool setStreamPieces(const QString &id, const QList<QPair<int, int>> &pieceDeadlines, bool restrict, int mode) override;   // [str-1]
     void setStreamCacheDir(const QString &dir) override;   // [str-1]
+    bool confirmPiecesOnDisk(const QString &id, const QList<int> &pieces) override;   // [str-1]
+    bool flushTorrent(const QString &id) override;   // [safe-1]
     void injectPiece(const QString &id, int piece, const QByteArray &data) override;
     bool seedLocalFile(const QString &path, QString *error) override;
     QObject *torrentEvents() override { return m_events; }
@@ -81,6 +83,8 @@ public:
     void wTorrentMetadata(const QString &id, const QByteArray &pieceHashes, const TorrentSnapshot &snap) override;
     void wSnapshots(const QList<TorrentSnapshot> &snaps) override;
     void wPieces(const QString &id, const QList<int> &finished, const QList<int> &failed) override;
+    void wPiecesOnDisk(const QString &id, const QList<int> &pieces) override;
+    void wFlushed(const QString &id) override;
     void wTorrentFinished(const TorrentSnapshot &snap) override;
     void wTorrentRemoved(const QString &id) override;
     void wTorrentError(const QString &id, const QString &text) override;

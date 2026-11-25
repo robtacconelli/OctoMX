@@ -308,7 +308,9 @@ second player on the same link all work.
   eD2k part set of an OctoMX source) or the whole file (HTTP mirrors without other hashes), the bytes
   are served as they arrive: waiting for a whole 9.28 MB part before the first byte would cost seconds
   to minutes of start time. The status says so (`unverifiedServed`); a part that fails its check later
-  is fetched again and counted in `failedChecks`.
+  is fetched again and counted in `failedChecks`. A torrent piece is checked in memory and written to
+  its file a moment later (on a slow disk a long moment): the player gets it only after OctoMX has
+  compared the file with the checked piece.
 * **Where the bytes live**: in a cache below the incomplete folder (`Streams/<download id>`), a sparse
   file (or a torrent's folder) never allocated in full. It is deleted when the stream stops, when
   nobody reads it for the idle time, by the cache limit (only streams nobody reads), and at the next

@@ -7,6 +7,7 @@
 
 #include <QtCore/QDir>
 #include <climits>
+#include <cstring>
 #include <algorithm>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -1029,6 +1030,20 @@ void Worker::moveStorage(const QString &id, const QString &dir)
     t->h.move_storage(dir.toStdString(), lt::move_flags_t::fail_if_exist);
 }
 
+// [safe-1] flush_cache is a job that waits for every write of the torrent that was queued before
+// it; cache_flushed_alert follows
+void Worker::flush(const QString &id)
+{
+    Torrent *t = find(id);
+    if (defer(t, [this, id] { flush(id); }))
+        return;
+    if (!t || !t->inSession) {
+        post([sink = m_sink, id] { sink->wFlushed(id); });
+        return;
+    }
+    t->h.flush_cache();
+}
+
 void Worker::reannounce(const QString &id)
 {
     Torrent *t = find(id);
@@ -1176,6 +1191,101 @@ void Worker::setStream(const QString &id, const QList<QPair<int, int>> &pieces, 
         wakeTorrent(*t);   // a finished torrent drops its seeds: get them back for the new pieces
     refreshSoon(id);
     applyStreamPeers();
+}
+
+// [str-1] A piece libtorrent reports as finished was verified from its memory (the blocks wait in
+// the write queue); the file gets them a moment later, on a slow disk or a busy machine a long
+// moment. Who reads the file itself (a stream) must wait for that: the piece is read back through
+// libtorrent (read_piece, served from that queue or from the file) and compared with the bytes of
+// the files, again and again until they are the same.
+namespace {
+constexpr int kOnDiskTries = 80;   // about 17 s
+int onDiskRetryMs(int tries) { return qMin(250, 10 * tries); }
+// test seams: the first look at every piece waits this long (ms), and this many looks at every
+// piece find the file without it (a write that is late)
+int onDiskTestDelayMs() { return qEnvironmentVariableIntValue("MX_BT_ONDISK_TEST_DELAY_MS"); }
+int onDiskTestMisses() { return qEnvironmentVariableIntValue("MX_BT_ONDISK_TEST_MISSES"); }
+} // namespace
+
+void Worker::confirmOnDisk(const QString &id, const QList<int> &pieces)
+{
+    Torrent *t = find(id);
+    if (defer(t, [this, id, pieces] { confirmOnDisk(id, pieces); }))
+        return;
+    if (!t || !t->inSession || !t->ti)
+        return;
+    const int n = t->ti->num_pieces();
+    const qint64 now = m_clock.elapsed();
+    for (int p : pieces) {
+        if (p < 0 || p >= n)
+            continue;
+        auto it = t->onDiskAsk.find(p);
+        if (it != t->onDiskAsk.end()) {
+            // asked long ago and no answer (libtorrent drops alerts when its queue is full): again
+            if (now - it->second.askedMs > 20000)
+                readForOnDisk(id, p);
+            continue;
+        }
+        if (t->h.have_piece(lt::piece_index_t(p)))
+            askOnDisk(*t, p);
+    }
+}
+
+void Worker::askOnDisk(Torrent &t, int piece)
+{
+    if (!t.inSession || !t.ti || t.onDiskAsk.count(piece))
+        return;
+    t.onDiskAsk[piece].askedMs = m_clock.elapsed();
+    const int wait = onDiskTestDelayMs();
+    if (wait <= 0) {
+        t.h.read_piece(lt::piece_index_t(piece));
+        return;
+    }
+    const QString id = t.id;
+    QTimer::singleShot(wait, this, [this, id, piece] { readForOnDisk(id, piece); });
+}
+
+void Worker::readForOnDisk(const QString &id, int piece)
+{
+    Torrent *t = find(id);
+    if (!t)
+        return;
+    auto it = t->onDiskAsk.find(piece);
+    if (it == t->onDiskAsk.end())
+        return;
+    if (!t->inSession || t->removing) {
+        t->onDiskAsk.erase(it);
+        return;
+    }
+    it->second.askedMs = m_clock.elapsed();
+    t->h.read_piece(lt::piece_index_t(piece));
+}
+
+// the part of the piece that lies in files libtorrent writes (a file that is not wanted keeps its
+// share of a piece in the part file) is the same in those files
+bool Worker::pieceIsInFiles(const Torrent &t, int piece, const char *data, int size) const
+{
+    if (!t.ti || !data || size <= 0)
+        return false;
+    const lt::file_storage &fs = t.ti->files();
+    const std::string save = t.haveStatus && !t.st.save_path.empty() ? t.st.save_path : t.rec.savePath.toStdString();
+    const std::vector<lt::download_priority_t> prio = t.h.get_file_priorities();
+    qint64 at = 0;
+    for (const lt::file_slice &s : fs.map_block(lt::piece_index_t(piece), 0, size)) {
+        const int fi = static_cast<int>(s.file_index);
+        const bool skip = (fs.file_flags(s.file_index) & lt::file_storage::flag_pad_file)
+                          || (fi < int(prio.size()) && prio[std::size_t(fi)] == lt::dont_download);
+        if (!skip) {
+            QFile f(QString::fromStdString(fs.file_path(s.file_index, save)));
+            if (!f.open(QIODevice::ReadOnly | QIODevice::Unbuffered) || !f.seek(s.offset))
+                return false;
+            const QByteArray got = f.read(s.size);
+            if (got.size() != s.size || std::memcmp(got.constData(), data + at, std::size_t(s.size)) != 0)
+                return false;
+        }
+        at += s.size;
+    }
+    return at == size;
 }
 
 void Worker::applyStreamPriorities(Torrent &t, bool force)
@@ -1415,11 +1525,15 @@ void Worker::flushPieceEvents()
 {
     for (auto &kv : m_t) {
         Torrent &t = kv.second;
-        if (t.pieceDone.isEmpty() && t.pieceFail.isEmpty())
-            continue;
-        const QList<int> done = std::exchange(t.pieceDone, {});
-        const QList<int> fail = std::exchange(t.pieceFail, {});
-        post([sink = m_sink, id = t.id, done, fail] { sink->wPieces(id, done, fail); });
+        if (!t.pieceDone.isEmpty() || !t.pieceFail.isEmpty()) {
+            const QList<int> done = std::exchange(t.pieceDone, {});
+            const QList<int> fail = std::exchange(t.pieceFail, {});
+            post([sink = m_sink, id = t.id, done, fail] { sink->wPieces(id, done, fail); });
+        }
+        if (!t.pieceOnDisk.isEmpty()) {   // [str-1] after the finished pieces
+            const QList<int> onDisk = std::exchange(t.pieceOnDisk, {});
+            post([sink = m_sink, id = t.id, onDisk] { sink->wPiecesOnDisk(id, onDisk); });
+        }
     }
 }
 
@@ -1620,6 +1734,8 @@ void Worker::handleAlert(lt::alert *a)
                                      pa->piece_index);
             t->pieceDone << p;
             t->injected.erase(p);
+            if (t->streamOn)   // [str-1] a player may wait for it: told as soon as the files hold it
+                askOnDisk(*t, p);
             if (int(t->st.pieces.size()) > p)
                 t->st.pieces.set_bit(pa->piece_index);
             if (t->reserved.erase(p)) {
@@ -1629,6 +1745,33 @@ void Worker::handleAlert(lt::alert *a)
             }
             t->resumeDirty = true;
         }
+        break;
+    }
+    case lt::read_piece_alert::alert_type: {   // [str-1] a verified piece, to compare with the files
+        auto *ra = static_cast<lt::read_piece_alert *>(a);
+        Torrent *t = find(ra->handle);
+        if (!t)
+            break;
+        const int p = static_cast<int>(ra->piece);
+        auto it = t->onDiskAsk.find(p);
+        if (it == t->onDiskAsk.end())
+            break;
+        if (!ra->error && it->second.tries >= onDiskTestMisses() && pieceIsInFiles(*t, p, ra->buffer.get(), ra->size)) {
+            if (it->second.tries > 0 && (++t->onDiskLate == 1 || t->onDiskLate % 200 == 0))
+                qCInfo(lcBt).noquote() << QStringLiteral("torrent %1 piece %2 was verified before its file held it (%3 more looks); "
+                                                         "%4 such pieces so far").arg(t->id.left(8)).arg(p).arg(it->second.tries).arg(t->onDiskLate);
+            t->onDiskAsk.erase(it);
+            t->pieceOnDisk << p;
+            break;
+        }
+        if (++it->second.tries > kOnDiskTries) {
+            qCWarning(lcBt).noquote() << "torrent" << t->id.left(8) << "piece" << p << "is verified but its file does not hold it"
+                                      << (ra->error ? QString::fromStdString(ra->error.message()) : QString());
+            t->onDiskAsk.erase(it);
+            break;
+        }
+        const QString id = t->id;
+        QTimer::singleShot(onDiskRetryMs(it->second.tries), this, [this, id, p] { readForOnDisk(id, p); });
         break;
     }
     case lt::hash_failed_alert::alert_type: {
@@ -1745,6 +1888,11 @@ void Worker::handleAlert(lt::alert *a)
             post([sink = m_sink, id = t->id, msg] { sink->wTorrentError(id, msg); });
             t->resumeDirty = true;
         }
+        break;
+    }
+    case lt::cache_flushed_alert::alert_type: {   // [safe-1]
+        if (Torrent *t = find(static_cast<lt::cache_flushed_alert *>(a)->handle))
+            post([sink = m_sink, id = t->id] { sink->wFlushed(id); });
         break;
     }
     case lt::storage_moved_alert::alert_type: {   // [engine-3]

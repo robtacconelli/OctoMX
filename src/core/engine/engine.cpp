@@ -901,6 +901,12 @@ struct DownloadEngine::Private : public engine::EngineHost {
                 QObject::connect(te, &TorrentEvents::torrentPieceFailed, q, [this](const QString &id, int piece) {
                     if (Download *d = findByTorrent(id)) d->onTorrentPieceFailed(piece);
                 });
+                QObject::connect(te, &TorrentEvents::torrentPieceOnDisk, q, [this](const QString &id, int piece) {   // [str-1]
+                    if (Download *d = findByTorrent(id)) d->streamPieceOnDisk(piece);
+                });
+                QObject::connect(te, &TorrentEvents::torrentFlushed, q, [this](const QString &id) {   // [safe-1]
+                    if (Download *d = findByTorrent(id)) d->onTorrentFlushed();
+                });
                 QObject::connect(te, &TorrentEvents::torrentFinished, q, [this](const QString &id) {
                     if (Download *d = findByTorrent(id)) d->onTorrentFinished();
                 });

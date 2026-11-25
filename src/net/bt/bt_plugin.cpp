@@ -747,6 +747,26 @@ bool BtPlugin::setStreamPieces(const QString &id, const QList<QPair<int, int>> &
     return true;
 }
 
+bool BtPlugin::confirmPiecesOnDisk(const QString &id, const QList<int> &pieces)
+{
+    // true also for a torrent that is not known at this moment (the session restarts): the caller
+    // asks again, and must not take "unsupported" from it
+    if (!m_worker)
+        return true;
+    Worker *w = m_worker;
+    toWorker([w, id, pieces] { w->confirmOnDisk(id, pieces); });
+    return true;
+}
+
+bool BtPlugin::flushTorrent(const QString &id)
+{
+    if (!m_worker || !m_snap.contains(id))
+        return false;
+    Worker *w = m_worker;
+    toWorker([w, id] { w->flush(id); });
+    return true;
+}
+
 void BtPlugin::setStreamCacheDir(const QString &dir)
 {
     m_streamDir = QDir::cleanPath(dir);
@@ -980,6 +1000,17 @@ void BtPlugin::wPieces(const QString &id, const QList<int> &finished, const QLis
         emit m_events->torrentPieceFinished(id, p);
     for (int p : failed)
         emit m_events->torrentPieceFailed(id, p);
+}
+
+void BtPlugin::wFlushed(const QString &id)
+{
+    emit m_events->torrentFlushed(id);
+}
+
+void BtPlugin::wPiecesOnDisk(const QString &id, const QList<int> &pieces)
+{
+    for (int p : pieces)
+        emit m_events->torrentPieceOnDisk(id, p);
 }
 
 void BtPlugin::wTorrentFinished(const TorrentSnapshot &snap)

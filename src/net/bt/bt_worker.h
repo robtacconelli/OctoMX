@@ -39,6 +39,10 @@ public:
     virtual void wTorrentMetadata(const QString &id, const QByteArray &pieceHashes, const TorrentSnapshot &snap) = 0;
     virtual void wSnapshots(const QList<TorrentSnapshot> &snaps) = 0;
     virtual void wPieces(const QString &id, const QList<int> &finished, const QList<int> &failed) = 0;
+    // [str-1] the bytes of these verified pieces are in the torrent's files
+    virtual void wPiecesOnDisk(const QString &id, const QList<int> &pieces) { Q_UNUSED(id) Q_UNUSED(pieces) }
+    // [safe-1] everything verified of the torrent is written to its files
+    virtual void wFlushed(const QString &id) { Q_UNUSED(id) }
     virtual void wTorrentFinished(const TorrentSnapshot &snap) = 0;   // fresh snapshot
     virtual void wTorrentRemoved(const QString &id) = 0;
     virtual void wTorrentError(const QString &id, const QString &text) = 0;
@@ -115,6 +119,11 @@ public:
     void setStreamCacheDir(const QString &dir) { m_streamDir = dir; }
     bool inStreamCache(const QString &savePath) const;
     void applyStreamPeers();   // keep idle connections to seeds while a stream fetches only what is read
+    // [str-1] libtorrent verifies a piece from its memory and writes it to the file afterwards: a
+    // piece is read back (read_piece) and compared with the files until they hold it
+    void confirmOnDisk(const QString &id, const QList<int> &pieces);
+    // [safe-1] libtorrent's write queue of the torrent runs empty (flush_cache), then wFlushed
+    void flush(const QString &id);
     void inject(const QString &id, int piece, const QByteArray &data);
     void addPeer(const QString &id, const QString &endpoint);
     void banPeerAddress(const QString &address);
@@ -183,6 +192,12 @@ private:
         // [str-1] streaming (set by the engine each session, never persisted)
         bool streamOn = false, streamRestrict = false;
         std::set<int> streamPieces;
+        // verified pieces whose bytes are being compared with the files, and those that matched
+        // (batched for the sink)
+        struct OnDisk { int tries = 0; qint64 askedMs = 0; };
+        std::map<int, OnDisk> onDiskAsk;
+        int onDiskLate = 0;   // pieces that were verified before their file held them
+        QList<int> pieceOnDisk;
         // [ui-i] pieces in libtorrent's download queue with a block requested / being written
         // (TorrentSnapshot::downloading), refreshed with every status update
         QBitArray downloading;
@@ -210,6 +225,9 @@ private:
     void onMetadata(Torrent &t);
     void applyWanted(Torrent &t, const QList<int> &indexes);
     void applyStreamPriorities(Torrent &t, bool force = false);   // [str-1] every piece by naturalPiecePriority()
+    void askOnDisk(Torrent &t, int piece);                         // [str-1]
+    void readForOnDisk(const QString &id, int piece);
+    bool pieceIsInFiles(const Torrent &t, int piece, const char *data, int size) const;
     void applyReservations(Torrent &t);
     void applyFirstLast(Torrent &t);   // [dl-1] after anything that rewrites piece priorities
     lt::download_priority_t naturalPiecePriority(const Torrent &t, int piece) const;

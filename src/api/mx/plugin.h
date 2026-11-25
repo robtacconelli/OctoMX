@@ -490,6 +490,17 @@ public:
     // [str-1] torrents saved below this folder are stream caches: never preallocated, and they fetch
     // nothing until setStreamPieces names pieces (also when restored after a restart of the backend)
     virtual void setStreamCacheDir(const QString &dir) { Q_UNUSED(dir) }
+    // [str-1] a verified piece is not at once in its file: the backend checks a piece in memory and
+    // writes it a moment later. Asks to be told with TorrentEvents::torrentPieceOnDisk when the bytes
+    // of these verified pieces can be read from the torrent's files (the files are compared with the
+    // verified piece). A piece that is not verified yet is ignored; asking twice is harmless.
+    // false = unsupported: a finished piece has to be taken as written.
+    virtual bool confirmPiecesOnDisk(const QString &id, const QList<int> &pieces)
+    { Q_UNUSED(id) Q_UNUSED(pieces) return false; }
+    // [safe-1] The same for a whole torrent: everything the backend verified and still holds in
+    // memory is written to the files; TorrentEvents::torrentFlushed follows (also for a torrent that
+    // is gone meanwhile). false = unsupported, or the torrent is not known: nothing to wait for.
+    virtual bool flushTorrent(const QString &id) { Q_UNUSED(id) return false; }
 };
 // The QObject returned by TorrentBackend::torrentEvents() has these signals:
 class TorrentEvents : public QObject {
@@ -502,6 +513,10 @@ signals:
     void torrentChanged(const QString &id);                  // ≤ 1/s per torrent
     void torrentPieceFinished(const QString &id, int piece); // verified (from peers or injected)
     void torrentPieceFailed(const QString &id, int piece);   // hash failure
+    // [str-1] the bytes of a verified piece are in the torrent's files (confirmPiecesOnDisk)
+    void torrentPieceOnDisk(const QString &id, int piece);
+    // [safe-1] answer to flushTorrent(): what was verified is in the files
+    void torrentFlushed(const QString &id);
     void torrentFinished(const QString &id);
     void torrentRemoved(const QString &id);
     void torrentError(const QString &id, const QString &text);

@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace mx::engine {
 
@@ -2716,8 +2717,30 @@ void Download::completeTorrent()
     } else {
         m_rec.savePath = paths.first();
     }
-    // [safe-1] the files are synced to the disk before the download is announced as finished
-    m_torrent->syncFiles(paths, [this] { completeTorrentSynced(); });
+    // [safe-1] the files are synced to the disk before the download is announced as finished. The
+    // backend reports a piece as verified while its blocks may still wait in its memory to be written:
+    // it writes them first (flushTorrent), then the files are synced
+    const auto sync = [this, paths] {
+        if (m_torrent) m_torrent->syncFiles(paths, [this] { completeTorrentSynced(); });
+    };
+    if (m_host->backend() && m_host->backend()->flushTorrent(m_torrentId)) {
+        m_afterFlush = sync;
+        // a backend that never answers must not hold the completion up for ever
+        QTimer::singleShot(15000, this, [this] {
+            if (!m_afterFlush) return;
+            qCWarning(lcEngine) << m_rec.id << "the torrent backend did not say that it wrote everything: going on";
+            onTorrentFlushed();
+        });
+    } else {
+        sync();
+    }
+}
+
+void Download::onTorrentFlushed()
+{
+    if (!m_afterFlush) return;
+    const std::function<void()> next = std::exchange(m_afterFlush, nullptr);
+    next();
 }
 
 void Download::completeTorrentSynced()

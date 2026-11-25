@@ -70,15 +70,35 @@ private slots:
 void TstStreamBt::secondFileOfABundle_data()
 {
     QTest::addColumn<int>("mode");
-    QTest::newRow("piece deadlines") << 0;
-    QTest::newRow("piece priorities") << 1;
+    QTest::addColumn<bool>("late");
+    QTest::newRow("piece deadlines") << 0 << false;
+    QTest::newRow("piece priorities") << 1 << false;
+    // libtorrent verifies a piece from its memory and writes it to the file afterwards (on a slow
+    // machine much later): a player must not get the bytes of the file before they are in it
+    QTest::newRow("written late") << 0 << true;
 }
 
 void TstStreamBt::secondFileOfABundle()
 {
     QFETCH(int, mode);
+    QFETCH(bool, late);
     qputenv("MX_STREAM_BT_MODE", QByteArray::number(mode));
-    StreamEnv env(QStringLiteral("bt%1").arg(mode));
+    // late: the files are looked at 600 ms after a piece is verified, and the first 3 looks find
+    // them without it
+    struct Seams {
+        explicit Seams(bool on)
+        {
+            if (!on) return;
+            qputenv("MX_BT_ONDISK_TEST_DELAY_MS", "600");
+            qputenv("MX_BT_ONDISK_TEST_MISSES", "3");
+        }
+        ~Seams()
+        {
+            qunsetenv("MX_BT_ONDISK_TEST_DELAY_MS");
+            qunsetenv("MX_BT_ONDISK_TEST_MISSES");
+        }
+    } seams(late);
+    StreamEnv env(QStringLiteral("bt%1%2").arg(mode).arg(late ? QStringLiteral("late") : QString()));
     // node A: a folder torrent of two files, seeded at 3 MB/s
     const QByteArray f0 = randomBytes(6 * MiB + 1111, 300), f1 = randomBytes(40 * MiB + 2222, 301);
     const QString folder = env.root + QStringLiteral("/seed/Big Buck Bunny pack");
@@ -111,6 +131,13 @@ void TstStreamBt::secondFileOfABundle()
     auto *btCtl = dynamic_cast<BitTorrentControl *>(bt);
     env.configure = [](Settings *s) { localBt(s); };
     env.up({bt});
+    {
+        // the seed is found again after the connection policy restarted the session, which can take
+        // longer than the 8 s the other tests give a player without a source
+        stream::StreamService::Tuning st = env.core->streamService()->tuning();
+        st.stallNoSourceMs = 60000;
+        env.core->streamService()->setTuning(st);
+    }
     QVERIFY(QTest::qWaitFor([&] { return bt->status().listenPort > 0; }, 10000));
     int status = 0;
     const QJsonObject so = env.streamOf(QStringLiteral("bunny"), QStringLiteral("Big Buck Bunny pack"), 1, false, &status);
@@ -157,8 +184,11 @@ void TstStreamBt::secondFileOfABundle()
     std::sort(sorted.begin(), sorted.end());
     QStringList sl;
     for (qint64 v : seeks) sl << QString::number(v);
-    qInfo("NUMBERS BitTorrent mode %d (%s): 8 seeks to fresh places, first byte %s ms (median %lld, most %lld)", mode,
-          mode == 0 ? "piece deadlines" : "piece priorities", qPrintable(sl.join(QStringLiteral(" / "))), sorted.at(4), sorted.last());
+    qInfo("NUMBERS BitTorrent mode %d (%s%s): 8 seeks to fresh places, first byte %s ms (median %lld, most %lld)", mode,
+          mode == 0 ? "piece deadlines" : "piece priorities", late ? ", pieces in their file 600 ms after they are verified" : "",
+          qPrintable(sl.join(QStringLiteral(" / "))), sorted.at(4), sorted.last());
+    // nothing was served before the files were looked at (and every byte was right, above)
+    if (late) QVERIFY2(sorted.first() >= 600, qPrintable(sl.join(QStringLiteral(" / "))));
     QTest::qWait(1500);   // the snapshot is refreshed about once a second
     const TorrentSnapshot sn = btBe->snapshot(tid);
     qint64 doneOther = 0, doneMine = 0;
