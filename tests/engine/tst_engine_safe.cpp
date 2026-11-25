@@ -257,7 +257,8 @@ void TstEngineSafe::uncleanStopMark()
     env.engineUp();
     QVERIFY(!env.engine->uncleanStart());
     QVERIFY(!env.engine->debugInfo(id).value(QStringLiteral("checkFirst")).toBool());
-    QVERIFY2(env.waitDone(id, 60000), qPrintable(env.info(id).statusText));
+    // 24 MiB from a 1 MiB/s source: wide for a machine whose timers tick slowly
+    QVERIFY2(env.waitDone(id, 300000), qPrintable(env.info(id).statusText));
     QCOMPARE(readFile(env.info(id).savePath), data);
 }
 

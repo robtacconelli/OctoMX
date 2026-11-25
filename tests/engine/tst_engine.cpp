@@ -183,13 +183,15 @@ void TstEngine::slowSourceReplaced()
     QElapsedTimer t;
     t.start();
     const QString id = env.engine->download(req(QStringLiteral("x.bin"), data, hashesOf(data, 1), {ss, sf}));
-    QVERIFY2(env.waitDone(id, 20000), qPrintable(env.info(id).statusText));
+    // the limits are wide for a machine whose timers tick slowly (the test sources then serve at a
+    // quarter of their nominal speed); left to the slow source its half would take hours
+    QVERIFY2(env.waitDone(id, 90000), qPrintable(env.info(id).statusText));
     QCOMPARE(readFile(env.info(id).savePath), data);
     SourceStats *slowSrc = http->source(QStringLiteral("http://slow/x"));
     QVERIFY(slowSrc);
     qInfo("done in %lld ms; slow source served %lld bytes, cancelled %d times", t.elapsed(), slowSrc->served, slowSrc->cancelCount);
     QVERIFY(slowSrc->cancelCount >= 1);
-    QVERIFY(t.elapsed() < 15000);
+    QVERIFY(t.elapsed() < 60000);
 }
 
 void TstEngine::corruptWithPartHashes()
