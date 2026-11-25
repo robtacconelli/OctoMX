@@ -557,10 +557,14 @@ void TstUnshare::bitTorrentStopsSeedingAtOnce()
     QVERIFY(waitFor([&] { return !a.be->torrents().contains(goneId); }, 15000));
     qInfo("BitTorrent: the library seed stopped %lld ms after the rule was set", sw.ms());
     QVERIFY(a.be->torrents().contains(keptId));
-    bool sawReason = false;
-    for (const mx::TransferInfo &t : a.uploads)
-        if (t.state == mx::TransferState::Error && t.statusText == QStringLiteral("Stopped: the file is no longer shared")) sawReason = true;
-    QVERIFY(sawReason);
+    // the torrent leaves the list at once; the row's last state comes from the worker thread a moment later
+    const auto sawReason = [&] {
+        for (const mx::TransferInfo &t : a.uploads)
+            if (t.state == mx::TransferState::Error && t.statusText == QStringLiteral("Stopped: the file is no longer shared")) return true;
+        return false;
+    };
+    QVERIFY(waitFor(sawReason, 5000));
+    qInfo("BitTorrent: the upload row said why %lld ms after the rule was set", sw.ms());
     QTest::qWait(1500);
     const int have = c.haveCount(goneId);
     QTest::qWait(3000);
