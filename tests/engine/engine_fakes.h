@@ -170,7 +170,11 @@ public:
         }
         m_jobs << j;
         setState(Busy);
-        if (!m_tick.isActive()) m_tick.start();
+        if (!m_tick.isActive()) {
+            m_tick.start();
+            m_paced.start();
+            m_owed = 0;
+        }
         m_clock.start();
     }
     void cancelRequests() override
@@ -196,7 +200,17 @@ private:
     void pump()
     {
         if (m_jobs.isEmpty()) { m_tick.stop(); return; }
-        qint64 budget = cfg.bytesPerSec > 0 ? qMax<qint64>(1, qint64(cfg.bytesPerSec) * 20 / 1000) : (qint64(64) << 20);
+        // the speed holds by the clock, not by the tick: a machine whose timers fire late (a busy
+        // or virtual one) serves the same bytes per second in larger steps
+        qint64 budget = qint64(64) << 20;
+        if (cfg.bytesPerSec > 0) {
+            const qint64 ns = qBound<qint64>(0, m_paced.nsecsElapsed(), qint64(100) * 1000 * 1000);   // no large bursts
+            m_paced.start();
+            m_owed += double(cfg.bytesPerSec) * double(ns) / 1e9;
+            budget = qint64(m_owed);
+            if (budget <= 0) return;
+            m_owed -= double(budget);
+        }
         while (budget > 0 && !m_jobs.isEmpty()) {
             Job &j = m_jobs.first();
             const qint64 fileEnd = cfg.data.size();
@@ -244,6 +258,8 @@ private:
     QList<Job> m_jobs;
     QTimer m_tick;
     QElapsedTimer m_clock;
+    QElapsedTimer m_paced;   // since the last pump
+    double m_owed = 0;       // bytes the speed allows that were not sent yet
 };
 
 // A plugin whose openSource() builds TestSources from per-URI configurations.

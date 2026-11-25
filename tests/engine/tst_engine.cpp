@@ -776,7 +776,8 @@ void TstEngine::sourceHashSetTrustedBlackBox()
     QVERIFY(ca.banned);
     QVERIFY(!al.banned);
     QCOMPARE(al.strikes, 0);
-    QVERIFY2(total <= data.size() + 2 * P, "more than the bad part was fetched again");
+    // the bad part twice (once more from each of the two), and at most a request that was on its way
+    QVERIFY2(total <= data.size() + 2 * P + a.pref, "more than the bad part was fetched again");
     QVERIFY(dbg.value(QStringLiteral("failedUnitBytes")).toLongLong() <= 2 * P);
 }
 
@@ -807,7 +808,8 @@ void TstEngine::sourceHashSetProvisionalCorrupt()
     QCOMPARE(dbg.value(QStringLiteral("wholeFileFailures")).toInt(), 0);
     QVERIFY(srcInfo(dbg, QStringLiteral("carol")).banned);
     QVERIFY(!srcInfo(dbg, QStringLiteral("alice")).banned);
-    QVERIFY(total <= data.size() + 2 * P);
+    // the bad part twice (once more from each of the two), and at most a request that was on its way
+    QVERIFY2(total <= data.size() + 2 * P + a.pref, qPrintable(QString::number(total)));
     QCOMPARE(env.info(id).hashes.ed2k, hashesOf(data, 2).ed2k);   // learned from the final pass
 }
 

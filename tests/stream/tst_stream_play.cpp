@@ -622,7 +622,9 @@ void TstStreamPlay::pausedStoppedAndBack()
     t.releaseMs = 2000;
     t.idleMinuteMs = 1000;   // "1 minute" = 1 s here
     env.core->streamService()->setTuning(t);
-    env.core->settings()->setValue(keys::api::IdleMin, 8);   // 8 s
+    // 60 s: the paused player below reads nothing for 5 s and more on a busy machine, which must not
+    // be the idle time yet (8 s further down, where the idle time is the point)
+    env.core->settings()->setValue(keys::api::IdleMin, 60);
     const QJsonObject so = env.streamOf(QStringLiteral("bunny"), name);
     const QString sid = so.value(QStringLiteral("id")).toString(), did = so.value(QStringLiteral("download")).toString();
     const QByteArray path = StreamEnv::pathOf(so);
@@ -693,6 +695,7 @@ void TstStreamPlay::pausedStoppedAndBack()
         QCOMPARE(g->served(uri), servedBefore);   // nothing fetched twice
     }
     // ---- the idle time passes: the stream ends, its cache file and its row go
+    env.core->settings()->setValue(keys::api::IdleMin, 8);   // 8 s from the moment that player left
     QElapsedTimer idle;
     idle.start();
     QVERIFY(QTest::qWaitFor([&] { return env.status(sid).value(QStringLiteral("state")).toString() == QLatin1String("ended"); }, 20000));
