@@ -50,6 +50,9 @@ struct Tuning {
     // the networks to send block hashes that locate the damage
     int     verifyBlockPauseMs = 0;
     int     verifyHashSetWaitMs = 3 * 60 * 1000;
+    // [str-1] a stream whose torrent gives no file list goes on as a part file from the other networks
+    // after this (a normal download waits transfers/metadataTimeoutSec)
+    int     streamMetadataFallbackMs = 10000;
 };
 
 // [merge-1] eD2k and Kad serve the same copy (one hash family); every other network is its own

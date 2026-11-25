@@ -64,6 +64,7 @@ class TstStreamBt : public QObject {
 private slots:
     void secondFileOfABundle_data();
     void secondFileOfABundle();
+    void mergedRowWithoutFileList();
 };
 
 void TstStreamBt::secondFileOfABundle_data()
@@ -185,6 +186,46 @@ void TstStreamBt::secondFileOfABundle()
     QVERIFY(!QFileInfo::exists(env.profile + QStringLiteral("/bt/torrents/") + tid + QStringLiteral(".json")));
     QVERIFY(!QFileInfo::exists(env.profile + QStringLiteral("/bt/torrents/") + tid + QStringLiteral(".fastresume")));
     qunsetenv("MX_STREAM_BT_MODE");
+}
+
+// one row, two networks: a torrent nobody answers for (no file list) and an eD2k source. The player is
+// not turned away: its request waits, the status says for what, and after the stream's fall-back time
+// the eD2k source serves it
+void TstStreamBt::mergedRowWithoutFileList()
+{
+    StreamEnv env(QStringLiteral("btnometa"));
+    const QByteArray data = randomBytes(12 * MiB + 99, 310);
+    TestPlugin *ed = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges);
+    SourceConfig c;
+    c.data = data;
+    c.bytesPerSec = 3 * 1000 * 1000;
+    c.hashSet = ed2kParts(data);
+    SearchHit hit = hitOf(QStringLiteral("Big Buck Bunny merged.mkv"), data, hashesOf(data, 2),
+                          {ed->addSource(QStringLiteral("test-ed2k://merged"), c, QStringLiteral("198.51.100.97:4662"))});
+    hit.hashes.btih = QByteArray::fromHex("0123456789abcdef0123456789abcdef01234567");   // a torrent no peer has
+    SearchSource bt;
+    bt.net = Net::BitTorrent;
+    bt.uri = QStringLiteral("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Big+Buck+Bunny+merged.mkv");
+    hit.sources.prepend(bt);
+    ed->cannedHits << hit;
+    NetworkPlugin *btp = createBitTorrentPlugin();
+    env.configure = [](Settings *s) { localBt(s); };
+    env.up({btp});
+    const QJsonObject so = env.streamOf(QStringLiteral("bunny"), QStringLiteral("Big Buck Bunny merged.mkv"));
+    QVERIFY2(so.contains(QStringLiteral("url")), QJsonDocument(so).toJson().constData());
+    const QString sid = so.value(QStringLiteral("id")).toString();
+    Player p(env.port, StreamEnv::pathOf(so), 0, MiB);
+    QString waiting;
+    QVERIFY(QTest::qWaitFor([&] {
+        waiting = env.status(sid).value(QStringLiteral("waitingFor")).toString();
+        return !waiting.isEmpty() || p.firstByteMs() >= 0;
+    }, 10000));
+    QVERIFY(p.waitDone(60000));
+    QCOMPARE(p.reply().status, 206);
+    QCOMPARE(p.data(), data.left(MiB));
+    qInfo("NUMBERS merged row, its torrent gives no file list: first byte after %lld ms (the stream's fall-back %d ms); "
+          "meanwhile the status said: %s", p.firstByteMs(), env.core->engine()->tuning().streamMetadataFallbackMs, qPrintable(waiting));
+    QVERIFY(p.firstByteMs() < env.core->engine()->tuning().streamMetadataFallbackMs + 15000);
 }
 
 QTEST_MAIN(TstStreamBt)

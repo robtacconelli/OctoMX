@@ -821,6 +821,7 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
         for (const Stream *s : std::as_const(m_streams)) live += s->ended ? 0 : 1;
         o.insert(QStringLiteral("streams"), live);
         o.insert(QStringLiteral("searches"), int(m_searches.size()));
+        o.insert(QStringLiteral("cache"), cacheJson());
         json(resp, 200, o);
         return;
     }
@@ -962,7 +963,7 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
                 o.insert(QStringLiteral("url"), linkFor(s, hostFor(req)));
                 a << o;
             }
-            json(resp, 200, QJsonObject{{QStringLiteral("streams"), a}});
+            json(resp, 200, QJsonObject{{QStringLiteral("streams"), a}, {QStringLiteral("cache"), cacheJson()}});
             return;
         }
         Stream *s = seg.size() == 2 ? streamById(QString::fromLatin1(seg.at(1))) : nullptr;
@@ -1153,6 +1154,26 @@ void StreamService::selectResult(const HttpRequest &req, HttpResponse &resp, con
     emit stateChanged();
 }
 
+QJsonObject StreamService::cacheJson() const
+{
+    // the limit ends streams nobody reads; one that is played is never cut and can grow to its file's size
+    const qint64 limit = qint64(m_settings ? m_settings->i(keys::api::CacheLimitMB) : 4096) << 20;
+    qint64 total = 0;
+    QJsonArray per;
+    for (const Stream *s : m_streams) {
+        if (s->ended || !s->owned) continue;
+        Download *d = m_engine->downloadObject(s->downloadId);
+        const qint64 b = d ? d->streamDiskBytes() : 0;
+        total += b;
+        per << QJsonObject{{QStringLiteral("stream"), s->id}, {QStringLiteral("bytes"), double(b)}};
+    }
+    return QJsonObject{{QStringLiteral("totalBytes"), double(total)}, {QStringLiteral("limitBytes"), double(limit)},
+                       {QStringLiteral("overLimit"), total > limit}, {QStringLiteral("streams"), per},
+                       {QStringLiteral("rule"), QStringLiteral("Over the limit, streams nobody reads are ended (their caches deleted), "
+                                                               "the longest unread first; a stream that is being played is never cut "
+                                                               "and can grow to the size of its file.")}};
+}
+
 QJsonObject StreamService::streamJson(const Stream *s) const
 {
     QJsonObject o;
@@ -1182,7 +1203,11 @@ QJsonObject StreamService::streamJson(const Stream *s) const
     const bool known = span.second > span.first;
     o.insert(QStringLiteral("size"), known ? double(span.second - span.first) : double(s->size));
     o.insert(QStringLiteral("sizeKnown"), known);
-    if (!known) o.insert(QStringLiteral("waitingFor"), QStringLiteral("the size and file list from the BitTorrent network"));
+    if (!known)
+        o.insert(QStringLiteral("waitingFor"), d->record().isBundle
+                     ? QStringLiteral("the file list from the BitTorrent network (a player's request waits for it)")
+                     : QStringLiteral("the file list from the BitTorrent network; the other networks of this file take over after %1 s "
+                                      "(a player's request waits)").arg(m_engine->tuning().streamMetadataFallbackMs / 1000));
     if (!d->streamFileName().isEmpty()) {   // a bundle selected before its file list: the file now known
         o.insert(QStringLiteral("name"), d->streamFileName());
         o.insert(QStringLiteral("contentType"), mimeFor(d->streamFileName()));
@@ -1253,7 +1278,12 @@ QJsonObject StreamService::streamJson(const Stream *s) const
                          {QStringLiteral("speed"), limitKBs > 0 ? QStringLiteral("the download limit of %1 KB/s applies to streams too").arg(limitKBs)
                                                                 : QStringLiteral("no download limit")},
                          {QStringLiteral("connections"), QStringLiteral("the proxy and network adapter settings apply as for every download")}});
-    if (s->overLimit) o.insert(QStringLiteral("cache"), QStringLiteral("over the cache limit: dropped as soon as no player reads it"));
+    {
+        const QJsonObject c = cacheJson();
+        o.insert(QStringLiteral("cacheTotalBytes"), c.value(QStringLiteral("totalBytes")));
+        o.insert(QStringLiteral("cacheLimitBytes"), c.value(QStringLiteral("limitBytes")));
+    }
+    if (s->overLimit) o.insert(QStringLiteral("cache"), QStringLiteral("over the cache limit: it is not cut while it is played; it ends as soon as no player reads it"));
     return o;
 }
 

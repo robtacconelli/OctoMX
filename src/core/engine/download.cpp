@@ -3308,7 +3308,8 @@ void Download::tick(qint64 now)
         const TorrentSnapshot &sn0 = m_torrent->snap();
         const bool betterKnown = sn0.peers + sn0.seeds == 0 && btCandidateReady(now, &better)
                                  && btRank(better, now) > btRank(m_rec.hashes.btih, now);
-        const qint64 limitMs = qint64(qMax(1, sec)) * 1000 / (betterKnown ? 3 : 1);
+        qint64 limitMs = qint64(qMax(1, sec)) * 1000 / (betterKnown ? 3 : 1);
+        if (streamRestricts()) limitMs = qMin<qint64>(limitMs, m_host->tuning().streamMetadataFallbackMs);   // [str-1] a player waits
         if (now - m_activatedMs > limitMs) {
             if (betterKnown)
                 qCInfo(lcEngine) << m_rec.id << "torrent" << m_torrentId.left(8) << "has no peers after" << (now - m_activatedMs) / 1000
@@ -5499,6 +5500,8 @@ bool Download::canVerify(QString *why) const
         return false;
     };
     const TransferState st = TransferState(m_rec.state);
+    if (streamRestricts())   // [str-1]
+        return no(QStringLiteral("It is a stream: its blocks are checked as they arrive, and its cache is deleted when the stream ends."));
     if (m_verify.running) return no(QStringLiteral("It is being verified now."));
     if (m_restartPending) return no(QStringLiteral("It is starting again from zero now."));
     if (st == TransferState::Cancelled) return no(QStringLiteral("It was cancelled."));
@@ -6133,6 +6136,8 @@ bool Download::canRestart(QString *why) const
         if (why) *why = t;
         return false;
     };
+    if (streamRestricts())   // [str-1]
+        return no(QStringLiteral("It is a stream: it fetches only what the player reads. Stop it and select the result again."));
     if (m_restartPending) return no(QStringLiteral("It is starting again from zero now."));
     if (TransferState(m_rec.state) == TransferState::Cancelled) return no(QStringLiteral("It was cancelled."));
     if (m_completing) return no(QStringLiteral("It is being finished now; try again in a moment."));

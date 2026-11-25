@@ -7,6 +7,7 @@
 // disappears, no source at all, stop, idle time, the cache limit, "keep as a download", a quit in
 // the middle, Pause / Cancel in the Transfers window, and a stream of a normal download.
 #include <QtCore/QCryptographicHash>
+#include <QtCore/QDirIterator>
 #include <QtTest/QTest>
 
 #include "core/dao.h"
@@ -64,6 +65,25 @@ QList<qint64> readAll(StreamEnv &env, const QByteArray &path, const QByteArray &
     return ttfb;
 }
 
+// a folder as it is on the disk now (files open in this process too)
+bool copyTree(const QString &from, const QString &to)
+{
+    QDirIterator it(from, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    QDir().mkpath(to);
+    while (it.hasNext()) {
+        const QString f = it.next();
+        const QString t = to + f.mid(from.size());
+        QDir().mkpath(QFileInfo(t).absolutePath());
+        QFile in(f), out(t);
+        if (!in.open(QIODevice::ReadOnly) || !out.open(QIODevice::WriteOnly)) return false;
+        while (!in.atEnd()) {
+            const QByteArray b = in.read(4 << 20);
+            if (out.write(b) != b.size()) return false;
+        }
+    }
+    return true;
+}
+
 QString msList(const QList<qint64> &l)
 {
     QStringList s;
@@ -111,6 +131,8 @@ private slots:
     void pausedStoppedAndBack();
     void idleDefaultIsFourHours();
     void notStarvedByDownloadsAtOnce();
+    void verifyAndRestartNotForStreams();
+    void crashInTheMiddle();
 };
 
 void TstStreamPlay::storesAndNetworks_data()
@@ -502,10 +524,19 @@ void TstStreamPlay::quitInTheMiddle()
     const QJsonObject so = env.streamOf(QStringLiteral("bunny"), name);
     Player p(env.port, StreamEnv::pathOf(so), 0, size, 1000 * 1000);
     QVERIFY(QTest::qWaitFor([&] { return p.data().size() > 2 * MiB; }, 20000));
-    // the safe quit in the middle of the stream: no record of the stream is stored (safe-1's rule, no
-    // record claims bytes that are not on the disk: here there is no record at all)
+    // the safe quit in the middle of the stream (safe-1's steps): it waits neither for the player nor
+    // for the read-ahead; the connection is cut at once; no record of the stream is stored (no record
+    // claims bytes that are not on the disk: here there is no record at all)
+    QElapsedTimer quit;
+    quit.start();
+    env.core->beginShutdown();
+    QVERIFY(QTest::qWaitFor([&] { return !env.core->shutdownBusy(); }, 3000));
+    const qint64 busyMs = quit.elapsed();
+    QVERIFY(QTest::qWaitFor([&] { return p.failed(); }, 3000));   // after what it had in its socket
+    QVERIFY(env.core->engine()->downloads().isEmpty());   // the stream's row went with it
     env.down();
-    QVERIFY(QTest::qWaitFor([&] { return p.failed() || p.done(); }, 5000));
+    qInfo("NUMBERS safe quit with a player reading: nothing left to save after %lld ms, the whole quit %lld ms", busyMs, quit.elapsed());
+    QVERIFY(quit.elapsed() < 5000);
     {
         Database db;
         QVERIFY(db.open(env.profile + QStringLiteral("/octomx.db")));
@@ -716,6 +747,95 @@ void TstStreamPlay::notStarvedByDownloadsAtOnce()
     QCOMPARE(env.core->transfers()->transfer(normal).state, TransferState::Transferring);   // both run
     const QJsonObject st = env.status(so.value(QStringLiteral("id")).toString());
     QVERIFY(st.value(QStringLiteral("limits")).toObject().value(QStringLiteral("downloadsAtOnce")).toString().contains(QStringLiteral("not counted")));
+}
+
+// Verify File and Restart Download make no sense for a stream: greyed, with the reason
+void TstStreamPlay::verifyAndRestartNotForStreams()
+{
+    StreamEnv env(QStringLiteral("verify"));
+    const QByteArray data = randomBytes(6 * MiB, 92);
+    TestPlugin *e = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges);
+    const QString name = QStringLiteral("Big Buck Bunny verify.mkv");
+    e->cannedHits << hitOf(name, data, hashesOf(data, 2), {e->addSource(QStringLiteral("test-ed2k://ver"), ed2kConfig(data, 0), QStringLiteral("198.51.100.93:4662"))});
+    env.up();
+    const QJsonObject so = env.streamOf(QStringLiteral("bunny"), name);
+    const QString did = so.value(QStringLiteral("download")).toString();
+    {
+        Player p(env.port, StreamEnv::pathOf(so), 0, 2 * MiB);
+        QVERIFY(p.waitDone(20000));
+    }
+    QString why;
+    QVERIFY(!env.core->transfers()->canVerifyDownload(did, &why));
+    QVERIFY2(why.contains(QStringLiteral("stream")), qPrintable(why));
+    QVERIFY(!env.core->transfers()->verifyDownload(did));
+    QVERIFY(!env.core->transfers()->canRestartDownload(did, &why));
+    QVERIFY2(why.contains(QStringLiteral("stream")), qPrintable(why));
+    QVERIFY(!env.core->transfers()->restartDownload(did));
+    // the stream goes on as before
+    QVERIFY(env.status(so.value(QStringLiteral("id")).toString()).value(QStringLiteral("state")).toString() != QLatin1String("ended"));
+    Player p2(env.port, StreamEnv::pathOf(so), 3 * MiB, 4 * MiB);
+    QVERIFY(p2.waitDone(20000));
+    QCOMPARE(p2.data(), data.mid(3 * MiB, MiB));
+    // a stream of a normal download (download: true) is a normal download: both allowed
+    StreamEnv env2(QStringLiteral("verify2"));
+    TestPlugin *e2 = env2.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges);
+    e2->cannedHits << hitOf(name, data, hashesOf(data, 2), {e2->addSource(QStringLiteral("test-ed2k://ver2"), ed2kConfig(data, 0), QStringLiteral("198.51.100.94:4662"))});
+    env.down();
+    env2.up();
+    const QJsonObject n = env2.streamOf(QStringLiteral("bunny"), name, -1, true);
+    QVERIFY(env2.core->transfers()->canRestartDownload(n.value(QStringLiteral("download")).toString(), nullptr));
+}
+
+// a crash in the middle of a stream (what is on the disk at that moment, taken while it streams),
+// then a start: nothing of the stream is left, no row, nothing "waiting to be checked"
+void TstStreamPlay::crashInTheMiddle()
+{
+    StreamEnv env(QStringLiteral("crash"));
+    const qint64 size = 24 * MiB;
+    const QByteArray data = randomBytes(size, 93);
+    TestPlugin *e = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges);
+    const QString name = QStringLiteral("Big Buck Bunny crash.mkv");
+    e->cannedHits << hitOf(name, data, hashesOf(data, 2), {e->addSource(QStringLiteral("test-ed2k://crash"), ed2kConfig(data, 2 * 1000 * 1000), QStringLiteral("198.51.100.95:4662"))});
+    env.up();
+    // a normal download beside it: it is checked after the crash, the stream is not
+    TestPlugin *n = e;
+    const QByteArray other = randomBytes(12 * MiB, 94);
+    DownloadRequest r;
+    r.name = QStringLiteral("debian-12.8.0-amd64-netinst.iso");
+    r.size = other.size();
+    r.hashes = hashesOf(other, 2);
+    r.sources = {n->addSource(QStringLiteral("test-ed2k://iso"), ed2kConfig(other, 1000 * 1000), QStringLiteral("198.51.100.96:4662"))};
+    const QString iso = env.core->transfers()->download(r);
+    const QJsonObject so = env.streamOf(QStringLiteral("bunny"), name);
+    Player p(env.port, StreamEnv::pathOf(so), 0, size, 1000 * 1000);
+    QVERIFY(QTest::qWaitFor([&] { return p.data().size() > 2 * MiB && env.core->transfers()->transfer(iso).done > MiB; }, 30000));
+    // the disk as a crash leaves it: the running mark, the database, the caches
+    QVERIFY(QFileInfo::exists(env.profile + QStringLiteral("/octomx.running")));
+    env.core->database()->flush();
+    const QString copy = env.root + QStringLiteral("/after-crash");
+    QDir(copy).removeRecursively();
+    QDir().mkpath(copy);
+    QVERIFY(copyTree(env.profile, copy + QStringLiteral("/profile")));
+    QVERIFY(copyTree(env.root + QStringLiteral("/incomplete"), copy + QStringLiteral("/incomplete")));
+    QVERIFY(!QDir(copy + QStringLiteral("/incomplete/Streams")).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+    p.stop();
+    env.down();
+    // the start after the crash, on that disk
+    StreamEnv after(QStringLiteral("crash-start"));
+    QDir(after.root).removeRecursively();
+    QVERIFY(QDir().rename(copy, after.root));
+    TestPlugin *e2 = after.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges);
+    e2->addSource(QStringLiteral("test-ed2k://iso"), ed2kConfig(other, 1000 * 1000), QStringLiteral("198.51.100.96:4662"));
+    after.up();
+    QVERIFY(after.core->lastStopWasUnclean());
+    const QList<TransferInfo> rows = after.core->transfers()->downloads();
+    QCOMPARE(rows.size(), 1);   // the normal download only
+    QCOMPARE(rows.first().id, iso);
+    for (const TransferInfo &t : rows) QVERIFY(!t.statusText.startsWith(QStringLiteral("Streaming")));
+    QVERIFY(QTest::qWaitFor([&] { return QDir(after.root + QStringLiteral("/incomplete/Streams")).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty(); }, 5000));
+    QVERIFY(QDir(after.root + QStringLiteral("/incomplete")).entryList({QStringLiteral("*.moving")}, QDir::Files).isEmpty());
+    // the normal download is checked and finishes
+    QVERIFY(QTest::qWaitFor([&] { return after.core->transfers()->transfer(iso).state == TransferState::Completed; }, 60000));
 }
 
 QTEST_MAIN(TstStreamPlay)

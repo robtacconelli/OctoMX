@@ -19,7 +19,7 @@ Settings, Other Networks, **Streaming API**:
 | Allow other devices on my network | off | Also listens on this computer's private addresses (10.x, 172.16 to 31.x, 192.168.x, fc00::/7), never on a public one. Every device there that knows the token can then search and start transfers. |
 | Access token | made when first switched on | Every API call must send it. **Copy** puts it in the clipboard, **New** makes a new one (the old token and every old stream link stop working). |
 | Address | | The base address to give the program, for example `http://127.0.0.1:17580/api/v1/`. |
-| All stream caches at most | 4096 MB | The caches of all streams together. Over it, streams no player reads are dropped first; one that is played stays until its player stops. |
+| All stream caches at most | 4096 MB | When all stream caches together hold more, streams nobody reads are ended and their caches deleted, the longest unread first. A stream that is being played is never cut: its cache can grow to the size of its file. The status calls show each cache and the total against the limit. |
 | Delete unread streams after | 240 minutes (4 hours) | A stream nobody reads (no player, or a paused one) for this long ends and its cache is deleted. |
 | Keep what was streamed as a download | off | When a stream ends, it becomes a normal download that completes into the incoming folder, instead of being deleted. |
 
@@ -261,8 +261,9 @@ of an ended stream answers `410` with the reason.
 `GET` and `HEAD`, a single `Range` (`bytes=a-b`, `bytes=a-`, `bytes=-n`): `206` with `Content-Range`,
 `Accept-Ranges: bytes`, `Content-Length` and a `Content-Type` from the extension; a range beyond the
 end is `416`; several ranges at once get the whole file (`200`). The size is known before the first
-byte (a torrent added by magnet: the answer waits up to 90 s for the file list, then `504` with the
-reason in the status). Several connections of one player, a player that closes and reopens, and a
+byte. A torrent added by magnet first needs its file list from a peer: the answer waits for it (the
+status call says so in `waitingFor`), at most 5 minutes (then `504` with the reason in the status); a
+single file that other networks have too goes on from them after 10 s without that list. Several connections of one player, a player that closes and reopens, and a
 second player on the same link all work.
 
 ## Walk-through: search, pick, play
@@ -310,8 +311,11 @@ second player on the same link all work.
   is fetched again and counted in `failedChecks`.
 * **Where the bytes live**: in a cache below the incomplete folder (`Streams/<download id>`), a sparse
   file (or a torrent's folder) never allocated in full. It is deleted when the stream stops, when
-  nobody reads it for the idle time, by the cache limit, and at the next start of OctoMX (a cache is
-  never kept across a quit or a crash). It is never in the database.
+  nobody reads it for the idle time, by the cache limit (only streams nobody reads), and at the next
+  start of OctoMX (a cache is never kept across a quit or a crash). It is never in the database.
+  Nothing behind a read position is freed while the stream lives: a stream played to the end holds
+  the whole file until it ends. `GET /api/v1/streams` and `GET /api/v1/status` show `cache`: the
+  total, the limit and each stream's bytes; every stream shows its own `cachedBytes`.
 * **Uploading**: what a stream holds is shared like a partial download (verified parts only; BitTorrent
   peers get the pieces it has).
 * **Limits**: the download speed limit applies to streams too (the status says it when one is set);
@@ -324,4 +328,6 @@ second player on the same link all work.
   avi / webm).
 * eD2k / Kad sources often keep a requester in their upload queue for minutes: a file only eD2k has
   can take long to start, and the bytes are served unverified until their 9.28 MB part is complete.
-* A torrent added by magnet needs its file list from a peer before the first byte.
+* A torrent added by magnet needs its file list from a peer before the first byte (the request waits; a
+  single file other networks have goes on from them after 10 s).
+* The cache limit does not cut a stream that is being played: its cache can grow to the size of its file.

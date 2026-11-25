@@ -12,6 +12,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSpinBox>
 
@@ -185,6 +186,35 @@ private slots:
             return found;
         }, 5000));
         m_mw->grab().save(QStringLiteral(MX_STR1_SHOTS) + QStringLiteral("/transfers-stream-row.png"));
+        // Verify File and Restart Download... are greyed for a stream, the tool tip says why
+        {
+            QModelIndex row;
+            for (int i = 0; i < list->visibleRowCount(); ++i) {
+                const QModelIndex v = list->visibleRow(i);
+                if (!v.parent().isValid() && v.data().toString().contains(QStringLiteral("Big Buck Bunny row"))) row = v;
+            }
+            QVERIFY(row.isValid());
+            list->clearSelection();
+            list->selectionModel()->select(row, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+            emit list->contextMenuAt(row, list->viewport()->mapToGlobal(QPoint(30, 30)));
+            QMenu *menu = nullptr;
+            QVERIFY(QTest::qWaitFor([&] {
+                for (QWidget *w : QApplication::topLevelWidgets())
+                    if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible()) menu = m;
+                return menu != nullptr;
+            }, 3000));
+            QAction *verify = nullptr, *restart = nullptr;
+            for (QAction *a : menu->actions()) {
+                if (a->objectName() == QLatin1String("actVerifyFile")) verify = a;
+                if (a->objectName() == QLatin1String("actRestartDownload")) restart = a;
+            }
+            QVERIFY(verify && restart);
+            QVERIFY(!verify->isEnabled());
+            QVERIFY(!restart->isEnabled());
+            QVERIFY2(verify->toolTip().contains(QStringLiteral("stream")), qPrintable(verify->toolTip()));
+            QVERIFY2(restart->toolTip().contains(QStringLiteral("stream")), qPrintable(restart->toolTip()));
+            menu->close();
+        }
         // it can be cancelled there: its cache goes, never to the trash
         m_core->transfers()->cancel(id, true);
         QVERIFY(QTest::qWaitFor([&] { return m_core->transfers()->transfer(id).id.isEmpty(); }, 3000));

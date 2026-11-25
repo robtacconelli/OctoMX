@@ -1363,7 +1363,9 @@ ultrapeers), `Uploads`/`Downloads`/`Other` unchanged.
 * [str-1] Transfers: a stream is a download row whose status starts with `Streaming:` (`Streaming: 1
   player, 10.2 MB buffered ahead`, `Streaming: a player waits for the bytes at 512.0 MB`, `Streaming:
   paused by the player, ...`, `Streaming: idle, no player (the cache goes in 3 h 59 min)`); Pause and
-  Cancel work on it as on any download (Cancel deletes its cache, never to the trash).
+  Cancel work on it as on any download (Cancel deletes its cache, never to the trash). `Verify File` and
+  `Restart Download...` are greyed for a stream row, the tool tip says why (its blocks are checked as they
+  arrive; stop it and select the result again).
 
 ### 8.10 Things to keep identical even if "meaningless"
 `Float/Dock`, the news bar, `Scan For Media`, `Ping` buttons, the three-colour legend, the chat

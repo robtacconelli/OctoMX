@@ -50,7 +50,7 @@ public:
         int     urgentSec = 4;                     // the part right after a read position: deadlines
         int     stallNoSourceMs = 60000;           // a player waits this long and no source is there: closed
         int     stallMs = 300000;                  // a player waits this long in any case: closed
-        int     metaWaitMs = 90000;                // the size / file list of a torrent: wait this long
+        int     metaWaitMs = 300000;               // the size / file list of a torrent: wait this long (the stall time)
         int     maxSearches = 16;
         int     maxStreams = 8;
         int     endedKeepMs = 10 * 60 * 1000;      // an ended stream's status stays readable this long
@@ -126,6 +126,7 @@ private:
     Stream *streamById(const QString &id) const;
     Search *searchById(quint32 id) const;
     QJsonObject streamJson(const Stream *s) const;
+    QJsonObject cacheJson() const;   // every stream's cache against the limit
     QJsonObject hitJson(const Search *se, const SearchHit &h, bool full) const;
     QList<SearchHit> searchHits(const Search *se) const;
     static QString hitKeyOf(const SearchHit &h);

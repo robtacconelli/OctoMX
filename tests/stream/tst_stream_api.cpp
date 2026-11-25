@@ -409,6 +409,15 @@ void TstStreamApi::callsAndErrors()
     QVERIFY(sj.contains(QStringLiteral("players")));
     QVERIFY(sj.value(QStringLiteral("transferStatus")).toString().startsWith(QStringLiteral("Streaming:")));
     QCOMPARE(env.api("GET", "/api/v1/streams").json().value(QStringLiteral("streams")).toArray().size(), 1);
+    {   // the caches against the limit, in the list and in the status call
+        const QJsonObject cache = env.api("GET", "/api/v1/streams").json().value(QStringLiteral("cache")).toObject();
+        QCOMPARE(qint64(cache.value(QStringLiteral("limitBytes")).toDouble()), qint64(4096) << 20);
+        QVERIFY(cache.value(QStringLiteral("totalBytes")).toDouble() >= 1000);
+        QCOMPARE(cache.value(QStringLiteral("streams")).toArray().size(), 1);
+        QVERIFY(cache.value(QStringLiteral("rule")).toString().contains(QStringLiteral("never cut")));
+        QVERIFY(env.api("GET", "/api/v1/status").json().contains(QStringLiteral("cache")));
+        QVERIFY(sj.contains(QStringLiteral("cacheTotalBytes")) && sj.contains(QStringLiteral("cacheLimitBytes")));
+    }
     QCOMPARE(env.api("GET", "/api/v1/streams/nope").status, 404);
     // stop: the link is gone, the status says why
     const Reply stop = env.api("DELETE", "/api/v1/streams/" + streamId.toLatin1());
