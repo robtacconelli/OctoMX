@@ -170,6 +170,22 @@ It listens on this computer only unless you allow your home network. The three c
 The last answer has the `url` for the player. Every call, the status of a stream and the safety rules
 are in [docs/API.md](docs/API.md).
 
+What to expect:
+
+* **Pick a result by its `seeds`.** A torrent with many seeds starts in seconds and a skip takes a few
+  seconds (measured with the open film Big Buck Bunny, about 350 seeds: first picture data usually
+  after 3 to 10 seconds, a skip usually 1 to 6 seconds). A torrent with one seed took one to three
+  minutes per skip.
+* **A file that only eD2k / Kad have is not practical to stream:** those sources keep a requester
+  in a queue for minutes. A stream uses every network that has the file, like a download, but only
+  BitTorrent was seen to carry one at playing speed.
+* **The file list of a torrent is often not known before it starts.** Selecting such a result answers
+  `409 files_unknown` the first time; selecting it again streams its largest audio or video file. The
+  stream's status has the name and type of the file that is streamed.
+* Only audio and video files are streamed, nothing is converted, and a stream that is being played
+  keeps what it fetched until it ends. A stream nobody reads for 4 hours (a setting) ends and its
+  cache is deleted.
+
 ## Where your data lives (profile)
 
 Everything the program remembers is in one profile folder: settings (`settings.json`), the
@@ -269,6 +285,9 @@ Plainly, from the status reports of the people who built it:
 * **Web index sites** change domains and block clients from time to time; a broken site needs a
   `providers.json` update.
 * **Downloads:** a torrent whose metadata never arrives does not fall back to the other networks.
+* **Streaming API:** tested with ffprobe and ffmpeg as the player, not with mpv or VLC. eD2k parts
+  and plain web links are played as they arrive and checked afterwards (the status counts those
+  bytes). With "Allow other devices on my network" the traffic in your network is plain HTTP.
 * **User interface:** a few WinMX 3.53 features are missing or simplified: the "Manually
   Resume" file dialog, hotlist display templates, binary server.met / nodes.dat import, live font
   changes, floating single chat rooms. "Shutdown when transfers stop" was only
