@@ -57,6 +57,8 @@ mkdir -p "$WORK" "$SHOTS"
 FAILS=0
 ok()  { echo "OK   $*"; }
 bad() { echo "FAIL $*"; FAILS=$((FAILS+1)); }
+# safe closing (the quit waits for the disk and says "every download is saved") came with 5.6
+a_closes_safely() { [ "$(printf '%s\n' 5.6 "$VA" | sort -V | head -n1)" = 5.6 ]; }
 info() { echo "INFO $*"; }
 python3 -I -c 'import socket; s=socket.socket(); s.settimeout(2); import sys; sys.exit(0 if s.connect_ex(("140.82.112.6",443)) else 1)' \
   && ok "network namespace: api.github.com's address is unreachable, only loopback exists" || bad "the outside network is reachable"
@@ -258,8 +260,12 @@ linux_download() {
   local rc=$?
   [ $rc = 0 ] && ok "linux download: A ran, installed the update and ended (rc 0)" || bad "linux download: A rc=$rc: $(tail -n 3 "$D/a.out" | tr '\n' ' ')"
   local held; held=$(du -b "$PR"/incomplete/*.part 2>/dev/null | awk '{s+=$1} END {print s+0}')
-  grep -q "engine shut down .*every download is saved" "$PR/logs/octomx.log" && ok "linux download: A saved every download before the install ($(grep -m1 'engine shut down' "$PR/logs/octomx.log" | sed 's/.*engine shut down/engine shut down/' | cut -c1-90))" \
-                                                                         || bad "linux download: A did not say every download is saved"
+  if a_closes_safely; then
+    grep -q "engine shut down .*every download is saved" "$PR/logs/octomx.log" && ok "linux download: A saved every download before the install ($(grep -m1 'engine shut down' "$PR/logs/octomx.log" | sed 's/.*engine shut down/engine shut down/' | cut -c1-90))" \
+                                                                           || bad "linux download: A did not say every download is saved"
+  else
+    echo "NOTE linux download: A is $VA, older than 5.6: it has no safe closing and does not say that every download is saved"
+  fi
   local pid; pid=$(grep -ahm1 "update: started .*bin/octomx" "$PR/logs/octomx.log" "$D/a.out" | sed -n 's/.*(pid \([0-9]*\)).*/\1/p' | head -n1)
   [ -n "$pid" ] && ok "linux download: A started B (pid $pid), the part file holds $held bytes" || bad "linux download: no pid of B"
   download_finished "linux download" "$PR/logs/octomx.log" "$PR/incoming/$(basename "$PAYLOAD")" "$pid" 240
@@ -364,8 +370,12 @@ wine_download() {
   local rc=$?
   [ $rc = 0 ] && ok "wine download: A ran, installed the update and ended (rc 0)" || bad "wine download: A rc=$rc: $(tail -n 3 "$D/a.out" | tr '\n' ' ')"
   local LOGF=$PR/logs/octomx.log
-  grep -aq "engine shut down .*every download is saved" "$LOGF" && ok "wine download: A saved every download before the install" \
-                                                                || bad "wine download: A did not say every download is saved"
+  if a_closes_safely; then
+    grep -aq "engine shut down .*every download is saved" "$LOGF" && ok "wine download: A saved every download before the install" \
+                                                                  || bad "wine download: A did not say every download is saved"
+  else
+    echo "NOTE wine download: A is $VA, older than 5.6: it has no safe closing and does not say that every download is saved"
+  fi
   download_finished "wine download" "$LOGF" "$PR/incoming/$(basename "$PAYLOAD")" "" 300
   grep -aq "waited .* for the previous OctoMX" "$LOGF" && ok "wine download: B $(grep -am1 'waited .* for the previous' "$LOGF" | tr -d '\r' | sed 's/.*update: //')" \
                                                        || bad "wine download: B did not wait for A"
