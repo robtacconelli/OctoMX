@@ -16,10 +16,10 @@
 // [post-1] defined by the top-level CMakeLists.txt from project(OctoMX VERSION ...); these
 // fallbacks only serve a build without it
 #ifndef MX_VERSION_FULL
-#define MX_VERSION_FULL "5.6.0"
+#define MX_VERSION_FULL "5.7.0"
 #endif
 #ifndef MX_VERSION_STRING
-#define MX_VERSION_STRING "5.6"
+#define MX_VERSION_STRING "5.7"
 #endif
 
 namespace mx {

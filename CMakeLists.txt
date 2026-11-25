@@ -3,7 +3,7 @@
 # Modules are picked up automatically when their directory contains a CMakeLists.txt, so workers
 # never need to edit this file: just create src/<module>/CMakeLists.txt and tests/<module>/CMakeLists.txt.
 cmake_minimum_required(VERSION 3.21)
-project(OctoMX VERSION 5.6.0 LANGUAGES C CXX)
+project(OctoMX VERSION 5.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,7 +24,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Sql Concurrent Tes
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 endif()
-# [post-1] the one version number: MX_VERSION_FULL "5.6.0" and MX_VERSION_STRING "5.6" (title bar,
+# [post-1] the one version number: MX_VERSION_FULL "5.7.0" and MX_VERSION_STRING "5.7" (title bar,
 # About, user agents, update check) come from project() above
 add_compile_definitions(MX_VERSION_FULL="${PROJECT_VERSION}"
                         MX_VERSION_STRING="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
