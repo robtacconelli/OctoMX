@@ -159,7 +159,9 @@ void TstEngine::fiveSources()
     QVERIFY(contributing >= 4);
     const qint64 over = overlapBytes(l);
     qInfo("double-assigned bytes: %lld of %lld (endgame only)", over, qint64(data.size()));
-    QVERIFY2(over <= data.size() * 3 / 100 + 4 * 360 * 1024, "chunks were double-assigned outside the endgame");
+    // the endgame may ask for every request that is on its way a second time: the five sources hold
+    // at most 1 + 2 + 1 + 2 + 1 = 7 requests of 360 KiB
+    QVERIFY2(over <= data.size() * 3 / 100 + 7 * 360 * 1024, "chunks were double-assigned outside the endgame");
     const QVariantMap dbg = env.engine->debugInfo(id);
     QCOMPARE(dbg.value(QStringLiteral("scheme")).toInt(), 1);   // eD2k parts were used
 }

@@ -151,6 +151,16 @@ void TstStreamBt::secondFileOfABundle()
         env.core->streamService()->setTuning(st);
     }
     QVERIFY(QTest::qWaitFor([&] { return bt->status().listenPort > 0; }, 10000));
+    {
+        // The settings made above restart the session half a second later (the connection policy; it
+        // listens on another port then). The stream starts after that, not into it: a torrent that was
+        // connected to the seed when the session went may be refused by the seed as a second
+        // connection, and libtorrent then waits a minute before it tries that peer again.
+        const int firstPort = bt->status().listenPort;
+        const bool restarted = QTest::qWaitFor([&] { const int p = bt->status().listenPort; return p > 0 && p != firstPort; }, 5000);
+        if (!restarted) qInfo("the session was not restarted within 5 s: going on");
+        QVERIFY(QTest::qWaitFor([&] { return bt->status().listenPort > 0; }, 10000));
+    }
     int status = 0;
     const QJsonObject so = env.streamOf(QStringLiteral("bunny"), QStringLiteral("Big Buck Bunny pack"), 1, false, &status);
     QCOMPARE(status, 201);

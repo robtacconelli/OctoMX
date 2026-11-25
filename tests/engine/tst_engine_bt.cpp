@@ -544,9 +544,14 @@ void TstEngineBt::verifyAndRestartWithRealLibtorrent()
         QVERIFY(f.open(QIODevice::ReadWrite) && f.seek(5 * pl + 33));
         f.write("XYZ");
     }
+    // the seed serves nothing until the result is read: on a slow machine the damaged piece was
+    // fetched again before that, and the result (taken from the pieces held at that moment) then
+    // said "intact"
+    a.be->pauseTorrent(tid);
     QVERIFY(env.engine->verifyDownload(id));
     QVERIFY(QTest::qWaitFor([&] { return !notices.isEmpty(); }, 60000));
     QString text = notices.last().at(1).toString();
+    a.be->resumeTorrent(tid);
     QVERIFY2(text.contains(QStringLiteral("1 piece of 'Lantern.mkv'")) && text.contains(QStringLiteral("being downloaded again")), qPrintable(text));
     QVERIFY2(doneWithSeed(), qPrintable(env.info(id).statusText));
     QCOMPARE(readFile(path), data);
