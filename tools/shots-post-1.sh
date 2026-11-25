@@ -28,9 +28,9 @@ conv() { if [ "$PATHCONV" = cat ]; then echo "$1"; else $PATHCONV "$1"; fi; }
 SRV=$WORK/srv
 mkdir -p "$SRV"
 cat > "$SRV/newer" <<'JSON'
-{"tag_name":"v5.8.0","name":"OctoMX 5.8","draft":false,"prerelease":false,
- "html_url":"https://github.com/robtacconelli/OctoMX/releases/tag/v5.8.0",
- "body":"## What's new in 5.8\n\n* Example entry one (demo text from the screenshot script)\n* Example entry two\n* Example entry three\n\nFull notes on the release page."}
+{"tag_name":"v5.9.0","name":"OctoMX 5.9","draft":false,"prerelease":false,
+ "html_url":"https://github.com/robtacconelli/OctoMX/releases/tag/v5.9.0",
+ "body":"## What's new in 5.9\n\n* Example entry one (demo text from the screenshot script)\n* Example entry two\n* Example entry three\n\nFull notes on the release page."}
 JSON
 cat > "$SRV/same" <<JSON
 {"tag_name":"v$(sed -n 's/^project(OctoMX VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")","name":"same","draft":false,"prerelease":false,"html_url":"https://github.com/robtacconelli/OctoMX/releases","body":""}

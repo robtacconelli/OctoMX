@@ -13,7 +13,7 @@
 #   --keep       keep the work folder (build/shots-readme/run: profiles, logs, full screen grabs)
 #
 # Every picture is the Windows build running under wine with the real Win32 window frame (title bar
-# with the program icon and "OctoMX v5.7 ..."), cropped exactly to the window, 100 %, no scaling:
+# with the program icon and "OctoMX v5.8 ..."), cropped exactly to the window, 100 %, no scaling:
 # wine in its own prefix (build/shots-readme/wineprefix, Windows 2000 standard colours, a 1280x1024
 # virtual desktop) on its own Xvnc. Nothing is written to the real HOME, ~/.wine or ~/Downloads:
 # HOME points into the work folder, every run has its own --profile and MX_OS_ROOT, downloads go
