@@ -710,13 +710,25 @@ private slots:
         QAction *df = uib::menuAction(uib::openMenu(), QStringLiteral("Delete Folder..."));
         QVERIFY(df && df->statusTip().contains(QStringLiteral("You are asked first")));
         uib::closeMenus();
-        l->expand(folderRow);
-        QTRY_VERIFY(l->model()->index(0, 0, folderRow).isValid());   // [mac-1] the file row comes a moment later on a CI Mac
-        page->showContextMenu(l->model()->index(0, 0, folderRow), QPoint(5, 5));
-        QTest::qWait(10);
-        QAction *dfile = uib::menuAction(uib::openMenu(), QStringLiteral("Delete File..."));
-        QVERIFY(dfile && dfile->statusTip().contains(QStringLiteral("You are asked first")));
-        uib::closeMenus();
+        // the file row comes a moment later ([mac-1] a CI Mac), and on a busy machine the list can be
+        // filled again while the menu opens: look the rows up afresh until the file's menu is there
+        const auto fileMenuHasDelete = [&] {
+            QModelIndex fr;
+            for (int r = 0; r < l->model()->rowCount(); ++r)
+                if (l->model()->index(r, 0).data().toString().contains(QStringLiteral("share%12").arg(m_run)))
+                    fr = l->model()->index(r, 0);
+            if (!fr.isValid()) return false;
+            l->expand(fr);
+            const QModelIndex file = l->model()->index(0, 0, fr);
+            if (!file.isValid()) return false;
+            page->showContextMenu(file, QPoint(5, 5));
+            QTest::qWait(10);
+            QAction *dfile = uib::menuAction(uib::openMenu(), QStringLiteral("Delete File..."));
+            const bool ok = dfile && dfile->statusTip().contains(QStringLiteral("You are asked first"));
+            uib::closeMenus();
+            return ok;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(fileMenuHasDelete(), 10000);
         // Del on the list asks (Cancel here)
         answer = QDialog::Rejected;
         const int k = int(asked.size());
