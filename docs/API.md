@@ -84,7 +84,7 @@ Every answer is JSON. An error has a code and a sentence a person can read:
         ],
         "searches": 0,
         "streams": 0,
-        "version": "5.8"
+        "version": "5.9"
     }
 
 ### POST /api/v1/searches
