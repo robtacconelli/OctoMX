@@ -112,10 +112,13 @@ void prepareReply(QNetworkReply *reply, const HttpConfig &cfg)
     });
 }
 
-void dropReply(QNetworkReply *reply)
+void dropReply(QNetworkReply *reply, const QObject *owner)
 {
     if (!reply) return;
-    reply->disconnect();
+    // only the owner's slots: a QNetworkReply stops its transfer through signals of its own (to Qt's HTTP
+    // thread). Cutting every connection cut those too: abort() then stopped nothing, the connection stayed
+    // open, and six of them (all Qt keeps per host) left the host without an answer
+    QObject::disconnect(reply, nullptr, owner, nullptr);
     if (reply->isRunning()) reply->abort();
     reply->deleteLater();
 }

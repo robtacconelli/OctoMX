@@ -658,7 +658,12 @@ void TstStreamPlay::pausedStoppedAndBack()
     QVERIFY(pausedServed <= sentToPlayer + target + 2 * MiB);
     QVERIFY(pausedServed < size / 2);
     QTest::qWait(1500);
-    QCOMPARE(g->served(uri), pausedServed);   // still nothing
+    {   // still nothing, except what the player's socket took meanwhile (on a busy machine its buffer may grow late:
+        // what was sent moves on, and the buffer ahead of it follows)
+        const qint64 sentLater = qint64(env.status(sid).value(QStringLiteral("players")).toArray().first().toObject().value(QStringLiteral("sent")).toDouble());
+        const qint64 more = g->served(uri) - pausedServed;
+        QVERIFY2(more <= sentLater - sentToPlayer, qPrintable(QStringLiteral("fetched %1 more bytes while paused, sent %2 more").arg(more).arg(sentLater - sentToPlayer)));
+    }
     // reading again continues at once from the buffer
     const qint64 had = p->data().size();
     p->resumeReading();

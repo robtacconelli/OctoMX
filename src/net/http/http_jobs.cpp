@@ -18,20 +18,20 @@ ProbeJob::ProbeJob(QNetworkAccessManager *nam, const HttpConfig &cfg, const Http
 
 ProbeJob::~ProbeJob()
 {
-    dropReply(m_reply);
+    dropReply(m_reply, this);
 }
 
 void ProbeJob::abort()
 {
     m_finished = true;
     m_overall.stop();
-    dropReply(m_reply);
+    dropReply(m_reply, this);
     m_reply = nullptr;
 }
 
 QNetworkReply *ProbeJob::track(QNetworkReply *r)
 {
-    dropReply(m_reply);
+    dropReply(m_reply, this);
     m_reply = r;
     prepareReply(r, m_cfg);
     return r;
@@ -250,7 +250,7 @@ void ProbeJob::finish(bool ok, const QString &error, bool permanent)
     if (m_reply) {
         QNetworkReply *r = m_reply;
         m_reply = nullptr;
-        dropReply(r);
+        dropReply(r, this);
     }
     HttpProbeResult &o = m_out.r;
     o.ok = ok;

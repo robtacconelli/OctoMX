@@ -326,7 +326,7 @@ void HttpRangeSource::releaseReply(Req *q, bool graceful)
             QObject::connect(r, &QNetworkReply::finished, r, &QObject::deleteLater);
             QTimer::singleShot(10000, r, [r] { if (r->isRunning()) r->abort(); });
         } else {
-            dropReply(r);
+            dropReply(r, this);
         }
     }
     if (q->hasSlot) {
@@ -577,7 +577,7 @@ void HttpRangeSource::onFinished(quint64 id)
         if (!next.isValid()) { failSource(err); return; }
         QNetworkReply *old = q->reply;
         q->reply = nullptr;
-        dropReply(old);
+        dropReply(old, this);
         q->url = next;
         startReq(q);            // keeps its host slot
         return;

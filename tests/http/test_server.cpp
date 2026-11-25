@@ -225,7 +225,8 @@ private:
         m_resetAt = -1;
         m_activeKey = "active:" + path;
         m_srv->bumpPath(m_activeKey);
-        m_srv->activeDelta(1);
+        m_what = path + " " + QByteArray::number(first) + "-" + QByteArray::number(last) + " from port " + QByteArray::number(m_s->peerPort());
+        m_srv->activeDelta(1, m_what);
         const int getNo = m_srv->pathCount("get:" + key);
         if (num("stallonce", -1) >= 0 && getNo == 1) m_stallAt = num("stallonce", -1);
         if (num("resetonce", -1) >= 0 && getNo == 1) m_resetAt = num("resetonce", -1);
@@ -242,7 +243,7 @@ private:
         m_inBody = false;
         m_timer.stop();
         m_srv->bumpPath(m_activeKey + "-done");
-        m_srv->activeDelta(-1);
+        m_srv->activeDelta(-1, m_what + (m_pos >= m_end ? " sent whole" : " cut at " + QByteArray::number(m_pos)));
         m_srv->bumpPath(m_activeKey + "#dec");
     }
 
@@ -287,7 +288,7 @@ private:
     bool m_head = false, m_inBody = false, m_chunked = false, m_closeAtEnd = false, m_torrent = false;
     quint64 m_seed = 0;
     qint64 m_pos = 0, m_end = 0, m_sent = 0, m_stallAt = -1, m_resetAt = -1, m_rate = 0, m_budget = 0;
-    QByteArray m_activeKey;
+    QByteArray m_activeKey, m_what;
     QTimer m_timer;
 };
 
@@ -338,11 +339,26 @@ int TestServer::pathCount(const QByteArray &key) const
     return m_counts.value(key);
 }
 
-void TestServer::activeDelta(int d)
+void TestServer::activeDelta(int d, const QByteArray &what)
 {
     QMutexLocker l(&m_mutex);
     m_active += d;
     m_maxActive = qMax(m_maxActive, m_active);
+    if (m_timeline.size() < 16000)
+        m_timeline += QByteArray::number(m_since.isValid() ? m_since.elapsed() : 0) + " ms " + (d > 0 ? "start " : "end   ") + what
+                      + " (now " + QByteArray::number(m_active) + ")\n";
+}
+
+int TestServer::active() const
+{
+    QMutexLocker l(&m_mutex);
+    return m_active;
+}
+
+QByteArray TestServer::timeline() const
+{
+    QMutexLocker l(&m_mutex);
+    return m_timeline;
 }
 
 int TestServer::count(const QByteArray &method, const QByteArray &pathPrefix) const
@@ -371,7 +387,10 @@ void TestServer::reset()
     QMutexLocker l(&m_mutex);
     m_log.clear();
     m_counts.clear();
-    m_active = m_maxActive = 0;
+    // a body of the test before that is still being sent stays counted (it ends later and counts down)
+    m_maxActive = m_active;
+    m_timeline = m_active ? "reset with " + QByteArray::number(m_active) + " bodies still being sent\n" : QByteArray();
+    m_since.start();
 }
 
 } // namespace mxtest

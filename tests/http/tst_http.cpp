@@ -144,6 +144,9 @@ private slots:
     }
     void init()
     {
+        // what the test before left behind (a cancelled request's body) is over before this one counts
+        if (!QTest::qWaitFor([this] { return srv->active() == 0; }, 5000))
+            qWarning("the test server still sends %d bodies of the test before:\n%s", srv->active(), srv->timeline().constData());
         srv->reset();
         limiter.setRate(0);
         settings->setValue(QLatin1String(httpkeys::ConnectionsPerSource), 4);
@@ -787,6 +790,26 @@ private slots:
         QCOMPARE(c3.finished.size(), 0);
         s->disconnect(s.get());
     }
+    // a request cancelled in the middle of its body closes its connection: the server sees it go, and the
+    // connections Qt keeps per host (6) do not fill up with cancelled requests
+    void cancelClosesTheConnection()
+    {
+        std::unique_ptr<RangeSource> s(open(url("/f/drop.bin?size=40000000&rate=2000000"), 40000000));
+        QTRY_VERIFY_WITH_TIMEOUT(settled(s.get()), 5000);
+        Collector c(s.get());
+        for (int i = 0; i < 8; ++i) {
+            const int before = c.chunks;
+            s->request(qint64(i) * 4000000, 4000000);
+            QTRY_VERIFY2_WITH_TIMEOUT(c.chunks > before, qPrintable(QStringLiteral("request %1 got no data; the server saw:\n%2").arg(i).arg(QString::fromLatin1(srv->timeline()))), 8000);
+            s->cancelRequests();
+            QTRY_VERIFY2_WITH_TIMEOUT(srv->active() == 0, qPrintable(QStringLiteral("after cancel %1 the server still sends:\n%2").arg(i).arg(QString::fromLatin1(srv->timeline()))), 3000);
+        }
+        QCOMPARE(c.finished.size(), 0);   // a cancelled request reports nothing
+        s->request(0, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(c.finished.size(), 1, 5000);
+        QVERIFY2(c.finished[0].ok, qPrintable(c.finished[0].err));
+        s->disconnect(s.get());
+    }
     void limiterThrottle()
     {
         const qint64 size = 2 * 1024 * 1024;
@@ -823,8 +846,11 @@ private slots:
         a->request(400000, 400000);
         b->request(0, 400000);
         b->request(400000, 400000);
+        QElapsedTimer t;
+        t.start();
         QTRY_VERIFY_WITH_TIMEOUT(ca.finished.size() == 2 && cb.finished.size() == 2, 15000);
         for (const auto &x : ca.finished + cb.finished) QVERIFY2(x.ok, qPrintable(x.err));
+        qInfo("four requests done in %lld ms; the server saw:\n%s", t.elapsed(), srv->timeline().constData());
         QCOMPARE(srv->maxConcurrent(), 2);
     }
     void credentials()

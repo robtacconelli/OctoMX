@@ -4,6 +4,7 @@
 #pragma once
 
 #include <QtCore/QByteArray>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QMutex>
 #include <QtCore/QSemaphore>
@@ -32,6 +33,8 @@ public:
     // thread-safe stats
     int count(const QByteArray &method, const QByteArray &pathPrefix) const;
     int maxConcurrent() const;
+    int active() const;                           // response bodies being sent right now
+    QByteArray timeline() const;                  // every body start and end since reset(), with its time
     QList<RequestLog> log() const;
     void reset();
 
@@ -39,7 +42,7 @@ public:
     void record(const RequestLog &r);
     int bumpPath(const QByteArray &key);          // returns the new count for key
     int pathCount(const QByteArray &key) const;
-    void activeDelta(int d);
+    void activeDelta(int d, const QByteArray &what = {});
 
 protected:
     void run() override;
@@ -51,6 +54,8 @@ private:
     QList<RequestLog> m_log;
     QHash<QByteArray, int> m_counts;
     int m_active = 0, m_maxActive = 0;
+    QByteArray m_timeline;
+    QElapsedTimer m_since;
 };
 
 } // namespace mxtest

@@ -62,8 +62,8 @@ struct HttpCredentials {
 QNetworkRequest makeRequest(const QUrl &url, const HttpConfig &cfg, const HttpCredentials &cred);
 // When TLS verification is disabled, make the reply ignore certificate errors.
 void prepareReply(QNetworkReply *reply, const HttpConfig &cfg);
-// Disconnect from everyone, abort, deleteLater. Safe with nullptr.
-void dropReply(QNetworkReply *reply);
+// Disconnect the reply from its owner's slots (never from Qt's own), abort, deleteLater. Safe with nullptr.
+void dropReply(QNetworkReply *reply, const QObject *owner);
 
 // ---------------------------------------------------------------- parsers
 struct ContentRange { bool valid = false; qint64 first = -1, last = -1, total = -1; bool unsatisfied = false; };
