@@ -154,6 +154,12 @@ public:
     // RangeSource objects and restarts.
     qint64 msSinceAsk(const QString &peerKey, const QByteArray &fileHash) const;   // -1 = never
     void noteAsk(const QString &peerKey, const QByteArray &fileHash);
+    // The user stopped a transfer that had its upload slot (pause, remove, closing the program). When
+    // the user starts it again the source is asked at once instead of after the rest of the 29 minutes:
+    // the slot is gone anyway, waiting gains nothing. At most EARLY_ASKS_MAX asks that the uploader
+    // counts (sooner than MIN_REQUESTTIME_MS) per source and file; kept in state.json.
+    void noteUserStop(const QString &peerKey, const QByteArray &fileHash);
+    bool takeEarlyAsk(const QString &peerKey, const QByteArray &fileHash);
     bool sourceExchangeAllowed(const QString &peerKey, const QByteArray &fileHash) const;
     void noteSourceExchange(const QString &peerKey, const QByteArray &fileHash);
 
@@ -246,6 +252,8 @@ private:
     QList<QPointer<PeerConnection>> m_pendingConnects;
     QList<QPointer<Ed2kRangeSource>> m_sources;
     QHash<QString, qint64> m_askLog;        // "<peer>|<filehex>" -> epoch ms
+    struct EarlyAsk { bool stopped = false; int used = 0; qint64 lastMs = 0; };
+    QHash<QString, EarlyAsk> m_early;       // same key: transfers the user stopped, early asks spent
     QHash<QString, qint64> m_sxLog;
     QHash<QString, DownloadCtx> m_downloads;
     QHash<QByteArray, mx::SharedFile> m_shared;

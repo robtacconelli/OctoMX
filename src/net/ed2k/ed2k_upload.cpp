@@ -20,6 +20,7 @@ static constexpr qint64 kSessionMaxMs = 60LL * 60 * 1000;
 static constexpr qint64 kPurgeQueueMs = 60LL * 60 * 1000;
 static constexpr int kMaxQueue = 1000;
 static constexpr qint64 kChunk = 10240;
+static constexpr int kMovedCheckMs = 4000;   // a session without a sent byte this long after its client asked on a second connection
 
 UploadManager::UploadManager(Ed2kCore *core) : QObject(core), m_core(core)
 {
@@ -309,9 +310,27 @@ void UploadManager::onStartUpload(PeerConnection *pc, const QByteArray &hash)
             pc->send(PROT_EDONKEY, OP_ACCEPTUPLOADREQ);
             return;
         }
+        // (remembered: when the session on the other connection ends, this request is taken up; before,
+        // it was answered and forgotten, and the client waited for nothing until its next ask)
+        c->askedOn = pc;
+        c->askedHash = hash;
         Writer w;
         w.u32(1);
         pc->send(PROT_EDONKEY, OP_QUEUERANK, w.data());
+        // The client may have left the old connection without our side noticing (its socket lingers,
+        // our data piles up in front of it): when nothing more leaves on it for a while, it is closed,
+        // the session ends and the request above is served. A client that really uses both connections
+        // keeps taking data on the old one and is left alone.
+        const QString key = c->key;
+        const qint64 sent = c->sessionBytes;
+        const QPointer<PeerConnection> old = c->pc;
+        QTimer::singleShot(kMovedCheckMs, this, [this, key, sent, old] {
+            auto it = m_clients.find(key);
+            if (it == m_clients.end() || !it->uploading || !old || it->pc != old) return;
+            if (!it->askedOn || !it->askedOn->isOpen() || it->sessionBytes != sent) return;
+            m_core->log(QStringLiteral("upload to %1: nothing left on this connection since the client asked on a new one, closing it").arg(old->describe()));
+            old->close(QStringLiteral("the client asked on a new connection"));
+        });
         return;
     }
     if (c->uploading) {
@@ -533,6 +552,14 @@ void UploadManager::countSentOn(Client &c)
 void UploadManager::endSession(Client &c, const QString &why, bool requeue)
 {
     const QString key = c.key;
+    // a request of this client that waited on its second connection for this session to end
+    const QPointer<PeerConnection> asked = c.askedOn;
+    const QByteArray askedHash = c.askedHash;
+    c.askedOn = nullptr;
+    if (asked && asked != c.pc && asked->isOpen())
+        QMetaObject::invokeMethod(this, [this, asked, askedHash] {
+            if (asked && asked->isOpen() && asked->handshakeDone()) onStartUpload(asked, askedHash);
+        }, Qt::QueuedConnection);
     if (c.uploading) {
         c.uploading = false;
         if (m_core->ctx().uploadSlots) m_core->ctx().uploadSlots->release(key);   // [net-3]

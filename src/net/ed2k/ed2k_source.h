@@ -46,6 +46,7 @@ public:
     void request(qint64 offset, qint64 length) override;
     void cancelRequests() override;
     void close() override;
+    void setCloseReason(const QString &code, const QString &text) override;
 
     // DownloadSink
     void peerReady(PeerConnection *pc) override;
@@ -60,6 +61,7 @@ public:
     QByteArray fileHash() const { return m_hashes.ed2k; }
     QString downloadId() const { return m_downloadId; }
     int queueRank() const { return m_rank; }
+    bool transferring() const { return m_phase == PDownloading; }   // has the peer's upload slot
     // UDP re-ask (OP_REASKFILEPING): Ed2kCore routes OP_REASKACK / OP_FILENOTFOUND / OP_QUEUEFULL here
     bool awaitingUdpAnswer(quint32 ip, quint16 port) const { return m_udpPending && ip == m_peer.ip && port == m_peerUdpPort; }
     void udpAnswer(quint8 opcode, const QByteArray &payload);
@@ -125,6 +127,7 @@ private:
     int m_rank = 0;
     int m_failedConnects = 0;
     qint64 m_nextReaskMs = 0;
+    bool m_userStop = false;        // closed because the user paused or removed the download, or closed the program
     qint64 m_phaseSinceMs = 0;
     qint64 m_lastDataMs = 0;
     qint64 m_idleSinceMs = 0;

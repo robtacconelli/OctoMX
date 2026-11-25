@@ -110,8 +110,9 @@ void Ed2kRangeSource::open()
         return;
     }
     // respect the re-ask interval even across RangeSource objects
+    // (not for a transfer the user stopped and started again: its slot is gone, it is asked at once)
     const qint64 since = m_core->msSinceAsk(m_peer.key(), m_hashes.ed2k);
-    if (since >= 0 && since < FILEREASKTIME_MS) {
+    if (since >= 0 && since < FILEREASKTIME_MS && !m_core->takeEarlyAsk(m_peer.key(), m_hashes.ed2k)) {
         m_nextReaskMs = m_clock.elapsed() + (FILEREASKTIME_MS - since);
         m_everQueued = true;
         setPhase(PQueuedOffline);
@@ -725,11 +726,19 @@ void Ed2kRangeSource::releaseConnection(const QString &why)
     if (!pc->uploadRole) pc->close(why);
 }
 
+void Ed2kRangeSource::setCloseReason(const QString &code, const QString &text)
+{
+    Q_UNUSED(text)
+    // pause, remove, and the program closing: the user's own stops ("dropped", "banned", "done" are the engine's)
+    m_userStop = code == QLatin1String("paused") || code == QLatin1String("cancelled") || code == QLatin1String("quit");
+}
+
 void Ed2kRangeSource::close()
 {
     if (m_phase == PClosed) return;
     m_tick.stop();
     if (m_pc && m_phase == PDownloading) m_pc->send(PROT_EDONKEY, OP_CANCELTRANSFER);
+    if (m_phase == PDownloading && m_userStop) m_core->noteUserStop(m_peer.key(), m_hashes.ed2k);
     m_reqActive = false;
     resetBlocks();
     releaseConnection(QStringLiteral("source closed"));

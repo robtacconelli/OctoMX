@@ -20,6 +20,8 @@
 #include <QtCore/QRandomGenerator>
 #include <QtCore/QTemporaryDir>
 #include <QtNetwork/QTcpSocket>
+#include <memory>
+
 #include <QtTest/QtTest>
 #include <zlib.h>
 
@@ -56,6 +58,10 @@ private slots:
     void loopbackTransfer_data();
     void loopbackTransfer();
     void loopbackQueue();
+    void cancelAndStartAgain_data();
+    void cancelAndStartAgain();
+    void earlyAskBudget();
+    void droppedSourceWaits();
     void socketFuzz();
 };
 
@@ -778,6 +784,137 @@ void TstEd2k::loopbackTransfer()
     rs->close();
     delete rs;
     QTRY_VERIFY_WITH_TIMEOUT(!upDone.isEmpty(), 60000);
+}
+
+void TstEd2k::cancelAndStartAgain_data()
+{
+    QTest::addColumn<QString>("code");   // what the engine tells the source when it closes it; empty: the network stops under it
+    QTest::addColumn<bool>("sameDownload");
+    QTest::newRow("removed, started again") << QStringLiteral("cancelled") << false;   // a new download of the same file
+    QTest::newRow("paused, resumed") << QStringLiteral("paused") << true;              // the same download opens its source again
+    QTest::newRow("program closed, started again") << QStringLiteral("quit") << true;
+    QTest::newRow("network switched off and on") << QString() << true;
+}
+
+void TstEd2k::cancelAndStartAgain()
+{
+    // The user stops a transfer that runs (remove or pause) and starts it again: the source is asked
+    // again at once, not after the 29 minutes a queued source waits between two asks.
+    QFETCH(QString, code);
+    QFETCH(bool, sameDownload);
+    Node a, b;
+    a.limiter.setLimit(mx::RateLimiter::Up, 3 * 1024 * 1024);   // the first transfer is still running when it is stopped
+    const QString src = makeFile(a.dir.path(), QStringLiteral("again.bin"), 2 * PARTSIZE + 4321, false);
+    const mx::SharedFile sf = a.lib.addFile(src);
+    a.plugin->setSharedFiles(a.lib.sharedFiles());
+    mx::SearchSource ss;
+    ss.net = mx::Net::ED2K;
+    ss.uri = a.uri(true);
+    QList<QByteArray> hashes;
+    connect(b.plugin, &mx::NetworkPlugin::hashSetLearned, this,
+            [&](const QString &, const QString &, qint64, const QList<QByteArray> &h) { hashes = h; });
+    {
+        mx::RangeSource *rs = b.plugin->openSource(QStringLiteral("first"), sf.hashes, sf.size, ss);
+        QVERIFY(rs);
+        mxtest::SimpleDownloader dl(b.dir.path() + QStringLiteral("/first.bin"), sf.size, sf.hashes.ed2k);
+        dl.addSource(rs);
+        QTRY_VERIFY_WITH_TIMEOUT(dl.receivedBytes() > 1024 * 1024, 30000);
+        QVERIFY(!dl.done());
+        if (code.isEmpty()) {   // the network stops under the running transfer, nobody tells the source why
+            b.plugin->stop();
+            delete rs;
+            b.plugin->start();
+        } else {
+            rs->setCloseReason(code, QString());
+            rs->close();
+            delete rs;
+            if (code == QLatin1String("quit")) {   // what was noted is read back from the disk
+                b.plugin->stop();
+                b.plugin->start();
+            }
+        }
+    }
+    QTest::qWait(500);
+    a.limiter.setLimit(mx::RateLimiter::Up, 0);
+    QElapsedTimer t; t.start();
+    // (owned here: a failing check below must not leave the source behind its plugin)
+    const std::unique_ptr<mx::RangeSource> owner(b.plugin->openSource(sameDownload ? QStringLiteral("first") : QStringLiteral("second"), sf.hashes, sf.size, ss));
+    mx::RangeSource *rs = owner.get();
+    QVERIFY(rs);
+    QStringList states;
+    connect(rs, &mx::RangeSource::stateChanged, this, [&] { if (!states.contains(rs->stateText())) states << rs->stateText(); });
+    const QString out = b.dir.path() + QStringLiteral("/second.bin");
+    mxtest::SimpleDownloader dl(out, sf.size, sf.hashes.ed2k);
+    if (!hashes.isEmpty()) dl.setPartHashes(hashes);
+    connect(b.plugin, &mx::NetworkPlugin::hashSetLearned, &dl, [&dl](const QString &, const QString &, qint64, const QList<QByteArray> &h) { dl.setPartHashes(h); });
+    dl.addSource(rs);
+    QTRY_VERIFY2_WITH_TIMEOUT(dl.receivedBytes() > 0, qPrintable(QStringLiteral("no data from the source asked again; its states: %1 (now: %2)")
+                                                                     .arg(states.join(QStringLiteral(" > ")), rs->stateText())), 15000);
+    qInfo() << "started again: first data after" << t.elapsed() << "ms; states:" << states.join(QStringLiteral(" > "));
+    QTRY_VERIFY_WITH_TIMEOUT(dl.done(), 60000);
+    QVERIFY(sameFiles(src, out));
+    rs->close();
+}
+
+void TstEd2k::earlyAskBudget()
+{
+    // An uploader counts requests for the same file that come sooner than ten minutes (eMule bans at
+    // the fourth). We ask early only after the user stopped a running transfer, and at most twice.
+    Node n;
+    Ed2kCore *c = n.plugin->core();
+    const QString peer = QStringLiteral("192.0.2.7:4662");
+    const QByteArray file(16, '\x21');
+    QVERIFY(!c->takeEarlyAsk(peer, file));          // never asked, never stopped
+    c->noteAsk(peer, file);
+    QVERIFY(!c->takeEarlyAsk(peer, file));          // asked, but nobody stopped it: the 29 minutes apply
+    c->noteUserStop(peer, file);
+    QVERIFY(c->takeEarlyAsk(peer, file));           // first early ask
+    QVERIFY(!c->takeEarlyAsk(peer, file));          // one stop, one early ask
+    c->noteAsk(peer, file);
+    c->noteUserStop(peer, file);
+    QVERIFY(c->takeEarlyAsk(peer, file));           // second
+    c->noteAsk(peer, file);
+    c->noteUserStop(peer, file);
+    QVERIFY(!c->takeEarlyAsk(peer, file));          // a third would be the uploader's third strike: wait
+    // another file of the same source has its own count, and the count survives a restart
+    const QByteArray other(16, '\x22');
+    c->noteAsk(peer, other);
+    c->noteUserStop(peer, other);
+    n.plugin->stop();
+    n.plugin->start();
+    QVERIFY(!c->takeEarlyAsk(peer, file));
+    QVERIFY(c->takeEarlyAsk(peer, other));
+}
+
+void TstEd2k::droppedSourceWaits()
+{
+    // The other side of cancelAndStartAgain: a source the engine itself closed (slow, replaced, a
+    // retry) is not asked again before its time, or an uploader would count us as a nuisance.
+    Node a, b;
+    a.limiter.setLimit(mx::RateLimiter::Up, 3 * 1024 * 1024);
+    const QString src = makeFile(a.dir.path(), QStringLiteral("wait.bin"), 2 * PARTSIZE + 99, false);
+    const mx::SharedFile sf = a.lib.addFile(src);
+    a.plugin->setSharedFiles(a.lib.sharedFiles());
+    mx::SearchSource ss;
+    ss.net = mx::Net::ED2K;
+    ss.uri = a.uri(true);
+    {
+        const std::unique_ptr<mx::RangeSource> rs(b.plugin->openSource(QStringLiteral("dl"), sf.hashes, sf.size, ss));
+        QVERIFY(rs);
+        mxtest::SimpleDownloader dl(b.dir.path() + QStringLiteral("/first.bin"), sf.size, sf.hashes.ed2k);
+        dl.addSource(rs.get());
+        QTRY_VERIFY_WITH_TIMEOUT(dl.receivedBytes() > 1024 * 1024, 30000);
+        rs->setCloseReason(QStringLiteral("dropped"), QString());
+        rs->close();
+    }
+    const std::unique_ptr<mx::RangeSource> rs(b.plugin->openSource(QStringLiteral("dl"), sf.hashes, sf.size, ss));
+    QVERIFY(rs);
+    mxtest::SimpleDownloader dl(b.dir.path() + QStringLiteral("/second.bin"), sf.size, sf.hashes.ed2k);
+    dl.addSource(rs.get());
+    QTest::qWait(2500);
+    QCOMPARE(rs->state(), mx::RangeSource::Queued);
+    QCOMPARE(dl.receivedBytes(), qint64(0));
+    rs->close();
 }
 
 void TstEd2k::loopbackQueue()

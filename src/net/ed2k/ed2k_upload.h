@@ -59,6 +59,8 @@ private:
     struct Client {
         QString key;                 // userhash hex or ip:port
         QPointer<PeerConnection> pc;
+        QPointer<PeerConnection> askedOn;   // asked for the file on a second connection while the session ran on `pc`
+        QByteArray askedHash;
         QByteArray userHash;
         quint32 ip = 0;
         quint16 port = 0;

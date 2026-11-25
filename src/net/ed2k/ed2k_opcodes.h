@@ -271,6 +271,8 @@ constexpr quint8  ENM_OBFUSCATION = 0x00;
 
 // timing (milliseconds)
 constexpr qint64 FILEREASKTIME_MS   = 29LL * 60 * 1000;   // TCP re-ask of a queued peer
+constexpr qint64 MIN_REQUESTTIME_MS = 10LL * 60 * 1000;   // an uploader counts a request for the same file sooner than this (eMule: 590 s) against the asker
+constexpr int    EARLY_ASKS_MAX     = 2;                   // such requests we allow ourselves per source and file (eMule bans at the fourth)
 constexpr qint64 SERVERREASKTIME_MS = 15LL * 60 * 1000;   // OP_GETSOURCES per file
 constexpr qint64 SOURCEEXCHANGE_REASK_MS = 40LL * 60 * 1000;
 constexpr qint64 UDPSERVERSTATTIME_MS = 5 * 1000;

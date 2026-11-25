@@ -25,6 +25,7 @@
 namespace mx::ed2k {
 
 static constexpr qint64 kSxReaskMs = SOURCEEXCHANGE_REASK_MS;
+static constexpr qint64 kEarlyKeepMs = 6LL * 3600 * 1000;   // how long an early ask stays counted without a regular ask
 
 Ed2kCore::Ed2kCore(QObject *parent) : QObject(parent)
 {
@@ -236,6 +237,10 @@ void Ed2kCore::stopBase()
     m_tick.stop();
     m_servers->stop();
     m_uploads->stop();
+    // transfers that still run while the network stops (it was switched off): like a stop by the user,
+    // the source is asked at once at the next start (noted here: the connections report their end later)
+    for (const auto &src : std::as_const(m_sources))
+        if (src && src->transferring()) noteUserStop(src->peer().key(), src->fileHash());
     for (auto &p : m_pendingConnects) if (p) p->close(QStringLiteral("stopping"));
     m_pendingConnects.clear();
     const auto peers = m_peers;
@@ -515,7 +520,35 @@ qint64 Ed2kCore::msSinceAsk(const QString &peerKey, const QByteArray &fileHash) 
 }
 void Ed2kCore::noteAsk(const QString &peerKey, const QByteArray &fileHash)
 {
-    m_askLog.insert(askKey(peerKey, fileHash), QDateTime::currentMSecsSinceEpoch());
+    const QString key = askKey(peerKey, fileHash);
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // an ask after the uploader's minimum time takes one early ask back (as eMule's own count does)
+    if (auto e = m_early.find(key); e != m_early.end() && e->used > 0) {
+        const qint64 last = m_askLog.value(key, 0);
+        if (last > 0 && now - last >= MIN_REQUESTTIME_MS) --e->used;
+    }
+    m_askLog.insert(key, now);
+}
+void Ed2kCore::noteUserStop(const QString &peerKey, const QByteArray &fileHash)
+{
+    EarlyAsk &e = m_early[askKey(peerKey, fileHash)];
+    e.stopped = true;
+    e.lastMs = QDateTime::currentMSecsSinceEpoch();
+}
+bool Ed2kCore::takeEarlyAsk(const QString &peerKey, const QByteArray &fileHash)
+{
+    const QString key = askKey(peerKey, fileHash);
+    auto e = m_early.find(key);
+    if (e == m_early.end() || !e->stopped) return false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 last = m_askLog.value(key, 0);
+    if (last > 0 && now - last < MIN_REQUESTTIME_MS) {   // the uploader will count this one
+        if (e->used >= EARLY_ASKS_MAX) return false;     // (the stop stays noted: the regular time applies)
+        ++e->used;
+    }
+    e->stopped = false;
+    e->lastMs = now;
+    return true;
 }
 bool Ed2kCore::sourceExchangeAllowed(const QString &peerKey, const QByteArray &fileHash) const
 {
@@ -538,6 +571,15 @@ void Ed2kCore::loadState()
         const qint64 t = qint64(it.value().toDouble());
         if (now - t < 2LL * 3600 * 1000) m_askLog.insert(it.key(), t);
     }
+    const QJsonObject early = o.value(QStringLiteral("early")).toObject();
+    for (auto it = early.begin(); it != early.end(); ++it) {
+        const QJsonObject x = it.value().toObject();
+        EarlyAsk e;
+        e.stopped = x.value(QStringLiteral("stopped")).toBool();
+        e.used = qBound(0, x.value(QStringLiteral("used")).toInt(), EARLY_ASKS_MAX);
+        e.lastMs = qint64(x.value(QStringLiteral("t")).toDouble());
+        if (now - e.lastMs < kEarlyKeepMs && (e.stopped || e.used > 0)) m_early.insert(it.key(), e);
+    }
     const QJsonObject sx = o.value(QStringLiteral("sx")).toObject();
     for (auto it = sx.begin(); it != sx.end(); ++it) {
         const qint64 t = qint64(it.value().toDouble());
@@ -553,8 +595,19 @@ void Ed2kCore::saveState()
         if (now - it.value() < 2LL * 3600 * 1000) asks.insert(it.key(), double(it.value()));
     for (auto it = m_sxLog.cbegin(); it != m_sxLog.cend(); ++it)
         if (now - it.value() < kSxReaskMs) sx.insert(it.key(), double(it.value()));
+    QJsonObject early;
+    for (auto it = m_early.begin(); it != m_early.end();) {
+        if (now - it->lastMs >= kEarlyKeepMs || (!it->stopped && it->used <= 0)) { it = m_early.erase(it); continue; }
+        QJsonObject x;
+        x.insert(QStringLiteral("stopped"), it->stopped);
+        x.insert(QStringLiteral("used"), it->used);
+        x.insert(QStringLiteral("t"), double(it->lastMs));
+        early.insert(it.key(), x);
+        ++it;
+    }
     QJsonObject o;
     o.insert(QStringLiteral("asks"), asks);
+    o.insert(QStringLiteral("early"), early);
     o.insert(QStringLiteral("sx"), sx);
     QDir().mkpath(m_dataDir);
     QSaveFile f(QDir(m_dataDir).filePath(QStringLiteral("state.json")));
