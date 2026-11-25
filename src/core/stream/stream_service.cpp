@@ -535,6 +535,15 @@ void StreamService::housekeeping()
         bool waiting = false;
         qint64 ahead = -1, waitAt = -1;
         const Range span = d->streamSpan();
+        // the file was chosen by its index in the search result's list: said once when the torrent's
+        // own list has another file there (the status always names the file that is streamed)
+        if (!s->fileCompared && s->file >= 0 && span.second > span.first && !d->streamFileName().isEmpty()) {
+            s->fileCompared = true;
+            if (d->streamFileName() != s->name || span.second - span.first != s->size)
+                qCWarning(lcCore).noquote() << QStringLiteral("stream %1: file %2 of the torrent is '%3' (%4 bytes); the search result "
+                                                              "listed '%5' (%6 bytes) there").arg(s->id).arg(s->file)
+                                                   .arg(d->streamFileName()).arg(span.second - span.first).arg(s->name).arg(s->size);
+        }
         for (StreamReader *r : std::as_const(s->readers)) {
             if (r->m_waitSinceMs >= 0) { waiting = true; waitAt = r->m_pos; }
             const qint64 a = d->streamServable(span.first + r->m_pos).avail;

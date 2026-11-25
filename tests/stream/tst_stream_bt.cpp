@@ -22,10 +22,14 @@ namespace {
 
 constexpr qint64 MiB = 1024 * 1024;
 
-QByteArray makeTorrent(const QString &root, int pieceSize)
+// the files of the folder `root` in the order given: lt::add_files takes the order the file system
+// lists them in, which is not the same on every system (and the test names a file by its index)
+QByteArray makeTorrent(const QString &root, int pieceSize, const QStringList &names)
 {
     lt::file_storage fs;
-    lt::add_files(fs, QDir::toNativeSeparators(root).toStdString());
+    const QString top = QFileInfo(root).fileName();
+    for (const QString &n : names)
+        fs.add_file(QDir::toNativeSeparators(top + QLatin1Char('/') + n).toStdString(), QFileInfo(root + QLatin1Char('/') + n).size());
     lt::create_torrent ct(fs, pieceSize, lt::create_torrent::v1_only);
     lt::set_piece_hashes(ct, QDir::toNativeSeparators(QFileInfo(root).absolutePath()).toStdString());
     std::vector<char> out;
@@ -104,7 +108,7 @@ void TstStreamBt::secondFileOfABundle()
     const QString folder = env.root + QStringLiteral("/seed/Big Buck Bunny pack");
     writeFile(folder + QStringLiteral("/a-trailer.mkv"), f0);
     writeFile(folder + QStringLiteral("/b-feature.mp4"), f1);
-    const QByteArray torrent = makeTorrent(folder, 256 * 1024);
+    const QByteArray torrent = makeTorrent(folder, 256 * 1024, {QStringLiteral("a-trailer.mkv"), QStringLiteral("b-feature.mp4")});
     etest::BtNode a(env.root + QStringLiteral("/nodeA"), /*limitLan*/ true);
     QVERIFY(a.start());
     a.ctl->setRateLimits(0, 3 * 1000 * 1000);
@@ -112,6 +116,14 @@ void TstStreamBt::secondFileOfABundle()
     const QString tid = a.be->addTorrent(QString(), torrent, env.root + QStringLiteral("/seed"), false, {}, &err);
     QVERIFY2(!tid.isEmpty(), qPrintable(err));
     QVERIFY(QTest::qWaitFor([&] { return a.be->snapshot(tid).finished; }, 60000));
+    {
+        // the feature is the torrent's second file and begins in the middle of a piece
+        const TorrentSnapshot seeded = a.be->snapshot(tid);
+        QCOMPARE(seeded.files.size(), 2);
+        QVERIFY2(seeded.files.at(1).path.endsWith(QLatin1String("b-feature.mp4")), qPrintable(seeded.files.at(1).path));
+        QCOMPARE(seeded.files.at(1).size, qint64(f1.size()));
+        QCOMPARE(seeded.files.at(1).offset, qint64(f0.size()));
+    }
     // the core with its own libtorrent and a search network that finds the torrent
     TestPlugin *search = env.addPlugin(Net::Web, 0);
     SearchHit hit;

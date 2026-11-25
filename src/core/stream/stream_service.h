@@ -91,6 +91,7 @@ private:
         QString id, downloadId, name, mime, hitKey;
         quint32 search = 0;
         int file = -1;                 // bundle file index (-1 = the single file)
+        bool fileCompared = false;     // the torrent's own file list was compared with the search result's
         bool owned = false;            // the stream created its download (its cache is its own)
         bool normal = false;           // "download it normally" was asked
         QString cacheDir;
