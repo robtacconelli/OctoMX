@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# [mac-1] A short run for tests that depend on timing: build the test tree on both kinds of Mac and
+# run the chosen tests several times each, alone. No package, no screenshots, no live networks:
+# the full run (macos.yml) stays the one that decides about a release. Only GitHub's own actions,
+# pinned by commit, a read-only token and no secrets.
+name: macOS test stress
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build (default: the branch the run starts on)"
+        required: false
+        default: ""
+      tests:
+        description: "ctest regular expression of the tests to repeat"
+        required: false
+        default: "^(engine_engine|engine_engine_bt|engine_crash_cut_merged|stream_stream_bt|stream_stream_play|netpolicy_unshare|netpolicy_settings_bt)$"
+      repeat:
+        description: "How many times each test runs (it stops at its first failure)"
+        required: false
+        default: "3"
+      jobs:
+        description: "Tests running at the same time (2 = like the full run)"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-stress-${{ github.ref }}-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_ANALYTICS: "1"
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPRESS: "1"
+
+jobs:
+  stress:
+    name: Repeat tests on ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-26
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Restore dependencies (Qt, static libraries)
+        id: deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            toolchain/qt
+            third_party/mac
+            third_party/src
+          key: mac-deps-v1-${{ hashFiles('tools/mac/deps.sh', 'tools/mac/env.sh', 'tools/build-third-party.sh', 'tools/install-toolchain.sh', 'toolchain/env.sh') }}
+
+      - name: Install and build dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: tools/mac/deps.sh
+
+      - name: Build tools (ccache, bash 5)
+        run: brew install ccache bash > /dev/null
+
+      - name: Restore compiler cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: toolchain/cache/ccache
+          key: mac-ccache-v1-${{ matrix.arch }}-stress-${{ github.run_id }}
+          restore-keys: |
+            mac-ccache-v1-${{ matrix.arch }}-
+            mac-ccache-v1-
+
+      - name: Build
+        env:
+          MX_WERROR: "1"
+        run: tools/mac/build.sh build/mac
+
+      - name: Test machine set-up (second loopback address, no App Nap)
+        run: |
+          sudo ifconfig lo0 alias 127.0.0.2 up
+          defaults write NSGlobalDomain NSAppSleepDisabled -bool YES
+
+      - name: Repeat the tests
+        env:
+          MX_STRESS_TESTS: ${{ inputs.tests }}
+          MX_STRESS_REPEAT: ${{ inputs.repeat }}
+          MX_TEST_JOBS: ${{ inputs.jobs }}
+          MX_TEST_RERUN: "0"   # a failure counts at once: this run looks for them
+        run: |
+          case "$MX_STRESS_REPEAT" in ''|*[!0-9]*) echo "repeat must be a number" >&2; exit 2;; esac
+          case "$MX_TEST_JOBS" in ''|*[!0-9]*) echo "jobs must be a number" >&2; exit 2;; esac
+          tools/mac/test.sh build/mac build/out/tests stress -R "$MX_STRESS_TESTS" --repeat "until-fail:$MX_STRESS_REPEAT"
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: octomx-macos-stress-logs-${{ matrix.arch }}
+          path: |
+            build/out/tests/
+            build/mac.cmake.log
+            build/mac.build.log
+          if-no-files-found: ignore
+          retention-days: 14
