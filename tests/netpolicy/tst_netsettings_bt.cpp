@@ -621,7 +621,15 @@ void TstNetSettingsBt::preallocateReservesTheFile()
         const QByteArray file = QFile::encodeName(dl + QStringLiteral("/prealloc.bin"));
         struct stat st {};
         QVERIFY(QTest::qWaitFor([&] { return ::stat(file.constData(), &st) == 0; }, 5000));
-        const qint64 allocated = qint64(st.st_blocks) * 512;
+        qint64 allocated = qint64(st.st_blocks) * 512;
+        // off: a file system may count the whole file for a moment after the first write (seen on a busy Mac)
+        if (!on && allocated >= size / 2) {
+            const bool settled = QTest::qWaitFor([&] {
+                if (::stat(file.constData(), &st) == 0) allocated = qint64(st.st_blocks) * 512;
+                return allocated < size / 2;
+            }, 8000);
+            qInfo("preallocate off: the whole file was counted at first; %s", settled ? "less after a moment" : "still so after 8 s");
+        }
         qInfo("preallocate %s: %lld of %lld bytes on disk after %d pieces", on ? "on" : "off", allocated, size, b.haveCount(id));
         QVERIFY(!b.finished.contains(id));
         if (on) QVERIFY2(allocated >= size, qPrintable(QString::number(allocated)));

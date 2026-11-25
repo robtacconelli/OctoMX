@@ -206,7 +206,9 @@ void TstEngine::corruptWithPartHashes()
     good.data = bad.data = data;
     good.bytesPerSec = 3 << 20;
     bad.bytesPerSec = 8 << 20;
-    bad.corrupt = {{P + 1000, P + 1100}};   // inside part 1 only
+    // inside part 1 only, and all of it: whichever requests of part 1 the bad source gets (the two share the part
+    // request by request, in an order that depends on the timing), what it sends there is wrong
+    bad.corrupt = {{P + 1000, 2 * P - 1000}};
     const SearchSource sg = ed->addSource(QStringLiteral("ed2k://good"), good, QStringLiteral("1.1.1.1:4662"));
     const SearchSource sb = ed->addSource(QStringLiteral("ed2k://bad"), bad, QStringLiteral("2.2.2.2:4662"));
     env.engineUp();
