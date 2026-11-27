@@ -290,7 +290,7 @@ inline constexpr K BootstrapPeers{"rats/bootstrapPeers"};
 inline constexpr K MaxResults{"rats/maxResults"};
 }
 
-namespace api {          // [str-1] the local streaming API (Settings ▸ Other Networks ▸ Streaming API)
+namespace api {          // [str-1] the local API (Settings ▸ Other Networks ▸ Local API; streams, [api-2] downloads)
 inline constexpr K Enabled{"api/enabled"};                 // off by default: nothing listens
 inline constexpr K Port{"api/port"};
 inline constexpr K AllowLan{"api/allowLan"};               // also the private (LAN) addresses, never public ones
@@ -298,6 +298,7 @@ inline constexpr K Token{"api/token"};                     // the access token (
 inline constexpr K CacheLimitMB{"api/cacheLimitMB"};       // all stream caches together
 inline constexpr K IdleMin{"api/idleMin"};                 // no player read for this long: the stream and its cache go (4 h)
 inline constexpr K KeepStreams{"api/keepStreams"};         // a stream that ends becomes a normal download
+inline constexpr K AllowDelete{"api/allowDelete"};         // [api-2] programs may delete downloaded files (DELETE ?files=delete / trash)
 }
 
 namespace other {        // Settings ▸ "Other Networks" (original WinMX "OpenNap Networks" page)

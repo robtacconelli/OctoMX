@@ -6,6 +6,7 @@
 // small fake rats-search peer (a librats node speaking the rats-search JSON messages).
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QJsonArray>
+#include <QtCore/QRandomGenerator>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QUdpSocket>
 #include <QtTest/QSignalSpy>
@@ -54,13 +55,17 @@ std::unique_ptr<Instance> node(const QString &name, bool firewalled = false, boo
     return i;
 }
 
-// a port free for TCP and UDP on 127.0.0.1 (librats listens on both)
+// a port free for TCP and UDP on 127.0.0.1 (librats listens on both). [api-2] Taken from 20000 to
+// 32767, below the ephemeral ranges of Linux (32768 and up), Windows and macOS (49152 and up): a port
+// the system hands out (listen on 0) can go to an outgoing connection of another test running at the
+// same time before the node here binds it seconds later, and the node then takes another port (seen
+// in full ctest runs with -j3: "listenPort == ratsPort" and "fake.peers.size() == 1" failed).
 quint16 freePort()
 {
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 200; ++i) {
+        const quint16 p = quint16(20000 + QRandomGenerator::global()->bounded(12768));
         QTcpServer t;
-        if (!t.listen(QHostAddress::LocalHost, 0)) continue;
-        const quint16 p = t.serverPort();
+        if (!t.listen(QHostAddress::LocalHost, p)) continue;
         QUdpSocket u;
         if (u.bind(QHostAddress::AnyIPv4, p)) return p;
     }

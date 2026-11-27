@@ -241,6 +241,7 @@ public:
     //   Trash / TrashOrDelete: diskInfo(id).paths go to the trash / Recycle Bin (mx/trash.h), with
     //     every trace in the profile (resume data, the kept record); what the download did not create
     //     is never touched. TrashOrDelete deletes for good what cannot go to the trash.
+    //   Delete [api-2]: the same paths deleted for good, never to the trash (the local API's files=delete).
     // The outcome of a delete arrives in downloadFilesDeleted (after the files were closed).
     // Default: cancel(id, mode != Keep).
     virtual void removeDownload(const QString &id, FileRemoval mode) { cancel(id, mode != FileRemoval::Keep); }

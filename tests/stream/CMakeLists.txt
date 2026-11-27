@@ -25,3 +25,17 @@ if(TARGET mxnet_bt)
     target_link_libraries(tst_stream_bt PRIVATE mxnet_bt LibtorrentRasterbar::torrent-rasterbar)
     target_include_directories(tst_stream_bt PRIVATE ${CMAKE_SOURCE_DIR}/src/net/bt)
 endif()
+
+# [api-2] downloads through the API (fake networks, the HTTP plugin against the local test server of
+# tests/http) and the 5.7 walk-through of docs/API.md call by call
+if(TARGET mxnet_http)
+    mx_stream_test(tst_api_downloads ${CMAKE_SOURCE_DIR}/tests/http/test_server.h ${CMAKE_SOURCE_DIR}/tests/http/test_server.cpp)
+    target_link_libraries(tst_api_downloads PRIVATE mxnet_http)
+    target_include_directories(tst_api_downloads PRIVATE ${CMAKE_SOURCE_DIR}/tests/http)
+endif()
+mx_stream_test(tst_api_compat)
+if(TARGET mxnet_bt)
+    mx_stream_test(tst_api_downloads_bt ${CMAKE_SOURCE_DIR}/tests/engine/bt_node.h)   # a local libtorrent swarm: bundles, magnet links
+    target_link_libraries(tst_api_downloads_bt PRIVATE mxnet_bt LibtorrentRasterbar::torrent-rasterbar)
+    target_include_directories(tst_api_downloads_bt PRIVATE ${CMAKE_SOURCE_DIR}/src/net/bt)
+endif()

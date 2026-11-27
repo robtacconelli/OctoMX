@@ -57,6 +57,8 @@ public:
         int     idleMinuteMs = 60000;              // one minute of api/idleMin (tests shrink it)
         int     releaseMs = 20000;                 // no player connected this long: the sources are let go
         int     pausedMs = 3000;                   // a player that took nothing this long has paused
+        int     deleteWaitMs = 15000;              // [api-2] DELETE /downloads/<id> with files: wait this long for the outcome (then 202)
+        int     removedKeepMs = 10 * 60 * 1000;    // [api-2] a removed download's record stays readable (410) this long
     };
 
     StreamService(Settings *settings, SearchService *search, DownloadEngine *engine, NetworkService *network,
@@ -84,6 +86,7 @@ private:
         quint32 api = 0, sid = 0;
         SearchQuery query;
         bool typeFilter = false;
+        QList<SearchQuery> filters;    // [api-2] "types": a result matches when one of them matches (empty = typeFilter)
         qint64 createdMs = 0;
     };
     struct Reader;
@@ -103,7 +106,7 @@ private:
         qint64 dropAtMs = -1;          // the idle time ends then (-1 = a player reads)
         bool ended = false;
         qint64 endedMs = 0;
-        QString state = QStringLiteral("waiting");
+        QString state = QStringLiteral("waiting for a player");   // [api-2] the documented first state (was "waiting" until the first second)
         QString error;
         QString endReason;
         QList<StreamReader *> readers;
@@ -142,6 +145,40 @@ private:
     void streamCall(const HttpRequest &req, HttpResponse &resp, const QByteArray &id, const QByteArray &key);
     void selectResult(const HttpRequest &req, HttpResponse &resp, const QJsonObject &body);
 
+    // ---- [api-2] downloads (download_api.cpp)
+    struct Removed {                   // a download removed through the API: readable for a while (410)
+        QString id, name, files;       // files: "keep", "trash", "delete"
+        bool pending = false;          // the outcome of the delete has not arrived yet
+        QStringList kept, trashed, deleted, failed, errors;
+        QString inPlaceFile, streamEnded;
+        qint64 removedMs = 0;
+        QJsonObject last;              // its status just before
+    };
+    void downloadsCall(const HttpRequest &req, HttpResponse &resp, const QList<QByteArray> &seg, const QByteArray &m,
+                       const QJsonObject &body);
+    void startDownload(HttpResponse &resp, const QJsonObject &body);
+    void removeDownloadCall(HttpResponse &resp, const QString &id, const QString &files);
+    void changeDownload(HttpResponse &resp, const QString &id, const QJsonObject &body);
+    QJsonObject downloadJson(const TransferInfo &t, bool full, bool withSources) const;
+    QJsonObject downloadTotals(const QList<TransferInfo> &all) const;
+    QList<TransferInfo> listedDownloads() const;      // the Transfers list without the streams' own caches
+    bool listed(const QString &id) const;
+    Stream *streamOfDownload(const QString &id) const;
+    void promoteStream(Stream *s);                    // a stream's own cache becomes a normal download (the stream goes on)
+    Removed *removedById(const QString &id) const;
+    QJsonObject removedJson(const Removed *r) const;
+    void filesDeleted(const QString &id, const QStringList &trashed, const QStringList &deleted, const QStringList &failed,
+                      const QStringList &errors);
+    void loadOrigins();
+    void saveOrigins();
+    void markApiDownload(const QString &id);
+    QJsonArray typesJson() const;
+    QString downloadWarning(const QString &fileName, const QString &suspect) const;
+    bool hitDownloadable(const SearchHit &h, QString *why) const;
+    QJsonObject downloadsStatusJson() const;
+    static QString stateWord(TransferState s);
+    static bool stateFromWord(const QString &w, TransferState *s);
+
     Settings *m_settings;
     SearchService *m_search;
     DownloadEngine *m_engine;
@@ -161,6 +198,8 @@ private:
     QList<Stream *> m_streams;
     QStringList m_allowedHosts;
     QSet<uint> m_askedFiles;     // bundles whose file list a select call asked for once
+    QSet<QString> m_apiDownloads;   // [api-2] downloads started through the API ("origin": "api"), <profile>/api_downloads.json
+    QList<Removed *> m_removed;     // [api-2] removed through the API, readable for removedKeepMs
 };
 
 } // namespace stream

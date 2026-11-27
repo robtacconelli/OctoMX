@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// [str-1] OctoMX UI: Settings ▸ Other Networks ▸ Streaming API: the local API another program uses to
-// search, pick a result and get a stream link for a player (docs/API.md). Off by default; every
-// change applies at once.
+// [str-1] OctoMX UI: Settings ▸ Other Networks ▸ Local API: the local API another program uses to
+// search, pick a result and get a stream link for a player, and [api-2] to download files of any type
+// and pause or remove downloads (docs/API.md). Off by default; every change applies at once.
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtCore/QRandomGenerator>
@@ -43,12 +43,13 @@ QString stateText(const StreamApiState &st)
 
 void buildStreamApiPage(SettingsDialog *d)
 {
-    PageKit k(d, d->addPage(QStringLiteral("api"), QObject::tr("Streaming API"), QStringLiteral("other")));
+    PageKit k(d, d->addPage(QStringLiteral("api"), QObject::tr("Local API"), QStringLiteral("other")));
     Form f(k);
-    f.group(QObject::tr("Streaming API (for players and other programs)"));
-    f.check(api::Enabled, QObject::tr("Switch on the streaming API"));
+    f.group(QObject::tr("Local API (for players and other programs)"));
+    f.check(api::Enabled, QObject::tr("Switch on the local API"));
     f.spin(api::Port, QObject::tr("Port"), QString(), 96);
     f.check(api::AllowLan, QObject::tr("Allow other devices on my network"));
+    f.check(api::AllowDelete, QObject::tr("Programs may delete downloaded files"));   // [api-2]
     // the token: shown, copied, made new (the old one and every old stream link stop working)
     const int tokenY = f.y;
     k.label(QObject::tr("Access token"), f.left(), tokenY + 4, 92);
@@ -81,7 +82,8 @@ void buildStreamApiPage(SettingsDialog *d)
     f.spin(api::IdleMin, QObject::tr("Delete unread streams after"), QObject::tr("minutes"), 170)->setMaximum(7 * 1440);
     f.check(api::KeepStreams, QObject::tr("Keep what was streamed as a download"));
     f.endGroup();
-    f.text(QObject::tr("Off by default. A player gets only a link; OctoMX fetches what it reads, from every network, and deletes the cache afterwards."), 3);
+    f.text(QObject::tr("Off by default. A program with the token can search, stream, download any file into the incoming folder, and pause "
+                       "or remove downloads (their files only with the box above)."), 3);
 
     Core *core = d->core();
     auto refresh = [core, state, base, token] {

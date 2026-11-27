@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// [str-1] Settings ▸ Other Networks ▸ Streaming API with a real core: off by default (nothing listens),
+// [str-1] Settings ▸ Other Networks ▸ Local API (the Streaming API until 5.9) with a real core: off by default (nothing listens),
 // every control with a tool tip, switched on (it listens, a token is made, the address shown), Copy and
 // New token, a port another program holds (said plainly, no other port taken), the LAN switch; and a
 // stream in the Transfers window with its "Streaming: ..." status.
@@ -85,12 +85,13 @@ private slots:
         SettingsDialog d(m_core, m_mw);
         d.show();
         QVERIFY(d.showPage(QStringLiteral("api")));
-        QCOMPARE(d.pageLabel(QStringLiteral("api")), QStringLiteral("Streaming API"));
+        QCOMPARE(d.pageLabel(QStringLiteral("api")), QStringLiteral("Local API"));   // [api-2] it streams and downloads
         QWidget *page = d.findChild<QWidget *>(QStringLiteral("settingsPage_api"));
         QVERIFY(page);
         auto *on = page->findChild<QCheckBox *>(QStringLiteral("set_api_enabled"));
         auto *lan = page->findChild<QCheckBox *>(QStringLiteral("set_api_allowLan"));
         auto *keep = page->findChild<QCheckBox *>(QStringLiteral("set_api_keepStreams"));
+        auto *del = page->findChild<QCheckBox *>(QStringLiteral("set_api_allowDelete"));   // [api-2]
         auto *port = page->findChild<QSpinBox *>(QStringLiteral("set_api_port"));
         auto *idle = page->findChild<QSpinBox *>(QStringLiteral("set_api_idleMin"));
         auto *limit = page->findChild<QSpinBox *>(QStringLiteral("set_api_cacheLimitMB"));
@@ -99,17 +100,32 @@ private slots:
         auto *state = page->findChild<WrapLabel *>(QStringLiteral("apiState"));
         auto *copy = page->findChild<QPushButton *>(QStringLiteral("apiCopyToken"));
         auto *renew = page->findChild<QPushButton *>(QStringLiteral("apiNewToken"));
-        QVERIFY(on && lan && keep && port && idle && limit && token && base && state && copy && renew);
+        QVERIFY(on && lan && keep && del && port && idle && limit && token && base && state && copy && renew);
         // every control explains itself
         for (QWidget *w : page->findChildren<QWidget *>())
             if ((qobject_cast<QAbstractButton *>(w) || qobject_cast<QAbstractSpinBox *>(w) || qobject_cast<QLineEdit *>(w))
                 && !qobject_cast<QAbstractSpinBox *>(w->parentWidget()))   // the edit inside a spin box is the spin box
                 QVERIFY2(!w->toolTip().isEmpty(), qPrintable(w->objectName()));
         QVERIFY(lan->toolTip().contains(QStringLiteral("192.168")));
+        // [api-2] the page says what the API lets a program do: search, stream, download, remove
+        QCOMPARE(on->text(), QStringLiteral("Switch on the local API"));
+        for (const QString &w : {QStringLiteral("search"), QStringLiteral("video player"), QStringLiteral("download files of any type"),
+                                 QStringLiteral("remove downloads")})
+            QVERIFY2(on->toolTip().contains(w), qPrintable(on->toolTip()));
+        QVERIFY(lan->toolTip().contains(QStringLiteral("download and remove downloads")));
+        QCOMPARE(del->text(), QStringLiteral("Programs may delete downloaded files"));
+        QVERIFY2(del->toolTip().contains(QStringLiteral("files stay")), qPrintable(del->toolTip()));
+        {
+            bool closing = false;
+            for (WrapLabel *l : page->findChildren<WrapLabel *>())
+                closing = closing || (l->text().contains(QStringLiteral("download any file")) && l->text().contains(QStringLiteral("remove downloads")));
+            QVERIFY(closing);
+        }
         // off by default; the defaults on the page
         QVERIFY(!on->isChecked());
         QVERIFY(!lan->isChecked());
         QVERIFY(!keep->isChecked());
+        QVERIFY(!del->isChecked());   // [api-2] off by default: a program may not delete files
         QCOMPARE(idle->value(), 240);
         QCOMPARE(limit->value(), 4096);
         QCOMPARE(state->text(), QStringLiteral("Off: nothing listens."));
@@ -149,6 +165,11 @@ private slots:
         QVERIFY(m_core->settings()->b(keys::api::AllowLan));
         lan->click();
         QVERIFY(!m_core->settings()->b(keys::api::AllowLan));
+        // [api-2] the delete switch too (its behaviour: tests/stream/tst_api_downloads.cpp deleteSwitch)
+        del->click();
+        QVERIFY(m_core->settings()->b(keys::api::AllowDelete));
+        del->click();
+        QVERIFY(!m_core->settings()->b(keys::api::AllowDelete));
         // off again
         on->click();
         QVERIFY(QTest::qWaitFor([&] { return !listens(m_port); }, 3000));

@@ -303,6 +303,30 @@ Result dispose(const QStringList &paths, bool allowForGood)
     return r;
 }
 
+// [api-2]
+Result removeAllForGood(const QStringList &paths)
+{
+    Result r;
+    for (const QString &p : paths) {
+        const QFileInfo fi(p);
+        if (p.isEmpty() || fi.isRelative() || isRootLike(fi.absoluteFilePath())) {
+            r.failed << p;
+            r.errors << QStringLiteral("refused: %1").arg(p);
+            continue;
+        }
+        if (!exists(fi))
+            continue;
+        QString err;
+        if (removeForGood(p, &err))
+            r.deleted << p;
+        else {
+            r.failed << p;
+            r.errors << err;
+        }
+    }
+    return r;
+}
+
 qint64 sizeOnDisk(const QString &path, int *files)
 {
     const QFileInfo fi(path);

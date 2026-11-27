@@ -514,6 +514,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
         QStringList paths, pruneDirs;
         bool forGood = false;
         bool restart = false;                 // [ver-1] Restart Download: the same download takes the torrent up again
+        bool direct = false;                  // [api-2] FileRemoval::Delete: for good, never to the trash
     };
     QList<PendingDelete> pendingDeletes;      // torrents: their files go once libtorrent let them go
     QSet<QString> removingTorrents;           // torrents removed with their download, until the backend confirms
@@ -670,6 +671,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
         requestRebalance();
         if (keep) return;
         PendingDelete p{id, name, torrentId, di.paths, prune, mode == FileRemoval::TrashOrDelete};
+        p.direct = mode == FileRemoval::Delete;   // [api-2]
         if (waitTorrent) {
             // libtorrent closes the files when the torrent has left the session (torrentRemoved)
             pendingDeletes << p;
@@ -711,7 +713,7 @@ struct DownloadEngine::Private : public engine::EngineHost {
                                          QStringList(p.paths.size(), QStringLiteral("it is used by a download again")));
             return;
         }
-        const trash::Result r = trash::dispose(p.paths, p.forGood);
+        const trash::Result r = p.direct ? trash::removeAllForGood(p.paths) : trash::dispose(p.paths, p.forGood);
         for (const QString &dir : p.pruneDirs)
             if (QFileInfo(dir).isDir() && !QFileInfo(dir).isSymLink()) QDir().rmdir(dir);   // only when empty
         if (ctx.library && (!r.trashed.isEmpty() || !r.deleted.isEmpty())) ctx.library->forgetPaths(r.trashed + r.deleted);

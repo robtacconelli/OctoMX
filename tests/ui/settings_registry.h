@@ -140,6 +140,7 @@ inline const Proof kProofs[] = {
     {"api/cacheLimitMB", "test", "tests/stream/tst_stream_play.cpp", "idleTimeAndCacheLimit", ""},   // [str-1]
     {"api/idleMin", "test", "tests/stream/tst_stream_play.cpp", "pausedStoppedAndBack", ""},   // [str-1]
     {"api/keepStreams", "test", "tests/stream/tst_stream_play.cpp", "keepAsDownload", ""},   // [str-1]
+    {"api/allowDelete", "test", "tests/stream/tst_api_downloads.cpp", "deleteSwitch", ""},   // [api-2]
     {"rats/enabled", "test", "tests/overlay/tst_netsettings_ovl.cpp", "enabledSwitchesStartAndStop", ""},   // [net-3]
     {"rats/protocol", "internal", "src/net/overlay/overlay_plugin.h", "\"rats/protocol\"", "rats-search protocol id (compatibility with other clients)"},
     {"rats/listenPort", "test", "tests/overlay/tst_netsettings_ovl.cpp", "ratsListenPortAndBootstrapPeers", ""},   // [net-3]

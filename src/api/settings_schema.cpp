@@ -401,13 +401,14 @@ QList<SettingDef> buildSchema()
     B.i(rats::MaxResults, 500, 10, 5000, "Maximum rats-search results per search");
 
     // ---- [str-1] the local streaming API
-    B.b(api::Enabled, false, "Switch on the streaming API");
-    B.i(api::Port, 17580, 1, 65535, "Streaming API port");   // applies at once (no restart)
+    B.b(api::Enabled, false, "Switch on the local API");
+    B.i(api::Port, 17580, 1, 65535, "Local API port");   // applies at once (no restart)
     B.b(api::AllowLan, false, "Allow other devices on my network");
-    B.s(api::Token, QString(), "Streaming API access token");
+    B.s(api::Token, QString(), "Local API access token");
     B.i(api::CacheLimitMB, 4096, 64, 1024 * 1024, "Stream cache limit (MB)");
     B.i(api::IdleMin, 240, 1, 7 * 1440, "Drop a stream's cache when no player read it for (minutes)");   // 4 hours
     B.b(api::KeepStreams, false, "Keep what was streamed as a download");
+    B.b(api::AllowDelete, false, "Programs may delete downloaded files");   // [api-2] off: removal off the list only
 
     // ---- "Other Networks" (original WinMX OpenNap Networks page)
     B.s(other::DefaultLogin, QString(), "Default login (empty = screen name)");

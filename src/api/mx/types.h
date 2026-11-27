@@ -424,6 +424,7 @@ enum class FileRemoval : int {
     Keep = 0,                          // the row goes; a finished file stays, partial data stays and can be resumed
     Trash = 1,                         // the row goes; its data goes to the trash / Recycle Bin (what cannot stays)
     TrashOrDelete = 2,                 // the same, and what cannot go to the trash is deleted for good (the user was told)
+    Delete = 3,                        // [api-2] the row goes; its data is deleted for good, never to the trash (the local API)
 };
 struct DownloadDiskInfo {
     bool        known = false;         // the core reported it (false: an old core, nothing is deleted)

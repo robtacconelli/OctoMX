@@ -152,13 +152,13 @@ Each network can be switched on and off on the Networks page and in the settings
 | **Web** | Searches public torrent index sites and the Internet Archive over HTTPS (search only; the results are downloaded through BitTorrent / HTTP). |
 | **Rats** | The rats-search P2P torrent search network (search only). |
 
-## Streaming API (for players and other programs)
+## Local API: streaming and downloads (for players and other programs)
 
 OctoMX can serve another program: it searches every network, picks a result and gets a link that any
 video player opens (mpv, VLC, ffplay, a browser). OctoMX then fetches only what the player reads, when
 it reads it (the beginning, the index at the end, sequentially with a buffer ahead, any place after a
 skip), from every network that has the file, and deletes the cache afterwards. **It is off by
-default**: switch it on in Settings, Other Networks, Streaming API, where the access token is shown.
+default**: switch it on in Settings, Other Networks, Local API, where the access token is shown.
 It listens on this computer only unless you allow your home network. The three calls:
 
     curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -167,8 +167,17 @@ It listens on this computer only unless you allow your home network. The three c
     curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
          -d '{"search": 1, "result": "<key>", "file": 1}' http://127.0.0.1:17580/api/v1/streams
 
-The last answer has the `url` for the player. Every call, the status of a stream and the safety rules
-are in [docs/API.md](docs/API.md).
+The last answer has the `url` for the player. The same API **downloads files of any type** (from a
+search result or a magnet / ed2k / http link) into the incoming folder, lists every download of the
+Transfers window with its state, speed, sources and peers, and pauses, resumes, changes or removes
+them; deleting their files needs its own switch, "Programs may delete downloaded files" (off):
+
+    curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+         -d '{"search": 1, "result": "<key>"}' http://127.0.0.1:17580/api/v1/downloads
+    curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:17580/api/v1/downloads
+
+Every call, the status of a stream and of a download and the safety rules are in
+[docs/API.md](docs/API.md).
 
 Streaming works with every network, like a download. For a smooth stream:
 

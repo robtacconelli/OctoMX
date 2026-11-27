@@ -6,6 +6,7 @@
 #include "core/engine/download.h"
 #include "core/engine/engine.h"
 #include "core/log.h"
+#include "core/network_manager.h"
 #include "mx/download_order.h"
 #include "mx/settings_keys.h"
 
@@ -62,6 +63,12 @@ QString typeName(MediaType t)
     case MediaType::Other: return QStringLiteral("other");
     default: return QStringLiteral("any");
     }
+}
+
+const char *connStateWord(ConnState s)
+{
+    static const char *states[] = {"disabled", "disconnected", "connecting", "connected", "error"};
+    return states[qBound(0, int(s), 4)];
 }
 
 void json(HttpResponse &r, int status, const QJsonObject &o)
@@ -263,6 +270,13 @@ StreamService::StreamService(Settings *settings, SearchService *search, Download
             if (key == keys::api::Enabled || key == keys::api::Port || key == keys::api::AllowLan) applySettings();
             else if (key == keys::api::Token) emit stateChanged();
         });
+    // [api-2] the outcome of a delete asked for through the API; origins of downloads that left the list
+    connect(m_engine, &TransferService::downloadFilesDeleted, this,
+            [this](const QString &id, const QString &, const QStringList &trashed, const QStringList &deleted, const QStringList &failed,
+                   const QStringList &errors) { filesDeleted(id, trashed, deleted, failed, errors); });
+    connect(m_engine, &TransferService::transferRemoved, this, [this](const QString &id, bool upload) {
+        if (!upload && m_apiDownloads.remove(id)) saveOrigins();
+    });
     if (m_torrents)
         if (auto *ev = qobject_cast<TorrentEvents *>(m_torrents->torrentEvents()))
         {
@@ -284,6 +298,7 @@ StreamService::~StreamService()
     m_http.close();
     qDeleteAll(m_streams);
     qDeleteAll(m_searches);
+    qDeleteAll(m_removed);
 }
 
 QString StreamService::newToken()
@@ -310,6 +325,7 @@ void StreamService::start()
     QDir().mkpath(root);
     if (m_torrents) m_torrents->setStreamCacheDir(root);
     cleanLeftovers();
+    loadOrigins();   // [api-2]
     QTimer::singleShot(15000, this, [this] { cleanLeftovers(); });   // torrents the backend restored late
     m_timer.start();
     applySettings();
@@ -397,7 +413,7 @@ void StreamService::listenNow()
     m_allowedHosts.clear();
     if (!m_http.listen(addrs, quint16(port), &err, &inUse)) {
         m_listening = false;
-        m_error = inUse ? QStringLiteral("Port %1 is in use by another program: the streaming API does not listen. "
+        m_error = inUse ? QStringLiteral("Port %1 is in use by another program: the local API does not listen. "
                                          "Choose another port.").arg(port)
                         : err;
         qCWarning(lcCore).noquote() << "streaming API:" << m_error;
@@ -611,6 +627,8 @@ void StreamService::housekeeping()
             delete s;
         }
     }
+    for (int i = int(m_removed.size()) - 1; i >= 0; --i)   // [api-2]
+        if (now - m_removed.at(i)->removedMs > m_tune.removedKeepMs) delete m_removed.takeAt(i);
     emit stateChanged();
 }
 
@@ -735,8 +753,14 @@ QString StreamService::hitKeyOf(const SearchHit &h)
 QList<SearchHit> StreamService::searchHits(const Search *se) const
 {
     QList<SearchHit> out;
-    for (const SearchHit &h : m_search->hits(se->sid))
-        if (!se->typeFilter || hitMatchesFileType(se->query, h)) out << h;   // the Search page's own filter
+    for (const SearchHit &h : m_search->hits(se->sid)) {
+        bool match = !se->typeFilter || hitMatchesFileType(se->query, h);   // the Search page's own filter
+        if (!se->filters.isEmpty()) {   // [api-2] "types": one of them
+            match = false;
+            for (const SearchQuery &f : se->filters) match = match || hitMatchesFileType(f, h);
+        }
+        if (match) out << h;
+    }
     std::stable_sort(out.begin(), out.end(), [](const SearchHit &a, const SearchHit &b) {
         const int pa = qMax(a.totalPeers, a.sourceCount), pb = qMax(b.totalPeers, b.sourceCount);
         return pa > pb;
@@ -764,6 +788,12 @@ QJsonObject StreamService::hitJson(const Search *se, const SearchHit &h, bool fu
     if (!h.suspect.isEmpty()) o.insert(QStringLiteral("suspect"), h.suspect);
     if (h.alreadyInLibrary) o.insert(QStringLiteral("inLibrary"), true);
     if (h.canJoinRunningDownload) o.insert(QStringLiteral("downloading"), true);
+    {   // [api-2]
+        QString why;
+        const bool can = hitDownloadable(h, &why);
+        o.insert(QStringLiteral("downloadable"), can);
+        if (!can) o.insert(QStringLiteral("notDownloadable"), why);
+    }
     if (h.isBundle) {
         if (h.files.isEmpty()) {
             o.insert(QStringLiteral("files"), QJsonValue::Null);
@@ -798,7 +828,11 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
     const QByteArray what = seg.value(0);
     const QByteArray m = req.method == "HEAD" ? QByteArray("GET") : req.method;
     QJsonObject body;
-    if (m == "POST") {
+    // [api-2] the action calls (pause, resume, sources) take an empty body, with or without a
+    // Content-Type; a body that is there must still be JSON
+    const QByteArray last = seg.value(seg.size() - 1);
+    const bool emptyOk = what == "downloads" && seg.size() >= 2 && (last == "pause" || last == "resume" || last == "sources");
+    if (m == "POST" && !(emptyOk && req.body.trimmed().isEmpty())) {
         const QByteArray ct = req.header("content-type").toLower();
         if (!ct.startsWith("application/json")) {
             error(resp, 415, QStringLiteral("content_type"), QStringLiteral("Send the body as JSON (Content-Type: application/json)."));
@@ -836,6 +870,9 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
         o.insert(QStringLiteral("streams"), live);
         o.insert(QStringLiteral("searches"), int(m_searches.size()));
         o.insert(QStringLiteral("cache"), cacheJson());
+        o.insert(QStringLiteral("downloads"), downloadsStatusJson());   // [api-2]
+        o.insert(QStringLiteral("types"), typesJson());
+        o.insert(QStringLiteral("deleteFilesAllowed"), m_settings && m_settings->b(keys::api::AllowDelete));
         json(resp, 200, o);
         return;
     }
@@ -868,6 +905,7 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
                 return;
             }
             auto *se = new Search;
+            QJsonArray skipped, askedNames;   // [api-2]
             if (!link.isEmpty()) {
                 se->query.text = link;
                 se->sid = m_search->searchHash(link);
@@ -885,10 +923,57 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
                 }
                 ft.applyTo(q);
                 se->typeFilter = ft.kind != QLatin1String("any");
+                // [api-2] several types at once: the networks are asked for the type they all share (else
+                // every type) and a result matches when it matches one of them, by the Search page's filter
+                if (body.contains(QStringLiteral("types"))) {
+                    const QJsonValue tv = body.value(QStringLiteral("types"));
+                    QList<FileTypeFilter> fts;
+                    if (body.contains(QStringLiteral("type"))) fts << ft;
+                    for (const QJsonValue &v : tv.toArray()) {
+                        const FileTypeFilter f = FileTypeFilter::fromCode(v.toString().trimmed());
+                        if (!f.isValid() || !v.isString()) {
+                            delete se;
+                            error(resp, 400, QStringLiteral("type"),
+                                  QStringLiteral("Unknown type \"%1\" in \"types\": one of %2.")
+                                      .arg(v.toVariant().toString(), FileTypeFilter::kinds().join(QStringLiteral(", "))));
+                            return;
+                        }
+                        fts << f;
+                    }
+                    if (!tv.isArray()) {
+                        delete se;
+                        error(resp, 400, QStringLiteral("type"), QStringLiteral("\"types\" is a list of type codes, for example [\"video\", \"audio\"]."));
+                        return;
+                    }
+                    bool any = fts.isEmpty();
+                    for (const FileTypeFilter &f : std::as_const(fts)) any = any || f.kind == QLatin1String("any");
+                    // the type part of the query from scratch
+                    q.type = MediaType::Any;
+                    q.extension.clear();
+                    q.extensions.clear();
+                    q.minBitrate = q.maxBitrate = 0;
+                    se->typeFilter = false;
+                    if (!any && fts.size() == 1) {   // one type: as "type"
+                        fts.first().applyTo(q);
+                        se->typeFilter = true;
+                    } else if (!any) {
+                        MediaType common = fts.first().mediaType();
+                        for (const FileTypeFilter &f : std::as_const(fts))
+                            if (f.mediaType() != common) common = MediaType::Any;
+                        q.type = common;
+                        for (const FileTypeFilter &f : std::as_const(fts)) {
+                            SearchQuery fq = q;
+                            fq.type = MediaType::Any;
+                            f.applyTo(fq);
+                            se->filters << fq;
+                        }
+                    }
+                }
                 const QString ext = body.value(QStringLiteral("extension")).toString().trimmed().toLower();
                 if (!ext.isEmpty()) {
                     q.extension = ext.startsWith(QLatin1Char('.')) ? ext.mid(1) : ext;
                     se->typeFilter = true;
+                    se->filters.clear();   // [api-2] an extension decides on its own (as on the Search page)
                 }
                 q.minSize = qint64(body.value(QStringLiteral("minSize")).toDouble());
                 q.maxSize = qint64(body.value(QStringLiteral("maxSize")).toDouble());
@@ -901,6 +986,27 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
                     }
                     q.networks << n;
                 }
+                // [api-2] none named: every network (not the Advanced setting search/networks); a named one
+                // that cannot be asked now is said in the answer ("skipped")
+                const bool named = !q.networks.isEmpty();
+                QList<Net> asked;
+                if (auto *nm = qobject_cast<NetworkManager *>(m_network))
+                    for (NetworkPlugin *p : nm->activePlugins(NetworkPlugin::CanSearch))
+                        if ((!named || q.networks.contains(p->net())) && !asked.contains(p->net())) asked << p->net();
+                for (Net n : std::as_const(q.networks)) {
+                    if (asked.contains(n)) continue;
+                    QString why;
+                    const NetworkStatus st = m_network->status(n);
+                    if (!m_network->isEnabled(n) || st.state == ConnState::Disabled) why = QStringLiteral("switched off");
+                    else if (n == Net::Http) why = QStringLiteral("cannot search (it only fetches files from links)");
+                    else why = QStringLiteral("not running");
+                    skipped << QJsonObject{{QStringLiteral("network"), netName(n)}, {QStringLiteral("reason"), why},
+                                           {QStringLiteral("state"), QLatin1String(connStateWord(st.state))}};
+                }
+                if (!named) {
+                    for (int n = int(Net::BitTorrent); n <= int(Net::Rats); ++n) q.networks << Net(n);
+                }
+                for (Net n : std::as_const(asked)) askedNames << netName(n);
                 q.maxResults = m_settings->i(keys::search::MaxResults);
                 if (q.maxResults <= 0) q.maxResults = 2000;
                 se->query = q;
@@ -910,9 +1016,16 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
             se->createdMs = m_clock.elapsed();
             m_searches.insert(se->api, se);
             qCInfo(lcCore).noquote() << "streaming API: search" << se->api << "for" << se->query.text;
-            json(resp, 201, QJsonObject{{QStringLiteral("id"), int(se->api)},
-                                        {QStringLiteral("url"), QStringLiteral("/api/v1/searches/%1").arg(se->api)},
-                                        {QStringLiteral("running"), true}});
+            QJsonObject ans{{QStringLiteral("id"), int(se->api)},
+                            {QStringLiteral("url"), QStringLiteral("/api/v1/searches/%1").arg(se->api)},
+                            {QStringLiteral("running"), true}};
+            if (link.isEmpty()) ans.insert(QStringLiteral("networks"), askedNames);   // [api-2]
+            if (!skipped.isEmpty()) {
+                ans.insert(QStringLiteral("skipped"), skipped);
+                if (askedNames.isEmpty())
+                    ans.insert(QStringLiteral("note"), QStringLiteral("None of the networks named can be asked now: this search finds nothing."));
+            }
+            json(resp, 201, ans);
             return;
         }
         bool ok = false;
@@ -998,6 +1111,7 @@ void StreamService::apiCall(const HttpRequest &req, HttpResponse &resp)
         json(resp, 200, o);
         return;
     }
+    if (what == "downloads") return downloadsCall(req, resp, seg, m, body);   // [api-2]
     error(resp, 404, QStringLiteral("not_found"), QStringLiteral("Not found."));
 }
 
@@ -1095,6 +1209,8 @@ void StreamService::selectResult(const HttpRequest &req, HttpResponse &resp, con
     const QMetaObject::Connection c = connect(m_engine, &TransferService::downloadNotStarted, this,
                                               [&notStarted](const QString &, const QString &why) { notStarted = why; });
     QString id;
+    QSet<QString> before;   // [api-2] a new download of "download": true is the API's ("origin": "api")
+    for (const TransferInfo &t : m_engine->downloadsBrief()) before.insert(t.id);
     auto start = [&] {
         if (h.isBundle) {
             DownloadRequest r = requestFromHit(h);
@@ -1121,6 +1237,7 @@ void StreamService::selectResult(const HttpRequest &req, HttpResponse &resp, con
         error(resp, 409, QStringLiteral("not_started"), notStarted.isEmpty() ? QStringLiteral("The transfer could not be started.") : notStarted);
         return;
     }
+    if (normal && !before.contains(id)) markApiDownload(id);
     if (!media) {   // a normal download of a file that cannot be streamed: no link
         json(resp, 201, QJsonObject{{QStringLiteral("download"), id}, {QStringLiteral("url"), QJsonValue::Null},
                                     {QStringLiteral("message"), QStringLiteral("Downloading normally; this type cannot be streamed.")}});
@@ -1129,7 +1246,7 @@ void StreamService::selectResult(const HttpRequest &req, HttpResponse &resp, con
     // the same download streamed already: the same stream
     for (Stream *s : std::as_const(m_streams)) {
         if (s->ended || s->downloadId != id || s->file != file) continue;
-        if (normal && s->owned && d->streamRestricts()) d->endStream(true, m_engine->incomingDir());
+        if (normal && s->owned && d->streamRestricts()) promoteStream(s);   // [api-2] the stream goes on, on a normal download
         QJsonObject o = streamJson(s);
         o.insert(QStringLiteral("url"), linkFor(s, hostFor(req)));
         json(resp, 200, o);

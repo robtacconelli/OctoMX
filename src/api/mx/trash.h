@@ -49,6 +49,9 @@ struct Result {
 // (the question said "deleted for good"), else it stays and is reported as failed. A path that is
 // gone already counts as neither. Refuses "/", drive roots and empty or relative paths.
 Result dispose(const QStringList &paths, bool allowForGood);
+// [api-2] Each path deleted for good, never to the trash (FileRemoval::Delete: a program asked for it
+// through the local API, where nobody would empty a trash). The same refusals as dispose().
+Result removeAllForGood(const QStringList &paths);
 
 // Bytes of a file, or of every file below a folder (links not followed); *files = their number.
 qint64 sizeOnDisk(const QString &path, int *files = nullptr);
