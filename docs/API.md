@@ -115,7 +115,7 @@ Every answer is JSON. An error has a code and a sentence a person can read:
         ],
         "searches": 0,
         "streams": 0,
-        "version": "5.9"
+        "version": "5.10"
     }
 
 After 5.9 the status also has `downloads` (how many downloads the list holds, per [state
@@ -965,7 +965,7 @@ The finished downloads (completed, seeding, cancelled) leave the list; their fil
             },
             ...
         ],
-        "version": "5.9",
+        "version": "5.10",
         ...
     }
 

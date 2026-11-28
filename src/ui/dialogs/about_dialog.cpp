@@ -46,7 +46,7 @@ AboutDialog::AboutDialog(mx::Core *core, QWidget *parent) : QDialog(parent)
                            core->isMock() ? tr("\nDemo mode: no network connections are made.") : QString()));
     info->setObjectName(QStringLiteral("aboutText"));
     info->setGeometry(SR(56, 30, 450, 106));
-    // [upd-1] what the update check found, right of the title: "OctoMX 5.9 is up to date." / "... 5.10 is available ..."
+    // [upd-1] what the update check found, right of the title: "OctoMX 5.10 is up to date." / "... 5.11 is available ..."
     if (UpdateController *u = UpdateController::of(qobject_cast<MainWindow *>(parent))) {
         auto *upd = new QLabel(u->statusLine(), this);
         upd->setObjectName(QStringLiteral("aboutUpdateStatus"));

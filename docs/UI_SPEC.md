@@ -1490,7 +1490,7 @@ Fidelity checks must treat these as intentional (the classic forms stay reachabl
   "Load Standard ... Defaults" buttons choose the theme and reset every colour.
 * **Help button** [post-1]: a click pops a small menu `About OctoMX...` (bold default) / `Check for
   Updates...` (F1 still opens About directly); the About box has `Check for Updates...` left of OK.
-  The update box is a classic message box titled `OctoMX`: "OctoMX 5.10 is available (you have 5.9)."
+  The update box is a classic message box titled `OctoMX`: "OctoMX 5.11 is available (you have 5.10)."
   with the first lines of the release notes as plain text and `Open Download Page` / `Remind Me Later`
   / `Skip This Version`. Settings ▸ Miscellaneous ▸ System Integration has an `Updates` group with
   "Check for a new version at start (at most once a day)" (updates/checkAtStart, default on).
@@ -1502,19 +1502,19 @@ Fidelity checks must treat these as intentional (the classic forms stay reachabl
   downloading a new version` (ask) / `Only tell me, I install it myself` (notify, the classic box) / `Do
   not check at start` (off). A profile with the earlier check box off gets `off` (migrated once).
   auto: the start check downloads a newer signed release quietly, then a small box titled `OctoMX`
-  (information icon, plain text) says "OctoMX 5.10 is ready to install (you have 5.9)." with the
+  (information icon, plain text) says "OctoMX 5.11 is ready to install (you have 5.10)." with the
   first lines of the release notes, "The download was checked against the OctoMX release
   signature.", with running downloads "Your 3 running downloads continue after the restart.", and
   `Restart Now` (default) / `Later` / `Skip This Version`; Later (also Escape or the close button)
   installs it when OctoMX is closed and a tray balloon says so once. ask, and always for Help ▸ Check
-  for Updates...: "OctoMX 5.10 is available (you have 5.9)." with `Update Now` (a box with a progress
+  for Updates...: "OctoMX 5.11 is available (you have 5.10)." with `Update Now` (a box with a progress
   bar, `Hide` / `Cancel`, then the ready box) / `Remind Me Later` / `Skip This Version` and `Open
   Download Page` as a link below the text. When the program cannot install a release itself (not a
   published package, a folder it cannot write, a release without signature, a download or check that
   failed), the classic box appears with the reason above the last line. The first start after an update
-  shows "Updated to OctoMX 5.10 (from 5.9)." with `What's New` (the release page) / `OK`. The About
-  box has one line under the description: "OctoMX 5.9 is up to date." / "OctoMX 5.10 is available
-  (you have 5.9)." / "... is ready to install ..." / "..., not checked for updates yet.".
+  shows "Updated to OctoMX 5.11 (from 5.10)." with `What's New` (the release page) / `OK`. The About
+  box has one line under the description: "OctoMX 5.10 is up to date." / "OctoMX 5.11 is available
+  (you have 5.10)." / "... is ready to install ..." / "..., not checked for updates yet.".
   Deviations: these boxes are not part of WinMX 3.53 (it had no updater); they are drawn as classic
   message boxes with our own buttons. Deliberate choices: the staging folder is inside the program
   folder (`.new-<version>`, same volume, only the program folder must be writable) instead of next
@@ -1727,7 +1727,7 @@ Fidelity checks must treat these as intentional (the classic forms stay reachabl
   BitTorrent piece hashes)`. With the setting `search/mergeByNameAndSize` off (default on), only plain
   files with equal normalised names merge (a bundle never meets a non-bundle).
 * **The name OctoMX** [ren-1] (owner: "as a name I choose OctoMX"; "OctoMX is the only version and
-  name we use"): every place where the program names itself says OctoMX (title `OctoMX v5.9`,
+  name we use"): every place where the program names itself says OctoMX (title `OctoMX v5.10`,
   `About OctoMX...`, `Exit OctoMX`, message box titles, the `OctoMX Peer Network` tabs and pages, the
   network name `OctoMX` in the Network columns, the default room `OctoMX Lobby`). Where it describes
   itself it says that its interface is in the style of the classic WinMX, with the statement that it

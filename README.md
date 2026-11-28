@@ -42,7 +42,7 @@ responsibility; the authors are not responsible for the content exchanged with i
 start the program asks you to accept these terms before it connects to any network. See
 [Legal](#legal).
 
-Version 5.9 for Windows 10/11 (64-bit), Linux (x86_64) and macOS 14.4 or newer. Project page:
+Version 5.10 for Windows 10/11 (64-bit), Linux (x86_64) and macOS 14.4 or newer. Project page:
 https://github.com/robtacconelli/OctoMX
 
 > **Licence:** OctoMX is free software under the **GNU General Public License v3.0 or later**
@@ -94,9 +94,9 @@ built-in demo data:
 
 | | |
 |---|---|
-| **Windows** | Unzip `OctoMX-5.9-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
-| **Linux** | `tar xf OctoMX-5.9-linux-x86_64.tar.xz` and run `OctoMX-5.9-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
-| **macOS** | Unzip `OctoMX-5.9-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
+| **Windows** | Unzip `OctoMX-5.10-win64.zip` anywhere and double-click `octomx.exe`. Nothing is installed. Windows Firewall may ask whether OctoMX may accept connections. |
+| **Linux** | `tar xf OctoMX-5.10-linux-x86_64.tar.xz` and run `OctoMX-5.10-linux-x86_64/octomx`. Qt does not need to be installed. Run `./install-desktop-entry.sh` once for a menu entry and icon. |
+| **macOS** | Unzip `OctoMX-5.10-macos-universal.zip` (one app for Apple Silicon and Intel Macs, macOS 14.4 or newer) and drag `OctoMX.app` into Applications. The first time, right-click `OctoMX.app` and choose **Open**, then **Open** again (on macOS 15: System Settings > Privacy & Security > **Open Anyway**): the app has no Apple Developer ID signature. `README-mac.txt` in the archive has the details. |
 
 `SHA256SUMS` next to the archives has their checksums.
 
