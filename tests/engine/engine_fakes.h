@@ -391,6 +391,9 @@ public:
         return t.id;
     }
     QByteArray piece(const FakeTorrent &t, int p) const { return t.payload.mid(p * t.pieceLength, t.pieceLength); }
+    // [api-2] the test drives the simulated peers itself: no 200 ms timer, stepOnce() is one step
+    void setManualSteps(bool on) { if (on) m_timer.stop(); else m_timer.start(); }
+    void stepOnce() { step(); }
 
     QString addTorrent(const QString &uri, const QByteArray &, const QString &saveDir, bool paused,
                        const QList<int> &wantedFiles, QString *error) override

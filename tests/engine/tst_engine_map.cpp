@@ -301,14 +301,27 @@ void TstEngineMap::torrentDownloadQueueAndPause()
     const QString tid = be.makeTorrent(QStringLiteral("two"), {{QStringLiteral("two/a.bin"), a}, {QStringLiteral("two/b.bin"), b}}, 64 * 1024);
     be.known[tid].peerPiecesPerTick = 1;
     be.known[tid].peers = 2;
+    // [api-2] the test makes the simulated peers' steps (no timer): the fake reports a finished piece
+    // (torrentChanged) before it fills the next step's download queue, so a map read against a timer saw
+    // the queue only between the engine's 1 s refresh and the next step, and missed it under load
+    be.setManualSteps(true);
     env.engineUp(&be);
     const QString id = env.engine->downloadUri(QStringLiteral("magnet:?xt=urn:btih:%1&dn=two").arg(tid));
     QVERIFY(!id.isEmpty());
-    QVERIFY(QTest::qWaitFor([&] { return env.info(id).state == TransferState::Transferring && env.info(id).done > 0; }, 10000));
+    // one step of the peers, then the snapshot as the backend reports it now
+    auto step = [&] {
+        be.stepOnce();
+        emit be.events->torrentChanged(tid);
+        QCoreApplication::processEvents();
+    };
+    QVERIFY(QTest::qWaitFor([&] {
+        if (env.info(id).state == TransferState::Transferring) step();
+        return env.info(id).state == TransferState::Transferring && env.info(id).done > 0;
+    }, 10000));
     // every cell in progress is a piece in the (fake) download queue, every complete cell a piece it has
     int moving = 0;
-    for (int k = 0; k < 20 && env.info(id).state == TransferState::Transferring; ++k) {
-        QTest::qWait(100);
+    for (int k = 0; k < 6 && env.info(id).state == TransferState::Transferring; ++k) {
+        step();
         const TransferInfo t = env.info(id);
         const QVariantMap dbg = env.engine->debugInfo(id);
         if (t.pieceMap.isEmpty()) continue;
@@ -328,12 +341,16 @@ void TstEngineMap::torrentDownloadQueueAndPause()
                 QVERIFY2(queue.intersects(r.first, r.second), "cell in progress outside the download queue");
             }
         }
+        // a piece of the queue that is not held yet shows as a cell in progress in this very read
+        RangeSet arriving = queue;
+        arriving.remove(have);
+        if (!arriving.isEmpty()) QVERIFY2(t.pieceMap.contains(char(1)), "the download queue has a piece, the map shows none");
     }
     QVERIFY(moving > 0);
     // paused (and restored paused): what libtorrent has, nothing arriving
     env.engine->pause(id);
     QVERIFY(env.waitState(id, TransferState::Paused, 5000));
-    QTest::qWait(300);
+    step();   // the peers send nothing to a paused torrent; its snapshot is read again
     const TransferInfo p = env.info(id);
     QVERIFY(!p.pieceMap.isEmpty());
     QVERIFY2(!p.pieceMap.contains(char(1)), "a paused torrent shows parts in progress");
@@ -345,7 +362,10 @@ void TstEngineMap::torrentDownloadQueueAndPause()
     QVERIFY(!r.pieceMap.contains(char(1)));
     QCOMPARE(r.pieceMap.count(char(2)), p.pieceMap.count(char(2)));
     env.engine->resume(id);
-    QVERIFY2(env.waitDone(id, 30000), qPrintable(env.info(id).statusText));
+    QVERIFY2(QTest::qWaitFor([&] {
+        step();
+        return env.info(id).state == TransferState::Completed;
+    }, 30000), qPrintable(env.info(id).statusText));
 }
 
 QTEST_GUILESS_MAIN(TstEngineMap)
