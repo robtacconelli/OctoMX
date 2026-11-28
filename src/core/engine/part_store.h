@@ -109,6 +109,11 @@ public:
     void sha1Ranges(const QList<Range> &ranges, std::function<void(const QList<QByteArray> &)> done);
     bool drain(int timeoutMs) { return m_io.drain(timeoutMs); }
     void abandon() { m_io.discardPending(); }
+    // [api-2] test seam: called on the store's I/O thread when a final check ("final check", with its
+    // cancel flag) or a move to the target folder ("move", no flag) starts; a test holds the step there.
+    // Empty (the default): nothing happens.
+    using TestHold = std::function<void(const QString &step, const std::atomic<bool> *cancel)>;
+    static void setTestHold(TestHold hold);
     // [ver-1] Verify File. done() runs on the main thread once every write queued so far is on disk.
     void afterWrites(std::function<void()> done);
     // the units that are held completely (verified or not) and are not being checked right now

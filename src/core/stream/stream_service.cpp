@@ -271,6 +271,7 @@ StreamService::StreamService(Settings *settings, SearchService *search, Download
             else if (key == keys::api::Token) emit stateChanged();
         });
     // [api-2] the outcome of a delete asked for through the API; origins of downloads that left the list
+    connect(m_engine, &DownloadEngine::downloadRemoved, this, &StreamService::downloadRemoved);
     connect(m_engine, &TransferService::downloadFilesDeleted, this,
             [this](const QString &id, const QString &, const QStringList &trashed, const QStringList &deleted, const QStringList &failed,
                    const QStringList &errors) { filesDeleted(id, trashed, deleted, failed, errors); });

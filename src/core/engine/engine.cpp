@@ -8,6 +8,7 @@
 #include "core/database.h"
 #include "core/download_request.h"
 #include "core/engine/download.h"
+#include "core/engine/part_store.h"
 #include "core/launcher.h"
 #include "core/library.h"
 #include "core/log.h"
@@ -625,13 +626,40 @@ struct DownloadEngine::Private : public engine::EngineHost {
         rebalance();
         return x;
     }
-    void removeDownload(Download *d, FileRemoval mode)
+    // keepIfFinished: the mode is for partial data only (cancel(): a finished file always stays)
+    void removeDownload(Download *d, FileRemoval mode, bool keepIfFinished = false)
     {
         // [str-1] a stream's cache never goes to the trash and is never kept: the stream service deletes it
         if (d->streamRestricts()) {
             q->dropStream(d->id());
             return;
         }
+        // [api-2] a download that is finishing: one of two clean outcomes (see DownloadEngine::removeDownload)
+        switch (d->finishing()) {
+        case Download::Finishing::FinalCheck:
+            d->cancelFinalCheck(DownloadEngine::kRemoveCheckWaitMs);
+            break;
+        case Download::Finishing::Moving:
+            if (!d->removalPending()) {
+                qCInfo(lcEngine) << d->id() << "removed during its move to the target folder: removed when the move ends";
+                QPointer<Download> guard(d);
+                d->removeAfterMove([this, guard, mode, keepIfFinished] {
+                    if (!guard || byId.value(guard->id()) != guard.data()) return;
+                    removeNow(guard, keepIfFinished && guard->isFinished() ? FileRemoval::Keep : mode);
+                }, mode, keepIfFinished);
+            }
+            return;
+        case Download::Finishing::RetryWait:
+            d->stopFinishing();
+            break;
+        case Download::Finishing::None:
+            break;
+        }
+        removeNow(d, mode);
+    }
+    void removeNow(Download *d, FileRemoval mode)
+    {
+        d->clearPendingRemoval();   // [api-2] done now: a kept record must not carry it into a later session
         const QString id = d->id();
         const QString name = d->record().name;
         const bool finished = d->isFinished();
@@ -663,9 +691,13 @@ struct DownloadEngine::Private : public engine::EngineHost {
         lastEmit.remove(id);
         lastSig.remove(id);
         if (daoPtr) daoPtr->remove(id);
+        // [api-2] the marker of a move to the target folder belongs to the record that just went (a
+        // finished download's marker stays until the next start otherwise; a failed move's is stale)
+        if (torrentId.isEmpty()) QFile::remove(engine::PartStore::moveMarkerPath(d->partPath()));
         for (int i = int(follows.size()) - 1; i >= 0; --i)
             if (follows.at(i).downloadId == id) follows.removeAt(i);
         d->deleteLater();
+        emit q->downloadRemoved(id, finished, keep ? di.paths + di.kept : di.kept, finished ? QString() : di.inPlaceFile);   // [api-2]
         emit q->transferRemoved(id, false);
         updatePartials();
         requestRebalance();
@@ -1039,6 +1071,24 @@ void DownloadEngine::start()
         if (!d->byId.contains(mid)) QFile::remove(fi.absoluteFilePath());
     }
     qCInfo(lcEngine) << "engine: restored" << d->list.size() << "downloads";
+    // [api-2] removals that waited for a move when OctoMX was closed: done now, after loading (queued),
+    // by the same rule as any removal (finished then: as finished; partial: as partial)
+    {
+        QStringList pending;
+        for (Download *x : std::as_const(d->list))
+            if (x->pendingRemoval(nullptr, nullptr)) pending << x->id();
+        if (!pending.isEmpty())
+            QTimer::singleShot(0, this, [this, pending] {
+                for (const QString &id : pending) {
+                    Download *x = d->byId.value(id);
+                    FileRemoval mode = FileRemoval::Keep;
+                    bool keepIfFinished = false;
+                    if (!x || !x->pendingRemoval(&mode, &keepIfFinished)) continue;
+                    qCInfo(lcEngine) << id << "was being removed when OctoMX was closed: removed now";
+                    d->removeDownload(x, mode, keepIfFinished);
+                }
+            });
+    }
     // [ver-1] a restart that was waiting for the old files of its torrent: done now
     for (Download *x : std::as_const(d->list)) {
         if (!x->restartPending()) continue;
@@ -1415,7 +1465,7 @@ void DownloadEngine::cancel(const QString &id, bool deleteData)
     // the earlier meaning: deleteData drops the partial data of an unfinished download; a finished
     // file always stayed. [ui-j] the data goes to the trash where there is one
     if (Download *x = d->byId.value(id))
-        d->removeDownload(x, deleteData && !x->isFinished() ? FileRemoval::TrashOrDelete : FileRemoval::Keep);
+        d->removeDownload(x, deleteData && !x->isFinished() ? FileRemoval::TrashOrDelete : FileRemoval::Keep, true);
 }
 
 // [ui-j]

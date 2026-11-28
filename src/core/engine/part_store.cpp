@@ -72,6 +72,27 @@ bool writeMoveMarker(const QString &partPath, const QString &target)
 }
 } // namespace
 
+// [api-2] the test seam (see setTestHold)
+namespace {
+QMutex g_holdMutex;
+PartStore::TestHold g_hold;
+void testHold(const QString &step, const std::atomic<bool> *cancel)
+{
+    PartStore::TestHold h;
+    {
+        QMutexLocker l(&g_holdMutex);
+        h = g_hold;
+    }
+    if (h) h(step, cancel);
+}
+} // namespace
+
+void PartStore::setTestHold(TestHold hold)
+{
+    QMutexLocker l(&g_holdMutex);
+    g_hold = std::move(hold);
+}
+
 PartStore::PartStore(QThreadPool *pool, const QString &path, qint64 size, bool preallocate, QObject *parent)
     : Store(parent), m_path(path), m_size(size), m_prealloc(preallocate), m_io(pool), m_sh(std::make_shared<Shared>())
 {
@@ -475,6 +496,7 @@ void PartStore::finalCheck(std::function<void(const FinalResult &)> done)
     auto sh = m_sh;
     const std::atomic<bool> *cancel = m_io.cancelFlag();
     m_io.run([this, sh, cancel, done] {
+        testHold(QStringLiteral("final check"), cancel);
         FinalResult r;
         {   // [safe-1] the file is on the disk before it is checked and announced
             QMutexLocker l(&sh->mutex);
@@ -500,6 +522,7 @@ void PartStore::moveTo(const QString &dir, const QString &name, std::function<vo
     m_closed = true;
     auto sh = m_sh;
     m_io.run([this, sh, dir, name, done, allowCopy] {
+        testHold(QStringLiteral("move"), nullptr);
         QString err, target;
         bool ok = false;
         {

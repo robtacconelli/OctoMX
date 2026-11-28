@@ -53,6 +53,7 @@ void localBt(Settings *s)
     s->setValue(QString(k::bt::SeedRatioLimit), 0.0);
     s->setValue(QStringLiteral("bt/allowMultipleConnectionsPerIp"), true);
     s->setValue(keys::api::AllowDelete, true);
+    s->setValue(keys::bandwidth::LimitLan, true);   // [api-2] the explicit limit of Swarm::slow() applies to 127.0.0.1 too
 }
 
 QJsonObject getDl(StreamEnv &env, const QString &id) { return env.api("GET", "/api/v1/downloads/" + id.toLatin1()).json(); }
@@ -120,8 +121,12 @@ struct Swarm {
             if (btBe->torrents().contains(tid) && btBe->snapshot(tid).peers + btBe->snapshot(tid).seeds == 0) btCtl->addPeer(tid, a->endpoint());
         });
         hint.start();
+        slow(true);
         return true;
     }
+    // [api-2] the core fetches at 256 KB/s until the test has seen what it looks for (peers, seeds):
+    // the download cannot end before that, however fast or slow the machine is; then at full speed
+    void slow(bool on) { btCtl->setRateLimits(on ? 256 * 1024 : 0, 0); }
     QString magnet() const
     {
         return QStringLiteral("magnet:?xt=urn:btih:%1&dn=%2").arg(tid, QString::fromLatin1(QUrl::toPercentEncoding(folderName)));
@@ -172,13 +177,17 @@ void TstApiDownloadsBt::bundleWithFiles()
     QCOMPARE(r.status, 201);
     const QString id = r.json().value(QStringLiteral("id")).toString();
     QJsonObject o;
-    bool sawPeers = false;
+    // a peer while it downloads (slowed until then), then at full speed
     QVERIFY2(QTest::qWaitFor([&] {
         o = getDl(env, id);
-        sawPeers = sawPeers || o.value(QStringLiteral("peers")).toInt() + o.value(QStringLiteral("seeds")).toInt() > 0;
+        return o.value(QStringLiteral("peers")).toInt() + o.value(QStringLiteral("seeds")).toInt() > 0;
+    }, 60000), QJsonDocument(o).toJson().constData());
+    QVERIFY(!fileDone(o, 0, f0.size()) || !fileDone(o, 2, f2.size()));
+    sw.slow(false);
+    QVERIFY2(QTest::qWaitFor([&] {
+        o = getDl(env, id);
         return fileDone(o, 0, f0.size()) && fileDone(o, 2, f2.size());
     }, 120000), QJsonDocument(o).toJson().constData());
-    QVERIFY(sawPeers);
     QCOMPARE(o.value(QStringLiteral("bundle")).toBool(), true);   // once the torrent's file list is known
     QCOMPARE(fileOf(o, 0).value(QStringLiteral("wanted")).toBool(), true);
     QCOMPARE(fileOf(o, 1).value(QStringLiteral("wanted")).toBool(true), false);
@@ -215,12 +224,19 @@ void TstApiDownloadsBt::magnetLink()
     QCOMPARE(r.json().value(QStringLiteral("hashes")).toObject().value(QStringLiteral("btih")).toString(), sw.tid);
     QCOMPARE(r.json().value(QStringLiteral("origin")).toString(), QStringLiteral("api"));
     // the file list arrives from the peer; peers and seeds as BitTorrent tells them
+    // (slowed until a seed and a speed were seen: the download cannot end before that)
     int maxSeeds = 0, maxSpeed = 0;
     QJsonObject o;
     QVERIFY2(QTest::qWaitFor([&] {
         o = getDl(env, id);
         maxSeeds = qMax(maxSeeds, o.value(QStringLiteral("seeds")).toInt());
         maxSpeed = qMax(maxSpeed, o.value(QStringLiteral("speedBps")).toInt());
+        return maxSeeds >= 1 && maxSpeed > 0;
+    }, 60000), QJsonDocument(o).toJson().constData());
+    QVERIFY(o.value(QStringLiteral("state")).toString() != QStringLiteral("completed"));
+    sw.slow(false);
+    QVERIFY2(QTest::qWaitFor([&] {
+        o = getDl(env, id);
         return QStringList{QStringLiteral("completed"), QStringLiteral("seeding")}.contains(o.value(QStringLiteral("state")).toString());
     }, 120000), QJsonDocument(o).toJson().constData());
     qInfo("seeds at most %d, speed at most %d B/s", maxSeeds, maxSpeed);
@@ -243,6 +259,7 @@ void TstApiDownloadsBt::fileThatWasThereStays()
     const QByteArray f0 = randomBytes(MiB + 5, 720), f1 = randomBytes(3 * MiB + 6, 721);
     QVERIFY(sw.up(QStringLiteral("debian-12.8.0-amd64-netinst"), {{QStringLiteral("README.txt"), f0}, {QStringLiteral("netinst.img"), f1}}, false));
     StreamEnv &env = sw.env;
+    sw.slow(false);   // nothing to watch here
     // the first file is in the incoming folder already, before the download
     writeFile(sw.target(0), f0);
     const Reply r = env.api("POST", "/api/v1/downloads", QJsonObject{{QStringLiteral("link"), sw.magnet()}});

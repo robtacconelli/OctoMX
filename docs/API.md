@@ -807,6 +807,7 @@ paused and a finished download.
         "errors": [],
         "failed": [],
         "files": "delete",
+        "finished": false,
         "id": "dc6083110ca84e240",
         "kept": [],
         "message": "Removed from the list; its files are deleted.",
@@ -817,10 +818,30 @@ paused and a finished download.
         "trashed": []
     }
 
-The answer comes when the files are gone (a torrent's files can be deleted only after libtorrent has
-closed them), at most after 15 s; when that takes longer it is `202` with `"pending": true`, and the
-outcome can be read with `GET /api/v1/downloads/<id>`. A removed download stays readable for 10
-minutes: `410` with that record:
+What the answer says comes from the engine when it has removed the download, not from a look at
+the disk before: `kept`, `trashed`, `deleted` and `failed` name the files where they really are,
+`finished` says whether the download was finished when it left the list.
+
+A download that is **finishing** (its whole file is checked, then moved to the incoming folder;
+`"state": "verifying"`) has one of two outcomes, decided by OctoMX:
+
+* In its final check: the check is stopped (the call waits at most 2 s for it) and the download is
+  removed as a partial one: with `keep` its part file stays and continues when the same file is
+  downloaded again; with `delete` / `trash` the part file goes.
+* In its move to the incoming folder: the move is never cut (a move to another disk is a copy that can
+  take a while); the download leaves the list when the move has ended, as a finished download: with
+  `keep` the finished file stays in the incoming folder, with `delete` / `trash` the finished file is
+  what goes. The answer then has `"finished": true` and `"finishedWhileRemoved": true`. Until the move
+  has ended the download is still in the list (`GET` shows it, `statusText` "Moving... (it is removed
+  when the move ends)") and the answer, when it comes before, says `"removed": false`. A second DELETE
+  meanwhile changes nothing: it answers with the first removal, whose `files` stays in force, and says
+  so (`filesAsked`, `note`) when it asked for another mode. When OctoMX is closed before the move ends,
+  the removal is done at the next start.
+
+The answer comes when the download has left the list and its files are gone (a torrent's files can
+be deleted only after libtorrent has closed them), at most after 15 s; when that takes longer it is
+`202` with `"pending": true`, and the outcome can be read with `GET /api/v1/downloads/<id>`. A
+removed download stays readable for 10 minutes: `410` with that record:
 
     curl -s -H "Authorization: Bearer $T" $A/downloads/dc6083110ca84e240
 
@@ -842,6 +863,7 @@ minutes: `410` with that record:
         "errors": [],
         "failed": [],
         "files": "delete",
+        "finished": false,
         "id": "dc6083110ca84e240",
         "kept": [],
         "message": "Removed from the list; its files are deleted.",
@@ -1142,3 +1164,6 @@ this document shows for it.
   (5.9 said `waiting` in the first second). Re-selecting a stream with its own cache with `"download":
   true` keeps the download when the stream stops later (5.9 could drop it then).
 * The Settings page is called Local API (was Streaming API); its settings keys are the same.
+* Removing a download that is finishing (its final check or its move to the incoming folder) has a
+  fixed outcome, the same in the Transfers window; the answer of `DELETE /api/v1/downloads/<id>` says it
+  (`finished`, `finishedWhileRemoved`, `removed`).

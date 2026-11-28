@@ -465,7 +465,8 @@ QJsonObject StreamService::removedJson(const Removed *r) const
 {
     QJsonObject o{{QStringLiteral("id"), r->id},
                   {QStringLiteral("name"), r->name},
-                  {QStringLiteral("removed"), true},
+                  {QStringLiteral("removed"), !r->rowPending},
+                  {QStringLiteral("finished"), r->finished},
                   {QStringLiteral("state"), QStringLiteral("removed")},
                   {QStringLiteral("files"), r->files},
                   {QStringLiteral("pending"), r->pending},
@@ -477,9 +478,16 @@ QJsonObject StreamService::removedJson(const Removed *r) const
                   {QStringLiteral("download"), r->last}};
     if (!r->inPlaceFile.isEmpty()) o.insert(QStringLiteral("inPlaceFile"), native(r->inPlaceFile));
     if (!r->streamEnded.isEmpty()) o.insert(QStringLiteral("streamEnded"), r->streamEnded);
+    const bool meanwhile = !r->rowPending && r->finished && !r->wasFinished;
+    if (meanwhile) o.insert(QStringLiteral("finishedWhileRemoved"), true);
     QString msg;
-    if (r->files == QLatin1String("keep"))
-        msg = QStringLiteral("Removed from the list; its files stay (a partial download continues when the same file is downloaded again).");
+    if (r->rowPending)
+        msg = QStringLiteral("It is being moved to the incoming folder (it had just finished): it leaves the list when the move ends "
+                             "(read this download again for the outcome).");
+    else if (r->files == QLatin1String("keep"))
+        msg = meanwhile ? QStringLiteral("It finished while it was being removed: removed from the list, the finished file stays in the incoming folder.")
+              : r->finished ? QStringLiteral("Removed from the list; its file stays.")
+                            : QStringLiteral("Removed from the list; its files stay (a partial download continues when the same file is downloaded again).");
     else if (r->pending)
         msg = QStringLiteral("Removed from the list; its files are being deleted (read this download again for the outcome).");
     else if (!r->failed.isEmpty())
@@ -487,6 +495,8 @@ QJsonObject StreamService::removedJson(const Removed *r) const
     else
         msg = r->files == QLatin1String("trash") ? QStringLiteral("Removed from the list; its files are in the %1.").arg(trash::placeName())
                                                  : QStringLiteral("Removed from the list; its files are deleted.");
+    if (meanwhile && r->files != QLatin1String("keep"))
+        msg = QStringLiteral("It finished while it was being removed: the finished file is what was removed. ") + msg;
     o.insert(QStringLiteral("message"), msg);
     return o;
 }
@@ -494,18 +504,50 @@ QJsonObject StreamService::removedJson(const Removed *r) const
 void StreamService::filesDeleted(const QString &id, const QStringList &trashed, const QStringList &deleted, const QStringList &failed,
                                  const QStringList &errors)
 {
-    for (int i = int(m_removed.size()) - 1; i >= 0; --i) {
-        Removed *r = m_removed.at(i);
-        if (r->id != id || !r->pending) continue;
+    bool any = false;
+    for (Removed *r : std::as_const(m_removed)) {
+        if (r->id != id || !r->filesPending || r->rowPending) continue;
+        r->filesPending = false;
         r->pending = false;
         r->trashed = trashed;
         r->deleted = deleted;
         r->failed = failed;
         r->errors = errors;
+        any = true;
+    }
+    if (any)
         qCInfo(lcCore).noquote() << "streaming API: the files of download" << id << "are removed:" << trashed.size() << "to the trash,"
                                  << deleted.size() << "deleted," << failed.size() << "failed";
-        return;
+}
+
+// [api-2] the engine removed the row: what really happened (a download that was finishing may have
+// finished in that moment; its files are where the engine says)
+void StreamService::downloadRemoved(const QString &id, bool finished, const QStringList &kept, const QString &inPlaceFile)
+{
+    for (Removed *r : std::as_const(m_removed)) {
+        if (r->id != id || !r->rowPending) continue;
+        r->rowPending = false;
+        r->finished = finished;
+        r->kept = kept;
+        r->inPlaceFile = inPlaceFile;
+        r->pending = r->filesPending;
     }
+}
+
+StreamService::Removed *StreamService::beginRemoval(const TransferInfo &t, const QString &files)
+{
+    auto *r = new Removed;
+    r->id = t.id;
+    r->name = t.name;
+    r->files = files;
+    r->removedMs = m_clock.elapsed();
+    r->last = downloadJson(t, true, false);
+    r->wasFinished = finished(t.state);
+    r->rowPending = true;
+    r->filesPending = files != QLatin1String("keep");
+    r->pending = true;
+    m_removed << r;   // before the engine is asked: its outcome may come at once
+    return r;
 }
 
 // ============================================================================ the calls
@@ -535,14 +577,7 @@ void StreamService::downloadsCall(const HttpRequest &req, HttpResponse &resp, co
             QJsonArray ids;
             for (const TransferInfo &t : listedDownloads()) {
                 if (!finished(t.state)) continue;
-                auto *r = new Removed;
-                r->id = t.id;
-                r->name = t.name;
-                r->files = QStringLiteral("keep");
-                r->removedMs = m_clock.elapsed();
-                r->last = downloadJson(t, true, false);
-                r->kept = m_engine->diskInfo(t.id).paths;
-                m_removed << r;
+                beginRemoval(t, QStringLiteral("keep"));
                 if (Stream *s = streamOfDownload(t.id)) endStream(s, QStringLiteral("its download was cleared off the list through the API"), false);
                 m_engine->removeDownload(t.id, FileRemoval::Keep);
                 ids << t.id;
@@ -871,44 +906,42 @@ void StreamService::removeDownloadCall(HttpResponse &resp, const QString &id, co
         error(resp, 400, QStringLiteral("files"), QStringLiteral("?files= is keep (the default), trash or delete."));
         return;
     }
-    if (mode != FileRemoval::Keep && !(m_settings && m_settings->b(keys::api::AllowDelete))) {
+    // [api-2] removed already and waiting for its move to the incoming folder: no second removal (the
+    // engine would ignore it); the answer is the first one's, with the mode that is in force
+    QJsonObject extra;
+    const Removed *first = nullptr;
+    for (const Removed *p : std::as_const(m_removed))
+        if (p->id == id && p->rowPending) first = p;
+    if (first && first->files != files) {
+        extra.insert(QStringLiteral("filesAsked"), files);
+        extra.insert(QStringLiteral("note"),
+                     QStringLiteral("This download is being removed already with files=%1, asked first: files=%2 of this call is not "
+                                    "applied.").arg(first->files, files));
+    }
+    if (!first && mode != FileRemoval::Keep && !(m_settings && m_settings->b(keys::api::AllowDelete))) {
         error(resp, 403, QStringLiteral("delete_not_allowed"),
               QStringLiteral("Programs may not delete downloaded files here: the user has not allowed it (Settings, Local API, "
                              "\"Programs may delete downloaded files\"). Without ?files the download leaves the list and its files stay."));
         return;
     }
-    const TransferInfo t = m_engine->transfer(id);
-    const DownloadDiskInfo di = m_engine->diskInfo(id);
-    auto *r = new Removed;
-    r->id = id;
-    r->name = t.name;
-    r->files = files;
-    r->removedMs = m_clock.elapsed();
-    r->last = downloadJson(t, true, false);
-    r->inPlaceFile = di.inPlaceFile;
-    // a stream that plays this download ends first: the player gets 410 from now on
-    if (Stream *s = streamOfDownload(id)) {
-        r->streamEnded = s->id;
-        endStream(s, QStringLiteral("its download was removed through the API"), false);
-    }
-    if (mode == FileRemoval::Keep) {
-        r->kept = di.paths + di.kept;
-    } else {
-        r->kept = di.kept;   // what the download did not create: stays in every case
-        r->pending = true;
-    }
-    m_removed << r;   // before the call: the outcome may come at once
-    qCInfo(lcCore).noquote() << "streaming API: download" << id << t.name << "removed from the list, files:" << files;
-    m_engine->removeDownload(id, mode);
-    emit stateChanged();
-    if (!r->pending) {
-        json(resp, 200, removedJson(r));
-        return;
+    if (!first) {
+        const TransferInfo t = m_engine->transfer(id);
+        Removed *r = beginRemoval(t, files);
+        // a stream that plays this download ends first: the player gets 410 from now on
+        if (Stream *s = streamOfDownload(id)) {
+            r->streamEnded = s->id;
+            endStream(s, QStringLiteral("its download was removed through the API"), false);
+        }
+        qCInfo(lcCore).noquote() << "streaming API: download" << id << t.name << "removed from the list, files:" << files;
+        // what is kept, deleted or trashed comes from the engine (downloadRemoved, downloadFilesDeleted):
+        // a download that is finishing may finish in this moment, or leave the list only when its move ends
+        m_engine->removeDownload(id, mode);
+        emit stateChanged();
     }
     // the outcome arrives once the engine let the files go (a torrent: after libtorrent closed them)
     QPointer<StreamService> self(this);
     const qint64 since = m_clock.elapsed();
-    auto fill = [self, id, since](HttpResponse &x) -> bool {
+    auto fill = [self, id, since, extra](HttpResponse &x) -> bool {
         if (!self) {
             error(x, 503, QStringLiteral("closed"), QStringLiteral("OctoMX is closing."));
             return true;
@@ -919,7 +952,9 @@ void StreamService::removeDownloadCall(HttpResponse &resp, const QString &id, co
             return true;
         }
         if (r->pending && self->m_clock.elapsed() - since < self->m_tune.deleteWaitMs) return false;
-        json(x, r->pending ? 202 : 200, self->removedJson(r));
+        QJsonObject o = self->removedJson(r);
+        for (auto it = extra.begin(); it != extra.end(); ++it) o.insert(it.key(), it.value());
+        json(x, r->pending ? 202 : 200, o);
         return true;
     };
     if (!fill(resp)) resp.deferred = fill;

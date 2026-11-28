@@ -148,7 +148,11 @@ private:
     // ---- [api-2] downloads (download_api.cpp)
     struct Removed {                   // a download removed through the API: readable for a while (410)
         QString id, name, files;       // files: "keep", "trash", "delete"
-        bool pending = false;          // the outcome of the delete has not arrived yet
+        bool pending = false;          // the outcome has not arrived yet (rowPending || filesPending)
+        bool rowPending = false;       // the engine has not removed the row yet (a move to the target folder ends first)
+        bool filesPending = false;     // trash / delete: the files' outcome has not arrived yet
+        bool wasFinished = false;      // finished when the removal was asked for
+        bool finished = false;         // finished when it left the list (the engine's outcome)
         QStringList kept, trashed, deleted, failed, errors;
         QString inPlaceFile, streamEnded;
         qint64 removedMs = 0;
@@ -167,6 +171,8 @@ private:
     void promoteStream(Stream *s);                    // a stream's own cache becomes a normal download (the stream goes on)
     Removed *removedById(const QString &id) const;
     QJsonObject removedJson(const Removed *r) const;
+    Removed *beginRemoval(const TransferInfo &t, const QString &files);
+    void downloadRemoved(const QString &id, bool finished, const QStringList &kept, const QString &inPlaceFile);
     void filesDeleted(const QString &id, const QStringList &trashed, const QStringList &deleted, const QStringList &failed,
                       const QStringList &errors);
     void loadOrigins();

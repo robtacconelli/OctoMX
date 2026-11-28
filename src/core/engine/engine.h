@@ -108,7 +108,14 @@ public:
     QList<PartialFile> partialFiles() const override;
     // [ui-j] removing a download, keeping or deleting its file
     DownloadDiskInfo diskInfo(const QString &id) const override;
+    // [api-2] a download that is finishing has exactly two outcomes, decided here: in its final check
+    // the check is cancelled (a short wait for the hashing to stop, kRemoveCheckWaitMs) and it is removed
+    // as a partial download; in its move to the target folder the move is never cut and the removal runs
+    // when the move ends (the row stays until then): moved = removed as a finished download, else as a
+    // partial one. Every removal says what happened in downloadRemoved (a delete's files follow in
+    // downloadFilesDeleted).
     void removeDownload(const QString &id, FileRemoval mode) override;
+    static constexpr int kRemoveCheckWaitMs = 2000;
     // downloads removed with "keep the file" whose partial data is still there (done = bytes held;
     // the "matches incomplete local file" mark of Search)
     QList<TransferInfo> keptDownloads() const;
@@ -153,6 +160,13 @@ public:
     void dropStream(const QString &id);
     // <incomplete>/Streams: every stream's cache lives below it
     QString streamCacheRoot() const;
+
+signals:
+    // [api-2] a download left the list (removeDownload, cancel, clearCompleted). finished: it was
+    // finished then (one that finished while it was being removed counts as finished); kept: the files
+    // that stay on the disk (Keep: its data and what it did not create; Trash / Delete: what it did not
+    // create); inPlaceFile: removed as a partial download that was resumed in place from that file.
+    void downloadRemoved(const QString &id, bool finished, const QStringList &kept, const QString &inPlaceFile);
 
 private slots:
     void onUrlTorrentAdded(const QString &url, const QString &id);

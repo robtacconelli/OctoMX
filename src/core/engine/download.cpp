@@ -191,6 +191,11 @@ void Download::restoreState(const QByteArray &blob)
     for (auto it = strikes.constBegin(); it != strikes.constEnd(); ++it) m_strikes.insert(it.key(), it.value().toInt());
     for (const QVariant &v : m.value(QStringLiteral("banned")).toList()) m_banned.insert(v.toString());
     for (const QVariant &v : m.value(QStringLiteral("badSets")).toList()) m_badSetFrom.insert(v.toString());   // [up-1]
+    if (m.contains(QStringLiteral("removeMode"))) {   // [api-2]
+        const int rm = m.value(QStringLiteral("removeMode")).toInt();
+        if (rm >= int(FileRemoval::Keep) && rm <= int(FileRemoval::Delete)) m_removeMode = rm;
+        m_removeKeepIfFinished = m.value(QStringLiteral("removeKeepIfFinished")).toBool();
+    }
     for (const QVariant &v : m.value(QStringLiteral("removed")).toList()) {
         m_userRemoved.insert(v.toString());
         m_banned.insert(v.toString());
@@ -298,6 +303,10 @@ QByteArray Download::saveState() const
     QVariantList badSets;   // [up-1]
     for (const QString &k : m_badSetFrom) badSets << k;
     if (!badSets.isEmpty()) m.insert(QStringLiteral("badSets"), badSets);
+    if (m_removeMode >= 0) {   // [api-2] a removal that waits for the move (done at the next start after a quit)
+        m.insert(QStringLiteral("removeMode"), m_removeMode);
+        if (m_removeKeepIfFinished) m.insert(QStringLiteral("removeKeepIfFinished"), true);
+    }
     QVariantList removed;
     for (const QString &k : m_userRemoved) removed << k;
     if (!removed.isEmpty()) m.insert(QStringLiteral("removed"), removed);
@@ -863,6 +872,44 @@ DownloadDiskInfo Download::diskInfo(QStringList *pruneDirs) const
     di.kept = kept;
     di.trash = trash::availableForAll(own);
     return di;
+}
+
+// [api-2]
+void Download::removeAfterMove(std::function<void()> then, FileRemoval mode, bool keepIfFinished)
+{
+    m_afterMove = std::move(then);
+    m_removeMode = int(mode);
+    m_removeKeepIfFinished = keepIfFinished;
+    setState(TransferState::Verifying, removalStatusText());
+    persist(true);   // stored at once: a quit before the move ends does not lose it
+}
+
+bool Download::pendingRemoval(FileRemoval *mode, bool *keepIfFinished) const
+{
+    if (m_removeMode < 0) return false;
+    if (mode) *mode = FileRemoval(m_removeMode);
+    if (keepIfFinished) *keepIfFinished = m_removeKeepIfFinished;
+    return true;
+}
+
+void Download::cancelFinalCheck(int waitMs)
+{
+    m_removing = true;
+    if (m_part) {
+        m_part->abandon();        // the check polls the cancel flag (and writes not started yet are dropped: unclaimed)
+        m_part->drain(waitMs);
+    }
+    m_completing = false;
+    m_finishPhase = Finishing::None;
+    qCInfo(lcEngine) << m_rec.id << "removed during its final check: the check is cancelled, it is removed as a partial download";
+}
+
+void Download::stopFinishing()
+{
+    m_removing = true;
+    m_completing = false;
+    m_moveRetries = 0;
+    m_finishPhase = Finishing::None;
 }
 
 void Download::stopForRemoval(bool keepData)
@@ -2484,8 +2531,10 @@ void Download::finalizePart()
         finishPart(m_rec.hashes, {}, {}, false);
         return;
     }
+    m_finishPhase = Finishing::FinalCheck;   // [api-2]
     m_part->finalCheck([this, fine](const PartStore::FinalResult &r) {
         if (m_quitting) return;   // [safe-1] cancelled by the quit: it runs again at the next start
+        if (m_removing) return;   // [api-2] cancelled by a removal: the download is gone
         if (!r.ok) {
             m_completing = false;
             setError(r.error.isEmpty() ? QStringLiteral("Cannot read the downloaded file") : r.error, true);
@@ -2625,6 +2674,8 @@ void Download::wholeFileFailed(const QStringList &mismatch)
 
 void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kParts, const QList<QByteArray> &aichParts, bool haveAll)
 {
+    if (m_removing) return;   // [api-2] removed while it waited for a preview player (the retry timer)
+    m_finishPhase = Finishing::Moving;
     const QString dir = m_rec.saveDir.isEmpty() ? m_host->incomingDir() : m_rec.saveDir;
     // [dl-1] a preview player may hold the file: drop our link first; if the player still has it
     // open without delete sharing (Windows), the rename fails and we wait for it instead of copying
@@ -2632,7 +2683,15 @@ void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kPa
     dropPreview();
     if (!m_moveRetries) setState(TransferState::Verifying, QStringLiteral("Moving..."));
     auto done = [this, all, haveAll, ed2kParts, aichParts, previewed](bool ok, const QString &path, const QString &err) {
-        if (!ok && previewed && m_moveRetries < 17280) {   // a day of 5 s retries
+        // [api-2] a removal waited for this outcome: it runs once the outcome is applied (moved: the
+        // download is finished; not moved: it is removed as a partial one, the part file is its data)
+        const auto removal = [this] {
+            // the quit: not now (the list is being saved); the stored mode removes it at the next start
+            if (m_quitting) return;
+            if (const std::function<void()> then = std::exchange(m_afterMove, nullptr)) then();
+        };
+        if (!ok && previewed && m_moveRetries < 17280 && !m_afterMove) {   // a day of 5 s retries
+            m_finishPhase = Finishing::RetryWait;
             ++m_moveRetries;
             setState(TransferState::Verifying, QStringLiteral("Complete, waiting for the preview player to close the file..."));
             QTimer::singleShot(5000, this, [this, all, ed2kParts, aichParts, haveAll] { finishPart(all, ed2kParts, aichParts, haveAll); });
@@ -2643,10 +2702,15 @@ void Download::finishPart(const FileHashes &all, const QList<QByteArray> &ed2kPa
         if (!ok) {
             if (m_quitting) return;   // [safe-1] a copy cancelled by the quit runs again at the next start
             m_completing = false;
+            if (m_afterMove) {   // [api-2] it is being removed: as a partial download (the part file is still its data)
+                removal();
+                return;
+            }
             setError(QStringLiteral("Cannot move to the incoming folder: %1").arg(err), true);
             return;
         }
         completeAt(path, all, ed2kParts, aichParts, haveAll);
+        removal();
     };
     // [ver-1] a finished file repaired in place stays where it is (no move, no "name (1)" copy)
     if (!m_repairPath.isEmpty() && QFileInfo(m_part->path()).absoluteFilePath() == QFileInfo(m_repairPath).absoluteFilePath())
@@ -2699,6 +2763,7 @@ void Download::completeAt(const QString &path, const FileHashes &all, const QLis
 void Download::completeTorrent()
 {
     m_completing = true;
+    m_finishPhase = Finishing::None;   // [api-2] a torrent's files stay where they are: nothing to wait for
     closeAllSources(QStringLiteral("done"));
     stopFindSources();
     m_torrent->releaseAll();

@@ -28,6 +28,12 @@ mx_engine_test(tst_engine_merge)     # [merge-1] copies matched by name and size
 mx_engine_test(tst_engine_map)       # [ui-i] the map of the file for the Transfers bar
 mx_engine_test(tst_engine_join)      # [eng-1] torrents that hold the same file: ranking, no file list, restart, row
 mx_engine_test(tst_engine_remove)    # [ui-j] removing a download: keep the file (and resume it) or delete it
+mx_engine_test(tst_engine_remove_finishing)   # [api-2] removing a download in its final check or its move
+# [api-2] the same with the move to the incoming folder as a copy (another volume, MX_TEST_COPY_MOVE)
+add_test(NAME engine_engine_remove_finishing_copy COMMAND tst_engine_remove_finishing)
+set_tests_properties(engine_engine_remove_finishing_copy PROPERTIES
+    ENVIRONMENT "MX_TEST_COPY_MOVE=1;MX_PORT_MAPPING=0;TMPDIR=${MX_ENGINE_TEST_TMP};QT_QPA_PLATFORM=offscreen;HOME=${MX_TEST_HOME};XDG_DOWNLOAD_DIR=${MX_TEST_HOME}/Downloads;XDG_CONFIG_HOME=${MX_TEST_HOME}/.config;XDG_DATA_HOME=${MX_TEST_HOME}/.local/share;MX_OS_ROOT=${CMAKE_BINARY_DIR}/os-root"
+    TIMEOUT 600)
 mx_engine_test(tst_engine_serve)     # [up-1] serving files still downloading, hash-set rules, close reasons
 mx_engine_test(tst_set1_engine)      # [set-1] the File Transfers settings, each with its effect
 mx_engine_test(tst_engine_verify)    # [ver-1] Verify File (damaged blocks only) and Restart Download

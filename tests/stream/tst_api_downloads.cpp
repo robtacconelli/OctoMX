@@ -11,6 +11,11 @@
 #include <QtCore/QDirIterator>
 #include <QtTest/QTest>
 
+#include <QtCore/QThread>
+
+#include <atomic>
+
+#include "core/engine/part_store.h"
 #include "http_plugin.h"
 #include "mx/trash.h"
 #include "mxhash/links.h"
@@ -30,6 +35,15 @@ SourceConfig ed2kConfig(const QByteArray &data, int bps)
     c.data = data;
     c.bytesPerSec = bps;
     c.hashSet = ed2kParts(data);
+    return c;
+}
+
+// [api-2] a source that lacks the last 64 KiB of the file: a download from it alone stays partial
+// whatever the speed of the machine (its first eD2k part still verifies); clear `missing` to let it end
+SourceConfig partialConfig(const QByteArray &data, int bps)
+{
+    SourceConfig c = ed2kConfig(data, bps);
+    c.missing = {qMakePair(qint64(data.size()) - 64 * 1024, qint64(data.size()))};
     return c;
 }
 
@@ -106,6 +120,7 @@ private slots:
     void deleteWithFiles();
     void deleteSwitch();
     void deleteLaterAndNoTrash();
+    void deleteWhileFinishing();
     void windowDownloadsAndChanges();
     void streamsAndDownloads();
     void searchTypesAndNetworks();
@@ -420,7 +435,7 @@ void TstApiDownloads::pauseStopsTheBytes()
     const QByteArray data = randomBytes(12 * MiB + 77, 620);
     const QString name = QStringLiteral("ubuntu-24.04-desktop-amd64.iso");
     const QString uri = QStringLiteral("test-ed2k://pause");
-    ed->cannedHits << hitOf(name, data, hashesOf(data, 3), {ed->addSource(uri, ed2kConfig(data, 2 * 1000 * 1000), QStringLiteral("198.51.100.62:4662"))});
+    ed->cannedHits << hitOf(name, data, hashesOf(data, 3), {ed->addSource(uri, partialConfig(data, 2 * 1000 * 1000), QStringLiteral("198.51.100.62:4662"))});
     env.up();
     QHash<QString, QString> keys;
     const int sid = searchFor(env, QJsonObject{{QStringLiteral("text"), QStringLiteral("ubuntu")}}, {name}, &keys);
@@ -444,6 +459,7 @@ void TstApiDownloads::pauseStopsTheBytes()
     QCOMPARE(ps.value(QStringLiteral("sourcesActive")).toInt(), 0);
     // pausing again changes nothing
     QCOMPARE(env.api("POST", "/api/v1/downloads/" + id.toLatin1() + "/pause").json().value(QStringLiteral("state")).toString(), QStringLiteral("paused"));
+    ed->configs[uri].missing.clear();   // the source has the whole file from now on (a reopened source)
     // resume: it goes on and nothing is fetched twice
     const Reply rs = env.api("POST", "/api/v1/downloads/" + id.toLatin1() + "/resume");
     QCOMPARE(rs.json().value(QStringLiteral("paused")).toBool(), false);
@@ -502,7 +518,9 @@ void TstApiDownloads::deleteKeepAndContinue()
     const QByteArray data = randomBytes(10 * MiB + 1, 640);
     const QString name = QStringLiteral("debian-12.8.0-amd64-DVD-1.iso");
     const QString uri = QStringLiteral("test-ed2k://keep");
-    ed->cannedHits << hitOf(name, data, hashesOf(data, 3), {ed->addSource(uri, ed2kConfig(data, 2 * 1000 * 1000), QStringLiteral("198.51.100.64:4662"))});
+    // the source lacks the end of the file until the download is removed: it is partial when it is removed
+    // (the Mac runs found the earlier version removing a download that completed in that moment)
+    ed->cannedHits << hitOf(name, data, hashesOf(data, 3), {ed->addSource(uri, partialConfig(data, 2 * 1000 * 1000), QStringLiteral("198.51.100.64:4662"))});
     env.up();
     QHash<QString, QString> keys;
     const int sid = searchFor(env, QJsonObject{{QStringLiteral("text"), QStringLiteral("debian")}}, {name}, &keys);
@@ -528,6 +546,7 @@ void TstApiDownloads::deleteKeepAndContinue()
     QCOMPARE(g.json().value(QStringLiteral("download")).toObject().value(QStringLiteral("name")).toString(), name);
     QCOMPARE(env.api("POST", "/api/v1/downloads/" + id.toLatin1() + "/pause").status, 410);
     const qint64 servedBefore = ed->served(uri);
+    ed->configs[uri].missing.clear();   // the whole file from now on
     // the same file again: it continues from the data (as in the window)
     const Reply again = env.api("POST", "/api/v1/downloads", sel);
     QCOMPARE(again.status, 201);
@@ -549,13 +568,13 @@ void TstApiDownloads::deleteWithFiles()
     const QByteArray slow = randomBytes(10 * MiB, 650), fast = randomBytes(2 * MiB + 3, 651), third = randomBytes(MiB + 9, 652),
                      fourth = randomBytes(3 * MiB, 653);
     ed->cannedHits << hitOf(QStringLiteral("Big Buck Bunny partial.mkv"), slow, hashesOf(slow, 3),
-                            {ed->addSource(QStringLiteral("test-ed2k://slow"), ed2kConfig(slow, 1000 * 1000), QStringLiteral("198.51.100.65:4662"))});
+                            {ed->addSource(QStringLiteral("test-ed2k://slow"), partialConfig(slow, 1000 * 1000), QStringLiteral("198.51.100.65:4662"))});
     ed->cannedHits << hitOf(QStringLiteral("Big Buck Bunny finished.mkv"), fast, hashesOf(fast, 3),
                             {ed->addSource(QStringLiteral("test-ed2k://fast"), ed2kConfig(fast, 0), QStringLiteral("198.51.100.66:4662"))});
     ed->cannedHits << hitOf(QStringLiteral("Big Buck Bunny trash.mkv"), third, hashesOf(third, 3),
                             {ed->addSource(QStringLiteral("test-ed2k://third"), ed2kConfig(third, 0), QStringLiteral("198.51.100.67:4662"))});
     ed->cannedHits << hitOf(QStringLiteral("Big Buck Bunny paused.mkv"), fourth, hashesOf(fourth, 3),
-                            {ed->addSource(QStringLiteral("test-ed2k://fourth"), ed2kConfig(fourth, 500 * 1000), QStringLiteral("198.51.100.68:4662"))});
+                            {ed->addSource(QStringLiteral("test-ed2k://fourth"), partialConfig(fourth, 500 * 1000), QStringLiteral("198.51.100.68:4662"))});
     env.configure = [](Settings *s) { s->setValue(keys::api::AllowDelete, true); };
     env.up();
     // files the downloads did not create, beside theirs
@@ -608,9 +627,11 @@ void TstApiDownloads::deleteWithFiles()
     QVERIFY(inTrash);
     // ---- a paused download
     const QString d = start(QStringLiteral("Big Buck Bunny paused.mkv"));
-    QVERIFY(QTest::qWaitFor([&] { return getDl(env, d).value(QStringLiteral("done")).toDouble() >= 256 * 1024; }, 30000));
-    QCOMPARE(env.api("POST", "/api/v1/downloads/" + d.toLatin1() + "/pause").status, 200);
+    // (one eD2k part: nothing is verified before the end, so the bytes are counted at the source)
+    QVERIFY(QTest::qWaitFor([&] { return ed->served(QStringLiteral("test-ed2k://fourth")) >= 256 * 1024; }, 30000));
+    QCOMPARE(env.api("POST", "/api/v1/downloads/" + d.toLatin1() + "/pause").json().value(QStringLiteral("state")).toString(), QStringLiteral("paused"));
     const QString dPart = pathOf(getDl(env, d));
+    QCOMPARE(dPart, env.root + QStringLiteral("/incomplete/") + d + QStringLiteral(".part"));
     QVERIFY(QFileInfo::exists(dPart));
     const Reply rd = env.api("DELETE", "/api/v1/downloads/" + d.toLatin1() + "?files=delete");
     QCOMPARE(rd.status, 200);
@@ -736,6 +757,125 @@ void TstApiDownloads::deleteLaterAndNoTrash()
     QVERIFY(!n.json().value(QStringLiteral("errors")).toArray().isEmpty());
     QVERIFY(n.json().value(QStringLiteral("message")).toString().contains(QStringLiteral("could not be removed")));
     QCOMPARE(readFile(yf), b);
+}
+
+// ---------------------------------------------------------------- removed while it finishes
+// The final check or the move to the incoming folder is held (the PartStore test seam), so the
+// removal meets the download exactly there: the answer says what the engine did
+void TstApiDownloads::deleteWhileFinishing()
+{
+    StreamEnv env(QStringLiteral("dl-finishing"));
+    TestPlugin *ed = env.addPlugin(Net::ED2K, NetworkPlugin::CanFetchRanges);
+    QStringList names;
+    QList<QByteArray> datas;
+    for (int i = 0; i < 3; ++i) {
+        datas << randomBytes(2 * MiB + i, 667 + quint32(i));
+        names << QStringLiteral("Big Buck Bunny finishing %1.mkv").arg(i);
+        ed->cannedHits << hitOf(names.last(), datas.last(), hashesOf(datas.last(), 3),
+                                {ed->addSource(QStringLiteral("test-ed2k://fin%1").arg(i), ed2kConfig(datas.last(), 0),
+                                               QStringLiteral("198.51.100.%1:4662").arg(85 + i))});
+    }
+    env.configure = [](Settings *s) {
+        s->setValue(keys::api::AllowDelete, true);
+        s->setValue(keys::transfers::VerifyCompleted, true);
+    };
+    env.up();
+    QHash<QString, QString> keys;
+    const int sid = searchFor(env, QJsonObject{{QStringLiteral("text"), QStringLiteral("bunny")}}, names, &keys);
+    std::atomic<bool> entered{false}, release{false};
+    auto hold = [&](const QString &step) {
+        entered = false;
+        release = false;
+        engine::PartStore::setTestHold([&entered, &release, step](const QString &st, const std::atomic<bool> *cancel) {
+            if (st != step || entered.exchange(true)) return;
+            while (!release.load() && !(cancel && cancel->load())) QThread::msleep(2);
+        });
+    };
+    struct Unhold {
+        std::atomic<bool> &r;
+        ~Unhold()
+        {
+            r = true;
+            engine::PartStore::setTestHold({});
+        }
+    } unhold{release};
+    auto start = [&](int i) {
+        return env.api("POST", "/api/v1/downloads", QJsonObject{{QStringLiteral("search"), sid}, {QStringLiteral("result"), keys.value(names.at(i))}})
+            .json().value(QStringLiteral("id")).toString();
+    };
+    const QString incoming = env.root + QStringLiteral("/incoming");
+    // ---- in its final check, keep: the check is cancelled; a partial download whose part file stays
+    hold(QStringLiteral("final check"));
+    const QString a = start(0);
+    QVERIFY(QTest::qWaitFor([&] { return entered.load(); }, 30000));
+    QCOMPARE(getDl(env, a).value(QStringLiteral("state")).toString(), QStringLiteral("verifying"));
+    const QString aPart = env.root + QStringLiteral("/incomplete/") + a + QStringLiteral(".part");
+    const Reply ra = env.api("DELETE", "/api/v1/downloads/" + a.toLatin1());
+    QCOMPARE(ra.status, 200);
+    QCOMPARE(ra.json().value(QStringLiteral("finished")).toBool(true), false);
+    QVERIFY(!ra.json().contains(QStringLiteral("finishedWhileRemoved")));
+    QCOMPARE(ra.json().value(QStringLiteral("kept")).toArray(), QJsonArray{QDir::toNativeSeparators(aPart)});
+    QVERIFY(QFileInfo::exists(aPart));
+    release = true;
+    QTest::qWait(300);
+    QVERIFY(!QFileInfo::exists(QDir(incoming).filePath(names.at(0))));
+    // ---- in its move, delete: the answer comes when the move ended; the finished file is what went
+    stream::StreamService::Tuning t = env.core->streamService()->tuning();
+    t.deleteWaitMs = 0;   // answer at once (202) while the move is held
+    env.core->streamService()->setTuning(t);
+    hold(QStringLiteral("move"));
+    const QString b = start(1);
+    QVERIFY(QTest::qWaitFor([&] { return entered.load(); }, 30000));
+    const Reply rb = env.api("DELETE", "/api/v1/downloads/" + b.toLatin1() + "?files=delete");
+    QCOMPARE(rb.status, 202);
+    QCOMPARE(rb.json().value(QStringLiteral("removed")).toBool(true), false);   // the row waits for the move
+    QCOMPARE(rb.json().value(QStringLiteral("pending")).toBool(), true);
+    QCOMPARE(env.api("GET", "/api/v1/downloads/" + b.toLatin1()).status, 200);   // still in the list
+    QCOMPARE(getDl(env, b).value(QStringLiteral("statusText")).toString(), QStringLiteral("Moving... (it is removed when the move ends)"));
+    QCOMPARE(getDl(env, b).value(QStringLiteral("state")).toString(), QStringLiteral("verifying"));
+    // asked again, with another mode: the first removal stands, the answer says so
+    const Reply again = env.api("DELETE", "/api/v1/downloads/" + b.toLatin1());
+    QCOMPARE(again.status, 202);
+    QCOMPARE(again.json().value(QStringLiteral("files")).toString(), QStringLiteral("delete"));
+    QCOMPARE(again.json().value(QStringLiteral("filesAsked")).toString(), QStringLiteral("keep"));
+    QVERIFY(again.json().value(QStringLiteral("note")).toString().contains(QStringLiteral("files=keep of this call is not applied")));
+    const Reply same = env.api("DELETE", "/api/v1/downloads/" + b.toLatin1() + "?files=delete");
+    QCOMPARE(same.status, 202);
+    QVERIFY(!same.json().contains(QStringLiteral("filesAsked")));
+    release = true;
+    Reply gb;
+    QVERIFY(QTest::qWaitFor([&] {
+        gb = env.api("GET", "/api/v1/downloads/" + b.toLatin1());
+        return gb.status == 410 && !gb.json().value(QStringLiteral("pending")).toBool(true);
+    }, 15000));
+    const QString bFile = QDir(incoming).filePath(names.at(1));
+    QCOMPARE(gb.json().value(QStringLiteral("finished")).toBool(), true);
+    QCOMPARE(gb.json().value(QStringLiteral("finishedWhileRemoved")).toBool(), true);
+    QCOMPARE(gb.json().value(QStringLiteral("deleted")).toArray(), QJsonArray{QDir::toNativeSeparators(bFile)});
+    QVERIFY(gb.json().value(QStringLiteral("message")).toString().startsWith(QStringLiteral("It finished while it was being removed")));
+    QVERIFY(!QFileInfo::exists(bFile));
+    QCOMPARE(gb.json().value(QStringLiteral("files")).toString(), QStringLiteral("delete"));   // one record: the first call's
+    // ---- in its move, keep: the finished file stays in the incoming folder, no kept record
+    hold(QStringLiteral("move"));
+    const QString c = start(2);
+    QVERIFY(QTest::qWaitFor([&] { return entered.load(); }, 30000));
+    QCOMPARE(env.api("DELETE", "/api/v1/downloads/" + c.toLatin1()).status, 202);
+    release = true;
+    Reply gc;
+    QVERIFY(QTest::qWaitFor([&] {
+        gc = env.api("GET", "/api/v1/downloads/" + c.toLatin1());
+        return gc.status == 410 && !gc.json().value(QStringLiteral("pending")).toBool(true);
+    }, 15000));
+    const QString cFile = QDir(incoming).filePath(names.at(2));
+    QCOMPARE(gc.json().value(QStringLiteral("finished")).toBool(), true);
+    QCOMPARE(gc.json().value(QStringLiteral("finishedWhileRemoved")).toBool(), true);
+    QCOMPARE(gc.json().value(QStringLiteral("kept")).toArray(), QJsonArray{QDir::toNativeSeparators(cFile)});
+    QCOMPARE(readFile(cFile), datas.at(2));
+    QCOMPARE(env.core->engine()->keptDownloads().size(), 1);   // only the first one's partial data
+    // no move marker, no part file of the two that finished
+    QVERIFY(!QFileInfo::exists(env.root + QStringLiteral("/incomplete/") + b + QStringLiteral(".part.moving")));
+    QVERIFY(!QFileInfo::exists(env.root + QStringLiteral("/incomplete/") + c + QStringLiteral(".part.moving")));
+    QVERIFY(!QFileInfo::exists(env.root + QStringLiteral("/incomplete/") + c + QStringLiteral(".part")));
 }
 
 // ---------------------------------------------------------------- the window's downloads

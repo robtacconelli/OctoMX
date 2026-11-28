@@ -90,6 +90,25 @@ public:
     // or dropped (delete), the part file closed; a torrent leaves the backend (its files stay, its
     // resume data in the profile goes). Nothing is deleted here.
     void stopForRemoval(bool keepData);
+    // [api-2] removing a download that is finishing (a part file: the final check, then the move to
+    // the target folder). FinalCheck: the check is cancelled (cancelFinalCheck), the download is
+    // removed as a partial one (its data is the part file). Moving: the move is never cut; the removal
+    // runs once its outcome is applied (removeAfterMove): moved = finished, else partial. RetryWait: the
+    // move waits for a preview player to let go (the file is still the part file): stopFinishing()
+    // and removed as a partial one. A torrent's completion (its files stay where they are): None.
+    enum class Finishing { None, FinalCheck, Moving, RetryWait };
+    Finishing finishing() const { return m_completing ? m_finishPhase : Finishing::None; }
+    void cancelFinalCheck(int waitMs);   // the running check stops (waits at most waitMs for it), its result is dropped
+    // [api-2] the removal runs once the move's outcome is applied. Its mode is stored with the
+    // download's state at once (a quit before the move ends: the removal runs at the next start,
+    // pendingRemoval()); the status text says that it was taken.
+    void removeAfterMove(std::function<void()> then, FileRemoval mode, bool keepIfFinished);
+    bool removalPending() const { return bool(m_afterMove); }
+    // a removal registered in an earlier session (stored state): true with its mode
+    bool pendingRemoval(FileRemoval *mode, bool *keepIfFinished) const;
+    void clearPendingRemoval() { m_removeMode = -1; m_removeKeepIfFinished = false; }   // it is being done now
+    static QString removalStatusText() { return QStringLiteral("Moving... (it is removed when the move ends)"); }
+    void stopFinishing();                // RetryWait: the move is not tried again
     // [ui-j] a finished row that points to a file the download did not create (already in the library)
     void setNotOwned(bool on) { m_notOwned = on; }
     void setPriority(int p);
@@ -466,6 +485,11 @@ private:
     bool m_userPaused = false;
     bool m_errorState = false;
     bool m_completing = false;
+    Finishing m_finishPhase = Finishing::None;   // [api-2] see finishing()
+    bool m_removing = false;                  // [api-2] removed while finishing: a late result of the check / the retry timer does nothing
+    std::function<void()> m_afterMove;        // [api-2] a removal that waits for the move's outcome
+    int m_removeMode = -1;                    // [api-2] its FileRemoval (-1 = none), stored with the state
+    bool m_removeKeepIfFinished = false;
     std::function<void()> m_afterFlush;   // [safe-1] the rest of the completion, once the backend wrote everything
     bool m_quitting = false;                  // [safe-1] beginShutdown() ran
     bool m_checkFirst = false;                // [safe-1] see checkFirst()
